@@ -1,4 +1,7 @@
-import { createClient, type Client } from "@libsql/client";
+// Web-клиент (чистый HTTP/fetch, без нативного пакета libsql). Подходит для
+// удалённой Turso (libsql://) и безопасен для serverless/Vercel — нативные
+// .node-бинарники не попадают в бандл функции.
+import { createClient, type Client } from "@libsql/client/web";
 import { TABLES, INDEXES } from "./schema";
 
 // Клиент Turso (libSQL). Создаётся лениво, один на процесс.
