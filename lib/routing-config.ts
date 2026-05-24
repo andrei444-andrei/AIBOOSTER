@@ -70,6 +70,19 @@ async function seedRoutesIfEmpty(): Promise<void> {
     });
   }
 
+  // Однократный апгрейд лимита для research: было 4000, теперь даём
+  // 6000 — длинные ответы со структурой (таблицы/заголовки) часто в 4k
+  // обрезались. Трогаем только если ровно прежний дефолт.
+  const oldResearch = haveRows.find((r) => r.category === "research");
+  if (oldResearch && oldResearch.max_tokens === 4000) {
+    await db.execute({
+      sql: `UPDATE chat_category_routing
+            SET max_tokens = 6000, updated_at = ?
+            WHERE category = 'research'`,
+      args: [now],
+    });
+  }
+
   _seeded = true;
 }
 

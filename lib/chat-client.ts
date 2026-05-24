@@ -239,7 +239,7 @@ export const DEFAULT_CATEGORY_ROUTES: CategoryRoute[] = [
   // примитивен даже для коротких вопросов: даёт пересказ из обучающих данных
   // без актуальности и без структуры.
   { category: "quick",    model: MODELS.CLAUDE_SONNET,   reasoning_effort: null,   max_tokens: 2000 },
-  { category: "research", model: MODELS.PERPLEXITY_SONAR, reasoning_effort: null, max_tokens: 4000 },
+  { category: "research", model: MODELS.PERPLEXITY_SONAR, reasoning_effort: null, max_tokens: 6000 },
   { category: "code",     model: MODELS.CLAUDE_OPUS,    reasoning_effort: null,   max_tokens: 8000 },
   { category: "analyze",  model: MODELS.GEMINI_PRO,     reasoning_effort: null,   max_tokens: 8000 },
   { category: "strategy", model: MODELS.GPT_5,          reasoning_effort: "high", max_tokens: 8000 },
