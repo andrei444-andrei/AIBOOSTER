@@ -27,13 +27,24 @@ function run(
     });
     p.stderr.on("data", (d: Buffer) => err.push(d));
     p.on("error", reject);
-    p.on("close", (code) => {
+    p.on("close", (code, signal) => {
       if (code === 0) resolve(Buffer.concat(out));
       else {
-        // ffmpeg выводит ~500 символов баннера версии в самом начале stderr;
-        // реальная ошибка всегда в хвосте, поэтому берём последние 1500 байт.
-        const tail = Buffer.concat(err).toString().slice(-1500).trim();
-        reject(new Error(`${cmd} exited ${code}: ${tail}`));
+        const stderrStr = Buffer.concat(err).toString();
+        const stdoutStr = Buffer.concat(out).toString();
+        // ffmpeg печатает baseline-баннер ~500 байт перед любой реальной ошибкой,
+        // поэтому берём ХВОСТ stderr. Если ffmpeg грохнули сигналом (SIGKILL=OOM)
+        // — добавляем явный маркер. На случай если ошибка ушла не в stderr,
+        // прикладываем последние 500 байт stdout.
+        const errTail = stderrStr.slice(-1800).trim();
+        const outTail = stdoutStr.slice(-500).trim();
+        const signalNote = signal ? ` [signal=${signal}]` : "";
+        const stdoutNote = outTail ? `\n--- stdout tail: ${outTail}` : "";
+        reject(
+          new Error(
+            `${cmd} exited code=${code}${signalNote} stderr.len=${stderrStr.length}:\n${errTail}${stdoutNote}`,
+          ),
+        );
       }
     });
   });
