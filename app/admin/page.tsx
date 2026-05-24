@@ -128,12 +128,21 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     return `/admin?${u.toString()}`;
   };
 
+  const adaptersLink = `/admin/adapters${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+
   return (
     <main style={wrap}>
       <h1 style={{ marginBottom: 4 }}>AIBOOSTER · /admin</h1>
       <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
         Структура и данные БД (read-only). Логи — таблица <span style={code}>app_errors</span>,
         также через <span style={code}>GET /api/admin/errors</span>.
+      </p>
+      <p style={{ marginTop: 8 }}>
+        →{" "}
+        <a href={adaptersLink} style={{ color: "#79b8ff" }}>
+          /admin/adapters
+        </a>{" "}
+        — управление источниками контекста (gmail/notion/slack/telegram/gcal).
       </p>
 
       {introspectError && (
