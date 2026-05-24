@@ -24,6 +24,9 @@ export interface ModuleEntry {
   icon?: string;
   /** Защищён ADMIN_TOKEN — Sidebar добавит маленькую отметку. */
   requiresAdminToken?: boolean;
+  /** Активен только при точном совпадении pathname (без startsWith). Нужно
+   *  для «родительских» путей вроде /admin, у которых есть дочерние модули. */
+  exact?: boolean;
 }
 
 export const MODULES: ModuleEntry[] = [
@@ -64,6 +67,16 @@ export const MODULES: ModuleEntry[] = [
     icon: "◐",
   },
   {
+    slug: "adapters",
+    title: "Источники",
+    href: "/admin/adapters",
+    description: "Подключённые источники контекста: Gmail, Calendar и др.",
+    pinned: true,
+    section: "service",
+    icon: "⇄",
+    requiresAdminToken: true,
+  },
+  {
     slug: "admin",
     title: "Админка",
     href: "/admin",
@@ -72,6 +85,7 @@ export const MODULES: ModuleEntry[] = [
     section: "service",
     icon: "⌘",
     requiresAdminToken: true,
+    exact: true,
   },
 ];
 
@@ -82,5 +96,6 @@ export function getPinnedModules(): ModuleEntry[] {
 /** Активен ли модуль для данного pathname. */
 export function isModuleActive(m: ModuleEntry, pathname: string): boolean {
   if (m.href === "/") return pathname === "/";
+  if (m.exact) return pathname === m.href;
   return pathname === m.href || pathname.startsWith(m.href + "/");
 }
