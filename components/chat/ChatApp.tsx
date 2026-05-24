@@ -32,7 +32,7 @@ interface Attachment {
   filename: string;
   mime_type: string;
   size: number;
-  kind: "text" | "image";
+  kind: "text" | "image" | "image_url";
   content_text?: string | null;
   content_base64?: string | null;
 }
@@ -97,16 +97,17 @@ function sessionToSelection(s: SessionRow | null): Selection {
 
 // ─── Утилиты UID ─────────────────────────────────────────────────────
 
-const UID_KEY = "chat_uid";
+// ─── UID владельца ──────────────────────────────────────────────────
+//
+// Продукт — для одного пользователя (см. CLAUDE.md). Все чаты собираются
+// под фиксированным OWNER_UID, чтобы история была одна на все браузеры,
+// устройства и сессии. Раньше каждый клиент получал случайный UID в
+// localStorage — что в итоге дробило историю при смене браузера/инкогнито.
+
+const OWNER_UID = "owner-andrei-2026";
 
 function getOrCreateUid(): string {
-  if (typeof window === "undefined") return "";
-  let v = window.localStorage.getItem(UID_KEY);
-  if (!v) {
-    v = (crypto.randomUUID?.() ?? `uid_${Date.now()}_${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9_\-]/g, "");
-    window.localStorage.setItem(UID_KEY, v);
-  }
-  return v;
+  return OWNER_UID;
 }
 
 // ─── Файлы ───────────────────────────────────────────────────────────
@@ -574,6 +575,33 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       setMessages((arr) =>
         arr.map((m) => (m.id === assistantLocalId ? { ...m, content: m.content + p.text } : m)),
       );
+    } else if (event === "web_images") {
+      // Картинки с веб-поиска (Perplexity Sonar): URLы, не base64.
+      const p = payload as { images: Array<{ image_url: string; title?: string }> };
+      if (!Array.isArray(p.images) || p.images.length === 0) return;
+      setMessages((arr) =>
+        arr.map((m) => {
+          if (m.id !== assistantLocalId) return m;
+          const existing = m.attachments ?? [];
+          const haveUrls = new Set(
+            existing.filter((a) => a.kind === "image_url").map((a) => a.content_text),
+          );
+          const fresh: Attachment[] = p.images
+            .filter((img) => img.image_url && !haveUrls.has(img.image_url))
+            .map((img) => ({
+              filename: img.title ? img.title.slice(0, 100) : "web image",
+              mime_type: "image/*",
+              size: 0,
+              kind: "image_url",
+              content_text: img.image_url,
+            }));
+          if (fresh.length === 0) return m;
+          return { ...m, attachments: [...existing, ...fresh] };
+        }),
+      );
+    } else if (event === "citations") {
+      // Источники — пока просто игнорируем на клиенте, в bigger PR будут чипами.
+      return;
     } else if (event === "image") {
       const p = payload as { base64: string; mime: string };
       setMessages((arr) =>
@@ -865,7 +893,7 @@ function MessageBlock({ message }: { message: Message }) {
         ) : null}
 
         {hasAttachments && (
-          <div className={styles.assistantImages}>
+          <div className={isImageCategory ? styles.assistantImages : styles.assistantWebImages}>
             {message.attachments!.map((a, i) => (
               <AttachmentChip key={a.id ?? i} attachment={a} />
             ))}
@@ -944,6 +972,27 @@ function AttachmentChip({ attachment }: { attachment: Attachment }) {
         className={styles.attachImage}
         title={attachment.filename}
       />
+    );
+  }
+  if (attachment.kind === "image_url" && attachment.content_text) {
+    // Картинка с веб-поиска: открывается в новой вкладке.
+    return (
+      <a
+        href={attachment.content_text}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={styles.webImageLink}
+        title={attachment.filename || attachment.content_text}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={attachment.content_text}
+          alt={attachment.filename || "web image"}
+          className={styles.attachImage}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+        />
+      </a>
     );
   }
   return (
