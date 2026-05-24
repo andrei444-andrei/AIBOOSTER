@@ -136,6 +136,16 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         также через <span style={code}>GET /api/admin/errors</span>.
       </p>
 
+      <section style={{ ...card, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontWeight: 500 }}>Модули:</span>
+        <a
+          href={`/admin/chat?token=${encodeURIComponent(token ?? "")}`}
+          style={{ color: "var(--text)" }}
+        >
+          AI Chat — настройки промта и блоков →
+        </a>
+      </section>
+
       {introspectError && (
         <div style={{ ...card, borderColor: "var(--danger)", color: "var(--danger)" }}>
           Ошибка интроспекции БД: <span style={code}>{introspectError}</span>

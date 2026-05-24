@@ -46,9 +46,108 @@ export const TABLES: TableDef[] = [
       { name: "meta", description: "Произвольные доп. данные в формате JSON-строки." },
     ],
   },
+
+  // ────────────────────────────────────────────────────────────────────
+  // Модуль AI Chat
+  // ────────────────────────────────────────────────────────────────────
+  {
+    name: "chat_sessions",
+    description:
+      "Сессия (один чат). Группируется по uid пользователя (анонимный, из localStorage). Хранит выбранную модель и заголовок.",
+    ddl: `CREATE TABLE IF NOT EXISTS chat_sessions (
+      id TEXT PRIMARY KEY,
+      uid TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT 'Новый чат',
+      model TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "UUID сессии." },
+      { name: "uid", description: "Анонимный идентификатор владельца (chat_uid из localStorage)." },
+      { name: "title", description: "Заголовок чата (первая строка первого сообщения или ручная)." },
+      { name: "model", description: "Идентификатор модели по умолчанию для сессии (см. MODELS в lib/ai.ts)." },
+      { name: "created_at", description: "Когда создана." },
+      { name: "updated_at", description: "Когда было последнее сообщение." },
+    ],
+  },
+  {
+    name: "chat_messages",
+    description:
+      "Сообщения чата в хронологическом порядке. Хранятся все: и пользовательские, и ответы модели — для контекста и анализа.",
+    ddl: `CREATE TABLE IF NOT EXISTS chat_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      model TEXT,
+      tokens_prompt INTEGER,
+      tokens_completion INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "UUID сообщения." },
+      { name: "session_id", description: "FK на chat_sessions.id." },
+      { name: "role", description: "user | assistant | system." },
+      { name: "content", description: "Текст сообщения (markdown для assistant)." },
+      { name: "model", description: "Какой моделью сгенерировано (для assistant)." },
+      { name: "tokens_prompt", description: "Токены промта по отчёту AIMLAPI (если есть)." },
+      { name: "tokens_completion", description: "Токены ответа по отчёту AIMLAPI (если есть)." },
+      { name: "created_at", description: "Когда отправлено." },
+    ],
+  },
+  {
+    name: "chat_attachments",
+    description:
+      "Файлы, прикреплённые к сообщениям пользователя. Текст хранится в content_text, изображения — в content_base64 (без data: префикса).",
+    ddl: `CREATE TABLE IF NOT EXISTS chat_attachments (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      content_text TEXT,
+      content_base64 TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "UUID вложения." },
+      { name: "message_id", description: "FK на chat_messages.id." },
+      { name: "filename", description: "Имя файла как у пользователя." },
+      { name: "mime_type", description: "MIME-тип." },
+      { name: "size", description: "Размер в байтах." },
+      { name: "kind", description: "text | image — определяет, как подмешивать в промт." },
+      { name: "content_text", description: "Содержимое для текстовых вложений (UTF-8)." },
+      { name: "content_base64", description: "Содержимое для изображений (base64 без data: префикса)." },
+      { name: "created_at", description: "Когда загружено." },
+    ],
+  },
+  {
+    name: "chat_settings",
+    description:
+      "Единственная строка с настройками модуля чата: системный промт и набор разрешённых блоков форматирования. Редактируется в /admin/chat.",
+    ddl: `CREATE TABLE IF NOT EXISTS chat_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      system_prompt TEXT NOT NULL DEFAULT '',
+      enabled_blocks TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "Всегда 1 — настройки одни на инсталляцию." },
+      { name: "system_prompt", description: "Системный промт, который добавляется поверх каждой сессии." },
+      { name: "enabled_blocks", description: "JSON: какие типы markdown-блоков разрешены (headings, tables, code, lists, quotes, hr, images, links, emphasis)." },
+      { name: "created_at", description: "Когда строка появилась." },
+      { name: "updated_at", description: "Когда была последняя правка." },
+    ],
+  },
 ];
 
-// Индекс для быстрого чтения последних ошибок.
+// Индексы для быстрых выборок.
 export const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_app_errors_ts ON app_errors (ts DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_sessions_uid ON chat_sessions (uid, updated_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages (session_id, created_at ASC)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_attachments_message ON chat_attachments (message_id)`,
 ];

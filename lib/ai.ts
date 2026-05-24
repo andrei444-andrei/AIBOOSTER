@@ -118,6 +118,87 @@ export async function chat(opts: ChatOptions, init?: { signal?: AbortSignal }): 
   return (await resp.json()) as ChatCompletion;
 }
 
+/**
+ * Стриминг ответа /chat/completions через Server-Sent Events.
+ *
+ * AIMLAPI совместим с OpenAI SSE-форматом: `data: {chunk-json}\n\n`, в конце
+ * `data: [DONE]`. На каждой дельте контента вызывается onDelta(text). Когда
+ * приходит usage, вызывается onUsage.
+ *
+ * Возвращает полный собранный текст по завершении.
+ */
+export interface StreamHandlers {
+  onDelta?: (text: string) => void;
+  onUsage?: (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void;
+}
+
+export async function chatStream(
+  opts: ChatOptions,
+  handlers: StreamHandlers = {},
+  init?: { signal?: AbortSignal },
+): Promise<string> {
+  const key = getKeyOrThrow();
+  const resp = await fetch(`${BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({ ...opts, stream: true }),
+    signal: init?.signal,
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new AIError(`AIMLAPI ${resp.status} ${resp.statusText}`, resp.status, body || undefined);
+  }
+  if (!resp.body) {
+    throw new AIError("AIMLAPI returned no body for stream", 502);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let full = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let idx: number;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const event = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+
+      for (const line of event.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+
+        try {
+          const obj = JSON.parse(payload) as {
+            choices?: Array<{ delta?: { content?: string } }>;
+            usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+          };
+          const delta = obj.choices?.[0]?.delta?.content;
+          if (typeof delta === "string" && delta.length > 0) {
+            full += delta;
+            handlers.onDelta?.(delta);
+          }
+          if (obj.usage) handlers.onUsage?.(obj.usage);
+        } catch {
+          // битый чанк — пропускаем
+        }
+      }
+    }
+  }
+
+  return full;
+}
+
 export interface ChatTextOptions {
   model: string;
   user: string;
