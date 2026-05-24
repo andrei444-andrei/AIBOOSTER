@@ -64,8 +64,11 @@ export default async function Home({
   const token = pickStr(sp.token) ?? "";
   const tokenAuthed = checkAdminTokenValue(token).ok;
 
-  // Все pinned-модули кроме самой Главной, чтобы не плодить ссылку на текущий экран.
-  const entryCards = MODULES.filter((m) => m.pinned && m.slug !== "home");
+  // Все pinned-модули кроме самой Главной и Источников — последние уже выведены
+  // отдельной секцией выше, незачем дублировать карточкой.
+  const entryCards = MODULES.filter(
+    (m) => m.pinned && m.slug !== "home" && m.slug !== "adapters",
+  );
 
   let sources: AdapterSourceRow[] = [];
   let stats: Awaited<ReturnType<typeof getContextStats>> = {
