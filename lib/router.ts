@@ -46,7 +46,7 @@ export interface RoutingDecision {
 const SYSTEM_ADDONS: Record<TaskCategory, string> = {
   quick: "Это короткий вопрос. Отвечай прямо, без лишней структуры, в 1–3 абзаца.",
   research:
-    "Это ресёрч-задача. Структурируй ответ так: краткий вывод сверху, затем факты с источниками (если используешь поиск — давай ссылки), в конце — оговорки и слепые зоны.",
+    "Это фактический вопрос про реальный мир. Структура ответа: ОДНА ёмкая фраза с прямым ответом сверху (выделена **жирным**), затем 2–3 предложения с деталями и источниками (если используешь поиск — давай ссылки или название источника), в конце — оговорки/неизвестности отдельной строкой. НЕ растягивай в учебник, НЕ повторяй вопрос.",
   code:
     "Это задача про код. Сначала покажи готовое решение в блоке кода, затем коротко объясни ключевые места. Если данных недостаточно — задай уточняющий вопрос вместо догадок.",
   analyze:
@@ -66,20 +66,25 @@ interface ClassifierOutput {
   reason: string;
 }
 
-const CLASSIFIER_SYSTEM = `Ты — классификатор задач для AI-чата. Получаешь последнее сообщение пользователя и краткий контекст. Возвращаешь СТРОГО JSON:
+const CLASSIFIER_SYSTEM = `Ты — жёсткий классификатор задач для AI-чата. Принцип: «качество > экономия». Если сомневаешься между быстрой и сильной категорией — выбирай сильную. Возвращаешь СТРОГО JSON:
 {"category": "<quick|research|code|analyze|strategy|image>", "complexity": "<low|medium|high>", "reason": "<до 80 символов на русском>"}
 
 Категории:
-- quick: короткий фактический вопрос, уточнение, перевод, определение
-- research: «найди», «сравни источники», «что говорят про…», запрос на ссылки и факты
+- quick: РЕДКАЯ. Только примитивные языковые/арифметические задачи: перевод одного-двух слов, синоним/антоним, орфография, простая арифметика (2+2), определение базового школьного термина. НЕ для фактов про мир, людей, продукты, даты, события.
+- research: ЛЮБЫЕ фактические вопросы про реальный мир — «когда / кто / где / какой / сколько стоит / что нового про X», даты релизов, новости, цены, биографии, характеристики продуктов, сравнения брендов. Цель — найти проверенный/актуальный ответ. Даже если вопрос короткий — это research, а не quick.
 - code: написать/починить/объяснить код, debug, рефакторинг, ревью
-- analyze: разобрать данные, документ, логи, дать выводы по предоставленному
+- analyze: разобрать данные, документ, логи, дать выводы по ПРЕДОСТАВЛЕННЫМ материалам
 - strategy: продумать варианты, принять решение, план, креатив, бизнес-выбор
 - image: «нарисуй», «сгенерируй картинку», «изображение / фотография / иллюстрация / арт / постер X», просьба создать визуал
 
+Эвристики:
+- В тексте есть год (1900..2030), название бренда/продукта/компании (GTA, iPhone, Tesla, Apple, Rockstar и т.п.), имя человека — это research, не quick.
+- «привет / как дела / спасибо / ок» — это quick (приветствие).
+- Если просят «объясни как работает X» и X — фундаментальное (TCP, ДНК, гравитация) — это research (нужны точные факты).
+
 Complexity:
-- low: можно ответить за 1–2 абзаца без глубокой работы
-- medium: нужен структурированный ответ, несколько аспектов
+- low: 1–2 абзаца без глубокой работы
+- medium: структурированный ответ, несколько аспектов
 - high: длинный ответ, много шагов рассуждения
 
 Только JSON, никакого текста вокруг.`;
@@ -180,20 +185,34 @@ function heuristicClassify(userText: string): ClassifierOutput {
     || /\b(code|function|class|bug|exception|stack ?trace|typescript|javascript|python|sql|api|endpoint)\b/i.test(t)
     || /```/.test(userText)
     || /^\s*(import|from|const|let|var|function|def|class)\b/m.test(userText);
-  const looksResearch = /(найди|найти|поиск|сравни|источник|новост|статьи?|кто такой|что такое)/i.test(t)
+  // research: явные вопросы про факты + наличие года или ALL-CAPS-аббревиатуры
+  // (GTA, iPhone, NASA — почти всегда требуют актуальной информации).
+  const hasFactualQuestion = /(когда|кто|где|какой|какая|какие|сколько|почему)/i.test(t);
+  const hasYear = /\b(19|20)\d{2}\b/.test(userText);
+  const hasBrandLike = /\b[A-Z]{2,}[A-Za-z0-9]*\b/.test(userText) // GTA, iPhone, NASA
+    || /(rockstar|apple|google|openai|anthropic|tesla|microsoft|nvidia|netflix|tiktok|instagram|youtube)/i.test(t);
+  const looksResearch = hasFactualQuestion || hasYear || hasBrandLike
+    || /(найди|найти|поиск|сравни|источник|новост|статьи?|кто такой|что такое)/i.test(t)
     || /\b(recent|latest|news|article|google|search)\b/i.test(t);
   const looksAnalyze = /(проанализир|разбери|разобрат|оцени|сделай разбор|метрик|логи?)/i.test(t)
     || /\b(analyze|analyse|metrics|breakdown)\b/i.test(t);
   const looksStrategy = /(стратеги|план|вариант|решени|выбр|выбор|рекоменд|что лучше|стоит ли|должен ли|посовет)/i.test(t)
     || /\b(strategy|plan|recommend|tradeoff|trade-off)\b/i.test(t);
+  // quick только для явных приветствий/арифметики/перевода одного слова
+  const looksTriviallyQuick = /^(привет|здаров|здарова|здравствуй|hello|hi|hey|спасибо|thanks?|ок|ok|пока|bye)[!\.\?]?$/i.test(t.trim())
+    || /^\s*\d+\s*[+\-*/]\s*\d+\s*=?\s*$/.test(t)
+    || /^(переведи|translate)\s+\S+\s*$/i.test(t);
 
-  let category: TaskCategory = "quick";
+  let category: TaskCategory;
   if (looksImage) category = "image";
   else if (hasCode) category = "code";
   else if (looksStrategy) category = "strategy";
   else if (looksResearch) category = "research";
   else if (looksAnalyze) category = "analyze";
+  else if (looksTriviallyQuick) category = "quick";
+  // По умолчанию НЕ quick — лучше отвечать сильной моделью.
   else if (t.length > 280) category = "analyze";
+  else category = "research";
 
   const complexity: Complexity = t.length < 80 ? "low" : t.length < 400 ? "medium" : "high";
   return { category, complexity, reason: "эвристика (роутер недоступен)" };
