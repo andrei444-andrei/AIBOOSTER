@@ -83,6 +83,21 @@ async function seedRoutesIfEmpty(): Promise<void> {
     });
   }
 
+  // Однократный апгрейд модели image: было google/imagen-4.0-generate-001
+  // (Imagen 4 standard), теперь google/imagen-4.0-ultra-generate-001
+  // (Imagen 4 Ultra — флагман Google). Трогаем только если в БД ровно
+  // прежний дефолт; пользовательский выбор (Flux/DALL-E или другое)
+  // оставляем.
+  const oldImage = haveRows.find((r) => r.category === "image");
+  if (oldImage && oldImage.model === "google/imagen-4.0-generate-001") {
+    await db.execute({
+      sql: `UPDATE chat_category_routing
+            SET model = ?, updated_at = ?
+            WHERE category = 'image'`,
+      args: ["google/imagen-4.0-ultra-generate-001", now],
+    });
+  }
+
   _seeded = true;
 }
 
