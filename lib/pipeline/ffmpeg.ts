@@ -127,7 +127,12 @@ export async function ffmpegConcatTimed(
     parts.push(`[${i}:a]adelay=${s.start_ms}|${s.start_ms},aresample=44100[${lbl}]`);
     labels.push(`[${lbl}]`);
   });
-  const mix = `${labels.join("")}amix=inputs=${segments.length}:duration=longest:normalize=0[out]`;
+  // amix у @ffmpeg-installer (статическая сборка 2018) не знает normalize=0.
+  // Компенсируем громкость через volume=N (умножаем на число входов), чтобы
+  // amix не делил signal/N и тише не становилось.
+  const mix =
+    `${labels.join("")}amix=inputs=${segments.length}:duration=longest,` +
+    `volume=${segments.length}[out]`;
   args.push("-filter_complex", [...parts, mix].join(";"));
   args.push("-map", "[out]");
   if (totalDurSec) args.push("-t", String(totalDurSec));
