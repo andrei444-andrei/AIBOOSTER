@@ -235,7 +235,10 @@ export interface CategoryRoute {
 }
 
 export const DEFAULT_CATEGORY_ROUTES: CategoryRoute[] = [
-  { category: "quick",    model: MODELS.GEMINI_FLASH,   reasoning_effort: null,   max_tokens: 2000 },
+  // quick — теперь Sonnet, не Flash. Качество > экономия (§4). Flash слишком
+  // примитивен даже для коротких вопросов: даёт пересказ из обучающих данных
+  // без актуальности и без структуры.
+  { category: "quick",    model: MODELS.CLAUDE_SONNET,   reasoning_effort: null,   max_tokens: 2000 },
   { category: "research", model: MODELS.PERPLEXITY_SONAR, reasoning_effort: null, max_tokens: 4000 },
   { category: "code",     model: MODELS.CLAUDE_OPUS,    reasoning_effort: null,   max_tokens: 8000 },
   { category: "analyze",  model: MODELS.GEMINI_PRO,     reasoning_effort: null,   max_tokens: 8000 },

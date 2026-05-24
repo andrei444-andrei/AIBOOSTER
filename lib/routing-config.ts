@@ -37,16 +37,15 @@ function rowToRoute(r: RoutingRow): CategoryRoute | null {
 let _seeded = false;
 
 /** Дозаполнить таблицу дефолтами для категорий, которых ещё нет в БД.
- *  Идемпотентно. Работает и для свежей БД, и для миграции (например,
- *  добавление новой категории image после релиза с 5 категориями). */
+ *  Идемпотентно. Плюс — однократные апгрейды старых дефолтов на новые
+ *  (policy «качество > экономия»). */
 async function seedRoutesIfEmpty(): Promise<void> {
   if (_seeded) return;
   await ensureSchema();
   const db = getDb();
-  const existing = await db.execute(`SELECT category FROM chat_category_routing`);
-  const have = new Set<string>(
-    (existing.rows as unknown as Array<{ category: string }>).map((r) => r.category),
-  );
+  const existing = await db.execute(`SELECT category, model, max_tokens FROM chat_category_routing`);
+  const haveRows = existing.rows as unknown as Array<{ category: string; model: string; max_tokens: number }>;
+  const have = new Set(haveRows.map((r) => r.category));
   const now = new Date().toISOString();
   for (const r of DEFAULT_CATEGORY_ROUTES) {
     if (have.has(r.category)) continue;
@@ -56,6 +55,21 @@ async function seedRoutesIfEmpty(): Promise<void> {
       args: [r.category, r.model, r.reasoning_effort, r.max_tokens, now, now],
     });
   }
+
+  // Однократный апгрейд: quick раньше был gemini-2.5-flash, теперь
+  // claude-sonnet-4-5. Переписываем только если запись выглядит как
+  // нетронутый дефолт (max_tokens по умолчанию). Если пользователь сам
+  // выбрал Flash — оставим его.
+  const oldQuick = haveRows.find((r) => r.category === "quick");
+  if (oldQuick && oldQuick.model === "gemini-2.5-flash" && oldQuick.max_tokens <= 2500) {
+    await db.execute({
+      sql: `UPDATE chat_category_routing
+            SET model = ?, max_tokens = 2000, updated_at = ?
+            WHERE category = 'quick'`,
+      args: ["claude-sonnet-4-5", now],
+    });
+  }
+
   _seeded = true;
 }
 
