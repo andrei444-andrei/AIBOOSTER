@@ -110,14 +110,14 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
 
   // 3. TTS по сегментам + подгонка длительности.
   await updateJobProgress({ id: job.id, stage: "tts", progress: 58 });
-  const segmentFiles: Array<{ file: string; start_ms: number }> = [];
+  const segmentFiles: Array<{ file: string; start_ms: number; end_ms: number }> = [];
   for (let i = 0; i < translated.length; i++) {
     const s = translated[i];
     const text = (s.translated_text || "").trim();
     if (!text) {
       const silence = join(work, `seg-${i}.mp3`);
       await ffmpegSilence(silence, Math.max(0.1, (s.end_ms - s.start_ms) / 1000));
-      segmentFiles.push({ file: silence, start_ms: s.start_ms });
+      segmentFiles.push({ file: silence, start_ms: s.start_ms, end_ms: s.end_ms });
       continue;
     }
     const raw = await ttsSynth(text);
@@ -128,7 +128,7 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
     const rawSec = await ffprobeDuration(rawFile);
     const segFile = join(work, `seg-${i}.mp3`);
     await ffmpegFit(rawFile, segFile, rawSec, targetSec);
-    segmentFiles.push({ file: segFile, start_ms: s.start_ms });
+    segmentFiles.push({ file: segFile, start_ms: s.start_ms, end_ms: s.end_ms });
 
     const p = 58 + Math.round((32 * (i + 1)) / translated.length);
     if (i % 5 === 0 || i === translated.length - 1) {

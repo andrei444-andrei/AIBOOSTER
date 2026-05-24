@@ -4,6 +4,7 @@
 // outputFileTracingIncludes в next.config.mjs.
 
 import { spawn } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import ffprobeInstaller from "@ffprobe-installer/ffprobe";
 
@@ -106,14 +107,25 @@ export async function ffmpegFit(
   await run(FFMPEG, args);
 }
 
-// Каждый TTS-сегмент позиционируется по своему start_ms через adelay и
-// микшируется через amix. На больших видео (>50 сегментов) гигантский
-// amix-граф становится медленным и упирается в Vercel 300с-таймаут,
-// поэтому процессим батчами: групп по 50 → промежуточные mp3 (каждый
-// уже с правильной адресацией внутри своего временного окна) → финальный
-// amix всех батчей. Каждый батч-микс маленький и быстрый, финал тоже.
+// Собирает финальный mp3 из TTS-сегментов с точным позиционированием
+// по start_ms. Стратегия — concat demuxer + silence-gaps:
+//
+//   silence(start_ms_0)
+//   seg_0
+//   silence(start_ms_1 - end_ms_0)   ← если положительно
+//   seg_1
+//   ...
+//
+// ffmpeg -f concat -c copy просто склеивает байты mp3 — никакого
+// adelay/amix/декодирования. Работает за миллисекунды даже для тысяч
+// сегментов, не зависит от длины видео.
+//
+// Предусловия: каждый сегмент уже подогнан ffmpegFit() так, что его
+// длительность ≈ (end_ms - start_ms) / 1000. YouTube-субтитры не
+// пересекаются по времени, поэтому концепция «закрыл — открыл следующий
+// после» работает корректно.
 export async function ffmpegConcatTimed(
-  segments: Array<{ file: string; start_ms: number }>,
+  segments: Array<{ file: string; start_ms: number; end_ms: number }>,
   outFile: string,
   totalDurSec: number | null,
 ): Promise<void> {
@@ -121,78 +133,66 @@ export async function ffmpegConcatTimed(
     await ffmpegSilence(outFile, 1);
     return;
   }
-  const BATCH = 50;
-  if (segments.length <= BATCH) {
-    await mixWithDelays(segments, outFile, totalDurSec);
-    return;
-  }
 
-  // Многобатчевая стратегия: каждый батч → промежуточный mp3,
-  // потом финальный микс всех батчей (каждый стартует с 0).
   const workDir = outFile.substring(0, outFile.lastIndexOf("/"));
-  const batchFiles: string[] = [];
-  for (let i = 0; i < segments.length; i += BATCH) {
-    const batch = segments.slice(i, i + BATCH);
-    const batchOut = `${workDir}/batch-${Math.floor(i / BATCH)}.mp3`;
-    await mixWithDelays(batch, batchOut, null);
-    batchFiles.push(batchOut);
+  const sorted = [...segments].sort((a, b) => a.start_ms - b.start_ms);
+
+  // Сборка списка файлов-кусков (silence + segment + silence + segment + ...).
+  type Piece = { kind: "silence"; durSec: number; file?: string } | { kind: "audio"; file: string };
+  const pieces: Piece[] = [];
+  let cursorMs = 0;
+  for (const s of sorted) {
+    const gapMs = s.start_ms - cursorMs;
+    if (gapMs > 5) {
+      pieces.push({ kind: "silence", durSec: gapMs / 1000 });
+    }
+    pieces.push({ kind: "audio", file: s.file });
+    cursorMs = Math.max(cursorMs, s.end_ms);
   }
-  await mixFiles(batchFiles, outFile, totalDurSec);
-}
+  // Хвост до общей длительности, если есть.
+  if (totalDurSec) {
+    const tailMs = totalDurSec * 1000 - cursorMs;
+    if (tailMs > 50) {
+      pieces.push({ kind: "silence", durSec: tailMs / 1000 });
+    }
+  }
 
-// Один amix-проход: позиционирует каждый input через adelay и микширует.
-async function mixWithDelays(
-  segments: Array<{ file: string; start_ms: number }>,
-  outFile: string,
-  totalDurSec: number | null,
-): Promise<void> {
-  const args = ["-y"];
-  for (const s of segments) args.push("-i", s.file);
+  // Кешируем silence-файлы по округлённой длительности — обычно гаpов с
+  // одинаковой длиной много, не хочется генерить тыщу почти одинаковых mp3.
+  const silenceCache = new Map<string, string>();
+  let silenceCount = 0;
+  for (const p of pieces) {
+    if (p.kind !== "silence") continue;
+    const rounded = Math.max(0.05, Math.round(p.durSec * 100) / 100);
+    const key = rounded.toFixed(2);
+    let file = silenceCache.get(key);
+    if (!file) {
+      file = `${workDir}/silence-${silenceCount++}.mp3`;
+      await ffmpegSilence(file, rounded);
+      silenceCache.set(key, file);
+    }
+    p.file = file;
+  }
 
-  const labels: string[] = [];
-  const parts: string[] = [];
-  segments.forEach((s, i) => {
-    const lbl = `s${i}`;
-    parts.push(`[${i}:a]adelay=${s.start_ms}|${s.start_ms},aresample=44100[${lbl}]`);
-    labels.push(`[${lbl}]`);
+  // concat demuxer требует список вида:
+  //   file '/abs/path/a.mp3'
+  //   file '/abs/path/b.mp3'
+  const listFile = `${workDir}/concat-list.txt`;
+  const lines = pieces.map((p) => {
+    const path = p.kind === "silence" ? p.file! : p.file;
+    // Экранируем апострофы в путях по правилам concat demuxer.
+    const escaped = path.replace(/'/g, "'\\''");
+    return `file '${escaped}'`;
   });
-  // amix у @ffmpeg-installer (статическая сборка 2018) не знает normalize=0.
-  // Компенсируем громкость через volume=N (умножаем на число входов), чтобы
-  // amix не делил signal/N и тише не становилось.
-  const mix =
-    `${labels.join("")}amix=inputs=${segments.length}:duration=longest,` +
-    `volume=${segments.length}[out]`;
-  args.push("-filter_complex", [...parts, mix].join(";"));
-  args.push("-map", "[out]");
-  if (totalDurSec) args.push("-t", String(totalDurSec));
-  args.push("-acodec", "libmp3lame", "-q:a", "4", outFile);
-  await run(FFMPEG, args);
-}
+  await writeFile(listFile, lines.join("\n"));
 
-// Финальный микс готовых батч-mp3 без adelay — внутри батчей уже всё
-// расставлено по таймкодам. Просто amix N → N inputs.
-async function mixFiles(
-  files: string[],
-  outFile: string,
-  totalDurSec: number | null,
-): Promise<void> {
-  if (files.length === 1) {
-    // Один батч — не нужно микшировать, можно просто перекодировать.
-    const args = ["-y", "-i", files[0]];
-    if (totalDurSec) args.push("-t", String(totalDurSec));
-    args.push("-acodec", "libmp3lame", "-q:a", "4", outFile);
-    await run(FFMPEG, args);
-    return;
-  }
-  const args = ["-y"];
-  for (const f of files) args.push("-i", f);
-  const labels = files.map((_, i) => `[${i}:a]`).join("");
-  const mix =
-    `${labels}amix=inputs=${files.length}:duration=longest,` +
-    `volume=${files.length}[out]`;
-  args.push("-filter_complex", mix);
-  args.push("-map", "[out]");
+  // -c copy не работает, если у файлов разные параметры; ffmpegSilence
+  // и TTS-сегменты после ffmpegFit оба дают libmp3lame 44.1kHz mono,
+  // поэтому copy безопасен. Если когда-то параметры разойдутся —
+  // упадёт явной ошибкой кодека, тогда уберём -c copy и добавим
+  // -acodec libmp3lame.
+  const args = ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy"];
   if (totalDurSec) args.push("-t", String(totalDurSec));
-  args.push("-acodec", "libmp3lame", "-q:a", "4", outFile);
+  args.push(outFile);
   await run(FFMPEG, args);
 }
