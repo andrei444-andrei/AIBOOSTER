@@ -26,6 +26,7 @@ import {
   startRunnerRun,
   getRun,
   getDatasetItems,
+  getKvRecord,
   isTerminal,
   isSuccess,
   ApifyError,
@@ -259,17 +260,51 @@ async function advance(row: ScraperRunRow): Promise<void> {
   });
 
   if (!isSuccess(apify.status)) {
-    // Apify run упал. Достанем причину из логов/output.
-    const reason =
-      apify.exitCode != null
-        ? `Apify-run завершился со статусом ${apify.status}, exit ${apify.exitCode}`
-        : `Apify-run завершился со статусом ${apify.status}`;
+    // Apify run упал. Реальное сообщение из throw'а пользовательского кода
+    // лежит в OUTPUT — runner-актер кладёт туда { ok: false, error, stack }.
+    // Покажем юзеру именно его, а не обобщённое "FAILED".
+    let userMessage = `Apify-run завершился со статусом ${apify.status}`;
+    let runnerError: string | null = null;
+    let runnerStack: string | null = null;
+
+    if (apify.defaultKeyValueStoreId) {
+      try {
+        const output = await getKvRecord<{
+          ok?: boolean;
+          error?: string;
+          stack?: string;
+        }>(apify.defaultKeyValueStoreId, "OUTPUT");
+        if (output && output.ok === false && output.error) {
+          runnerError = output.error;
+          runnerStack = output.stack ?? null;
+          userMessage = output.error;
+        }
+      } catch (kvErr) {
+        // Если не смогли прочитать OUTPUT — не страшно, оставим общую формулировку.
+        await logServerError(kvErr, "/scraper/advance:readOutput", {
+          runId: row.id,
+        });
+      }
+    }
+
+    // attempts.error пишем для дебага в /admin и будущего self-healing.
+    const db2 = getDb();
+    await db2.execute({
+      sql: `UPDATE scraper_attempts SET error = ? WHERE run_id = ? AND n = 1`,
+      args: [runnerError ?? userMessage, row.id],
+    });
+
     const errorId = await logServerError(
-      new Error(reason),
+      new Error(userMessage),
       "/scraper/advance:apifyFailed",
-      { runId: row.id, apifyRunId: apify.id },
+      {
+        runId: row.id,
+        apifyRunId: apify.id,
+        apifyStatus: apify.status,
+        stack: runnerStack,
+      },
     );
-    await markFailed(row.id, errorId, reason);
+    await markFailed(row.id, errorId, userMessage);
     return;
   }
 
