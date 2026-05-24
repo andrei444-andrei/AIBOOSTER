@@ -1,23 +1,30 @@
 .md {
-  font-size: var(--text-base);
-  line-height: var(--leading-relaxed);
+  font-size: var(--text-md);
+  line-height: 1.75;
   color: var(--text);
   word-wrap: break-word;
+  letter-spacing: -0.005em;
 }
 
 .md > * + * {
-  margin-top: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 .md h1,
 .md h2,
 .md h3,
 .md h4 {
-  margin-top: var(--space-5);
-  margin-bottom: var(--space-2);
+  margin-top: var(--space-6);
+  margin-bottom: 2px;
   font-weight: 600;
   line-height: var(--leading-snug);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
+}
+.md > h1:first-child,
+.md > h2:first-child,
+.md > h3:first-child,
+.md > h4:first-child {
+  margin-top: 0;
 }
 
 .md h1 {
@@ -25,15 +32,20 @@
 }
 .md h2 {
   font-size: var(--text-lg);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: var(--space-1);
 }
 .md h3 {
   font-size: var(--text-md);
+  font-weight: 600;
 }
 .md h4 {
   font-size: var(--text-base);
   color: var(--text-secondary);
+}
+
+.md h2 + *,
+.md h3 + *,
+.md h4 + * {
+  margin-top: var(--space-2);
 }
 
 .md p {
@@ -50,14 +62,23 @@
 
 .md ul,
 .md ol {
-  padding-left: 1.4em;
+  padding-left: 1.5em;
   margin: 0;
 }
 .md li + li {
-  margin-top: 4px;
+  margin-top: 6px;
 }
 .md li > p {
   margin: 0;
+}
+.md li::marker {
+  color: var(--text-muted);
+}
+.md ul ul,
+.md ol ol,
+.md ul ol,
+.md ol ul {
+  margin-top: 6px;
 }
 
 .md blockquote {

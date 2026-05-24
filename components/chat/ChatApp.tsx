@@ -784,42 +784,45 @@ function ModelSelector({
 // ─── Сообщение ───────────────────────────────────────────────────────
 
 function MessageBlock({ message }: { message: Message }) {
-  const isUser = message.role === "user";
+  if (message.role === "user") {
+    return (
+      <div className={styles.msgUser} data-msg-id={message.id}>
+        <div>
+          {message.attachments && message.attachments.length > 0 && (
+            <div className={styles.attachments}>
+              {message.attachments.map((a, i) => (
+                <AttachmentChip key={a.id ?? i} attachment={a} />
+              ))}
+            </div>
+          )}
+          {message.content && <div className={styles.userBubble}>{message.content}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  // assistant
   const live = message.liveRoute;
   const showLiveHint = message.streaming && live && !message.content;
   const showTypeHint = message.streaming && !live && !message.content;
 
   return (
-    <div
-      className={`${styles.msgRow} ${isUser ? styles.msgUser : styles.msgAssistant}`}
-      data-msg-id={message.id}
-    >
-      <div className={styles.avatar}>{isUser ? "Ты" : "AI"}</div>
-      <div className={styles.msgBody}>
-        {message.attachments && message.attachments.length > 0 && (
-          <div className={styles.attachments}>
-            {message.attachments.map((a, i) => (
-              <AttachmentChip key={a.id ?? i} attachment={a} />
-            ))}
-          </div>
-        )}
-
-        {!isUser && showLiveHint && live && (
+    <div className={styles.msgAssistant} data-msg-id={message.id}>
+      <div className={styles.assistantBody}>
+        {showLiveHint && live && (
           <div className={styles.streamHint}>
             <span className={styles.streamHintPulse} />
             <span>{routeLabel(live, message.model)}</span>
           </div>
         )}
-        {!isUser && showTypeHint && (
+        {showTypeHint && (
           <div className={styles.streamHint}>
             <span className={styles.streamHintPulse} />
             <span>Маршрутизирую запрос…</span>
           </div>
         )}
 
-        {isUser ? (
-          <div className={styles.userText}>{message.content}</div>
-        ) : message.content ? (
+        {message.content ? (
           <Markdown source={message.content} />
         ) : message.streaming ? (
           <div className={styles.typing}>
@@ -833,7 +836,7 @@ function MessageBlock({ message }: { message: Message }) {
           <div className={styles.msgError}>Ошибка: {message.error}</div>
         )}
 
-        {!isUser && !message.streaming && !message.error && message.content && (
+        {!message.streaming && !message.error && message.content && (
           <MessageMeta message={message} />
         )}
       </div>
