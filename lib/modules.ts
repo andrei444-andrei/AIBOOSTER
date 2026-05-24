@@ -37,6 +37,15 @@ export const MODULES: ModuleEntry[] = [
     icon: "·",
   },
   {
+    slug: "scraper",
+    title: "AI Scraper",
+    href: "/scraper",
+    description: "Скажи задачу — AI напишет код, соберёт данные с веба, отдаст отчёт.",
+    pinned: true,
+    section: "main",
+    icon: "◉",
+  },
+  {
     slug: "chat",
     title: "AI Chat",
     href: "/chat",
