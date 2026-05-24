@@ -29,16 +29,29 @@ function client(): S3Client {
 
 export async function uploadMp3(key: string, body: Buffer): Promise<string> {
   const bucket = required("R2_BUCKET");
+  const accountId = required("R2_ACCOUNT_ID");
   const publicBase = required("R2_PUBLIC_BASE").replace(/\/+$/, "");
+  const accessKey = required("R2_ACCESS_KEY_ID");
 
-  await client().send(
-    new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      Body: body,
-      ContentType: "audio/mpeg",
-      CacheControl: "public, max-age=31536000, immutable",
-    }),
-  );
+  try {
+    await client().send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: body,
+        ContentType: "audio/mpeg",
+        CacheControl: "public, max-age=31536000, immutable",
+      }),
+    );
+  } catch (err) {
+    // Прикладываем неконфиденциальную часть конфига, чтобы было видно
+    // что Vercel-функция ВИДИТ как env: имя бакета, начало account_id,
+    // начало access_key_id. Сравни с тем что в Cloudflare UI.
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `R2 upload failed: ${msg} ` +
+        `[bucket="${bucket}" account=${accountId.slice(0, 8)}… access_key=${accessKey.slice(0, 6)}…${accessKey.slice(-4)} len=${accessKey.length}]`,
+    );
+  }
   return `${publicBase}/${key}`;
 }
