@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { Button, Card, Input } from "@/components/ui";
 import type { AdapterSourceRow } from "@/lib/adapters/types";
+import type { ContextStats } from "@/lib/adapters/stats";
 
 const code: React.CSSProperties = {
   background: "var(--bg-subtle)",
@@ -149,11 +150,13 @@ export default function AdaptersClient({
   token,
   sources,
   recentRuns,
+  stats,
   flash,
 }: {
   token: string;
   sources: AdapterSourceRow[];
   recentRuns: RunRow[];
+  stats: ContextStats;
   flash: string | null;
 }) {
   const [, startTransition] = useTransition();
@@ -307,6 +310,31 @@ export default function AdaptersClient({
           БД. Cron <span style={code}>* * * * *</span> синкает каждый источник
           по его расписанию.
         </p>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 24,
+            padding: "12px 16px",
+            background: "var(--bg-subtle)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            marginBottom: 16,
+            flexWrap: "wrap",
+          }}
+        >
+          <Stat label="В контексте" value={fmtNum(stats.total)} unit="сниппетов" />
+          <Stat label="За 24 часа" value={`+${fmtNum(stats.last24h)}`} unit="новых" />
+          <Stat
+            label="Активных источников"
+            value={String(
+              sources.filter(
+                (s) => !!s.credentials && s.status !== "disabled",
+              ).length,
+            )}
+            unit={`из ${INTEGRATIONS.length}`}
+          />
+        </div>
         <div
           style={{
             display: "grid",
@@ -360,6 +388,27 @@ export default function AdaptersClient({
 
                 {connected && existing && (
                   <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                    {(() => {
+                      const s = stats.bySource[integ.kind];
+                      if (!s) return null;
+                      return (
+                        <div
+                          style={{
+                            marginBottom: 4,
+                            color: "var(--text-secondary)",
+                            fontWeight: 500,
+                          }}
+                        >
+                          сохранено: {fmtNum(s.total)}
+                          {s.last24h > 0 && (
+                            <span style={{ color: "var(--success)" }}>
+                              {" "}
+                              · за 24ч +{fmtNum(s.last24h)}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                     последний sync: {fmtTs(existing.last_run_at)}
                     {existing.next_run_at && (
                       <> · следующий: {fmtTs(existing.next_run_at)}</>
@@ -589,4 +638,49 @@ const td: React.CSSProperties = {
 function fmtTs(s: string | null | undefined): string {
   if (!s) return "—";
   return s.replace("T", " ").replace("Z", "").slice(0, 19);
+}
+
+function fmtNum(n: number): string {
+  if (!Number.isFinite(n)) return "0";
+  return new Intl.NumberFormat("ru-RU").format(n);
+}
+
+function Stat({
+  label,
+  value,
+  unit,
+}: {
+  label: string;
+  value: string;
+  unit?: string;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <span
+        style={{
+          fontSize: 11,
+          color: "var(--text-muted)",
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
+        }}
+      >
+        {label}
+      </span>
+      <span style={{ fontSize: 18, fontWeight: 600, lineHeight: 1.2 }}>
+        {value}
+        {unit && (
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 400,
+              color: "var(--text-muted)",
+              marginLeft: 6,
+            }}
+          >
+            {unit}
+          </span>
+        )}
+      </span>
+    </div>
+  );
 }
