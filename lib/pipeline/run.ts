@@ -30,10 +30,10 @@ import {
 import { uploadMp3 } from "./storage";
 
 const MAX_DURATION_SEC = 60 * 60;
-// Vercel Function cap = 300 секунд; на ~200 сегментах ffmpeg-amix укладывается
-// в этот бюджет с запасом, на большем количестве — рискуем зависнуть в mux.
-// Превышение → быстрый fail с понятной ошибкой вместо «running 92%» на полчаса.
-const MAX_SEGMENTS = 200;
+// Vercel Function cap = 300 секунд. Эмпирически с batched-mux (50 сегментов
+// на батч) укладываемся в этот бюджет до ~1000 сегментов (≈40-60 мин речи).
+// Над этим — TTS-этап начинает грозить таймаутом.
+const MAX_SEGMENTS = 1000;
 
 export async function runJob(job: JobRow): Promise<void> {
   const work = await mkdtemp(join(tmpdir(), `job-${job.id}-`));
@@ -69,8 +69,7 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
   if (tx.segments.length > MAX_SEGMENTS) {
     throw new Error(
       `слишком много сегментов: ${tx.segments.length} (лимит ${MAX_SEGMENTS}). ` +
-        `Vercel-функция не успеет смикшировать столько TTS-треков за 5 минут. ` +
-        `Возьми видео покороче — обычно лимит = 8–12 мин.`,
+        `Vercel-функция не успеет за 5 минут. Возьми видео покороче (обычно ≤ 40 мин).`,
     );
   }
   await updateJobProgress({

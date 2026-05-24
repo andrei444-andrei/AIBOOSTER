@@ -106,8 +106,12 @@ export async function ffmpegFit(
   await run(FFMPEG, args);
 }
 
-// Каждый сегмент позиционируется по start_ms через adelay; смикшировано
-// амиксом. Если задана totalDurSec — обрезаем по ней.
+// Каждый TTS-сегмент позиционируется по своему start_ms через adelay и
+// микшируется через amix. На больших видео (>50 сегментов) гигантский
+// amix-граф становится медленным и упирается в Vercel 300с-таймаут,
+// поэтому процессим батчами: групп по 50 → промежуточные mp3 (каждый
+// уже с правильной адресацией внутри своего временного окна) → финальный
+// amix всех батчей. Каждый батч-микс маленький и быстрый, финал тоже.
 export async function ffmpegConcatTimed(
   segments: Array<{ file: string; start_ms: number }>,
   outFile: string,
@@ -117,6 +121,31 @@ export async function ffmpegConcatTimed(
     await ffmpegSilence(outFile, 1);
     return;
   }
+  const BATCH = 50;
+  if (segments.length <= BATCH) {
+    await mixWithDelays(segments, outFile, totalDurSec);
+    return;
+  }
+
+  // Многобатчевая стратегия: каждый батч → промежуточный mp3,
+  // потом финальный микс всех батчей (каждый стартует с 0).
+  const workDir = outFile.substring(0, outFile.lastIndexOf("/"));
+  const batchFiles: string[] = [];
+  for (let i = 0; i < segments.length; i += BATCH) {
+    const batch = segments.slice(i, i + BATCH);
+    const batchOut = `${workDir}/batch-${Math.floor(i / BATCH)}.mp3`;
+    await mixWithDelays(batch, batchOut, null);
+    batchFiles.push(batchOut);
+  }
+  await mixFiles(batchFiles, outFile, totalDurSec);
+}
+
+// Один amix-проход: позиционирует каждый input через adelay и микширует.
+async function mixWithDelays(
+  segments: Array<{ file: string; start_ms: number }>,
+  outFile: string,
+  totalDurSec: number | null,
+): Promise<void> {
   const args = ["-y"];
   for (const s of segments) args.push("-i", s.file);
 
@@ -134,6 +163,34 @@ export async function ffmpegConcatTimed(
     `${labels.join("")}amix=inputs=${segments.length}:duration=longest,` +
     `volume=${segments.length}[out]`;
   args.push("-filter_complex", [...parts, mix].join(";"));
+  args.push("-map", "[out]");
+  if (totalDurSec) args.push("-t", String(totalDurSec));
+  args.push("-acodec", "libmp3lame", "-q:a", "4", outFile);
+  await run(FFMPEG, args);
+}
+
+// Финальный микс готовых батч-mp3 без adelay — внутри батчей уже всё
+// расставлено по таймкодам. Просто amix N → N inputs.
+async function mixFiles(
+  files: string[],
+  outFile: string,
+  totalDurSec: number | null,
+): Promise<void> {
+  if (files.length === 1) {
+    // Один батч — не нужно микшировать, можно просто перекодировать.
+    const args = ["-y", "-i", files[0]];
+    if (totalDurSec) args.push("-t", String(totalDurSec));
+    args.push("-acodec", "libmp3lame", "-q:a", "4", outFile);
+    await run(FFMPEG, args);
+    return;
+  }
+  const args = ["-y"];
+  for (const f of files) args.push("-i", f);
+  const labels = files.map((_, i) => `[${i}:a]`).join("");
+  const mix =
+    `${labels}amix=inputs=${files.length}:duration=longest,` +
+    `volume=${files.length}[out]`;
+  args.push("-filter_complex", mix);
   args.push("-map", "[out]");
   if (totalDurSec) args.push("-t", String(totalDurSec));
   args.push("-acodec", "libmp3lame", "-q:a", "4", outFile);
