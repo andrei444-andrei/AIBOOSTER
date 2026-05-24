@@ -137,6 +137,9 @@ function findTranslationsArray(parsed: unknown): Array<{ idx: unknown; text?: un
 }
 
 // ElevenLabs TTS через aimlapi proxy. Возвращает mp3 как Buffer.
+// На транзиентных 5xx/таймаутах ретраим до 2 раз с экспоненциальной паузой
+// — на длинных видео типичен 524 от Cloudflare aimlapi, если сразу падать
+// то теряется весь прогон.
 export async function ttsSynth(
   text: string,
   opts: { voice?: string; model?: string } = {},
@@ -144,17 +147,31 @@ export async function ttsSynth(
   const voice = opts.voice ?? "Rachel";
   const model = opts.model ?? "elevenlabs/eleven_multilingual_v2";
 
-  const res = await fetch(`${BASE}/tts`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${key()}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ model, text, voice }),
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`tts failed ${res.status}: ${t.slice(0, 400)}`);
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      // 0.5s, 1.5s
+      await new Promise((r) => setTimeout(r, 500 * Math.pow(3, attempt - 1)));
+    }
+    try {
+      const res = await fetch(`${BASE}/tts`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${key()}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ model, text, voice }),
+      });
+      if (res.ok) return Buffer.from(await res.arrayBuffer());
+      const t = await res.text().catch(() => "");
+      const err = new Error(`tts failed ${res.status}: ${t.slice(0, 200)}`);
+      // 4xx (кроме 429) — фатально, ретрай не поможет.
+      if (res.status < 500 && res.status !== 429) throw err;
+      lastErr = err;
+    } catch (e) {
+      // Network errors — ретрай.
+      lastErr = e instanceof Error ? e : new Error(String(e));
+    }
   }
-  return Buffer.from(await res.arrayBuffer());
+  throw lastErr ?? new Error("tts failed (no error captured)");
 }

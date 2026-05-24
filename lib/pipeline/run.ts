@@ -108,37 +108,54 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
     })),
   );
 
-  // 3. TTS по сегментам + подгонка длительности.
+  // 3. TTS по сегментам + подгонка длительности — параллельно (concurrency=6),
+  // иначе на длинных видео сумма HTTP latency aimlapi не влезает в 300с
+  // Vercel-функции. Меньше 6 — медленно, больше — aimlapi начинает 524.
   await updateJobProgress({ id: job.id, stage: "tts", progress: 58 });
-  const segmentFiles: Array<{ file: string; start_ms: number; end_ms: number }> = [];
-  for (let i = 0; i < translated.length; i++) {
-    const s = translated[i];
-    const text = (s.translated_text || "").trim();
-    if (!text) {
-      const silence = join(work, `seg-${i}.mp3`);
-      await ffmpegSilence(silence, Math.max(0.1, (s.end_ms - s.start_ms) / 1000));
-      segmentFiles.push({ file: silence, start_ms: s.start_ms, end_ms: s.end_ms });
-      continue;
-    }
-    const raw = await ttsSynth(text);
-    const rawFile = join(work, `seg-${i}-raw.mp3`);
-    await writeFile(rawFile, raw);
+  const segmentFiles: Array<{ file: string; start_ms: number; end_ms: number }> =
+    new Array(translated.length);
+  const TTS_CONCURRENCY = 6;
+  let nextIdx = 0;
+  let done = 0;
+  let lastReportedAt = 0;
+  async function reportProgress() {
+    if (Date.now() - lastReportedAt < 1500) return;
+    lastReportedAt = Date.now();
+    const p = 58 + Math.round((32 * done) / translated.length);
+    await updateJobProgress({
+      id: job.id,
+      stage: "tts",
+      progress: Math.min(p, 90),
+    });
+  }
+  async function workerLoop(): Promise<void> {
+    for (;;) {
+      const i = nextIdx++;
+      if (i >= translated.length) return;
+      const s = translated[i];
+      const text = (s.translated_text || "").trim();
+      if (!text) {
+        const silence = join(work, `seg-${i}.mp3`);
+        await ffmpegSilence(silence, Math.max(0.1, (s.end_ms - s.start_ms) / 1000));
+        segmentFiles[i] = { file: silence, start_ms: s.start_ms, end_ms: s.end_ms };
+      } else {
+        const raw = await ttsSynth(text);
+        const rawFile = join(work, `seg-${i}-raw.mp3`);
+        await writeFile(rawFile, raw);
 
-    const targetSec = Math.max(0.2, (s.end_ms - s.start_ms) / 1000);
-    const rawSec = await ffprobeDuration(rawFile);
-    const segFile = join(work, `seg-${i}.mp3`);
-    await ffmpegFit(rawFile, segFile, rawSec, targetSec);
-    segmentFiles.push({ file: segFile, start_ms: s.start_ms, end_ms: s.end_ms });
-
-    const p = 58 + Math.round((32 * (i + 1)) / translated.length);
-    if (i % 5 === 0 || i === translated.length - 1) {
-      await updateJobProgress({
-        id: job.id,
-        stage: "tts",
-        progress: Math.min(p, 90),
-      });
+        const targetSec = Math.max(0.2, (s.end_ms - s.start_ms) / 1000);
+        const rawSec = await ffprobeDuration(rawFile);
+        const segFile = join(work, `seg-${i}.mp3`);
+        await ffmpegFit(rawFile, segFile, rawSec, targetSec);
+        segmentFiles[i] = { file: segFile, start_ms: s.start_ms, end_ms: s.end_ms };
+      }
+      done++;
+      await reportProgress();
     }
   }
+  await Promise.all(
+    Array.from({ length: Math.min(TTS_CONCURRENCY, translated.length) }, () => workerLoop()),
+  );
 
   // 4. Склейка по таймкодам.
   await updateJobProgress({ id: job.id, stage: "mux", progress: 92 });
