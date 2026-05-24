@@ -47,6 +47,25 @@ export const TABLES: TableDef[] = [
     ],
   },
   {
+    name: "apify_actors",
+    description:
+      "Реестр актеров Apify, которыми владеет приложение. Заполняется автоматически (самопровижининг по §1 конституции): когда какой-то модуль впервые запрашивает актер по slug — лезем в Apify, ищем или создаём, и пишем сюда. APIFY_RUNNER_ACTOR_ID в env не нужен.",
+    ddl: `CREATE TABLE IF NOT EXISTS apify_actors (
+      slug TEXT PRIMARY KEY,
+      apify_actor_id TEXT NOT NULL,
+      apify_actor_name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_built_at TEXT
+    )`,
+    columns: [
+      { name: "slug", description: "Внутренний ключ (например 'runner'). По нему обращается код модуля." },
+      { name: "apify_actor_id", description: "Канонический ID в Apify в форме 'username~actor-name' (либо короткий random ID, оба работают)." },
+      { name: "apify_actor_name", description: "Имя актера в Apify (то, что показано в Console)." },
+      { name: "created_at", description: "Когда впервые задеплоили/обнаружили." },
+      { name: "last_built_at", description: "Когда мы инициировали build (для будущей логики обновления при изменении исходников)." },
+    ],
+  },
+  {
     name: "scraper_runs",
     description:
       "Запуски модуля AI Scraper. Каждый запуск — связка «пользовательский промпт → AI-сгенерированный код → запуск нашего Apify-актера → результат». Один ряд = один логический запуск (может содержать несколько попыток в scraper_attempts).",

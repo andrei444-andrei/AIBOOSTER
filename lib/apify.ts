@@ -6,10 +6,29 @@
  * этот файл, по определению не уходит в клиентский бандл — это серверные
  * утилиты для route-хендлеров.
  *
+ * ID актера сам появляется через apify-provisioner (§1 конституции —
+ * самопровижининг). В env-переменных хранить не нужно.
+ *
  * Документация Apify API: https://docs.apify.com/api/v2
  */
 
+import * as path from "node:path";
+import { ensureActor, ApifyProvisionError } from "./apify-provisioner";
+
 const BASE_URL = "https://api.apify.com/v2";
+
+/** Имя нашего runner-актера в Apify. Закреплено — другие модули не должны его менять. */
+const RUNNER_ACTOR_NAME = "aibooster-runner";
+const RUNNER_SLUG = "runner";
+
+/** Файлы апify-runner/, которые загружаются на Apify при автодеплое. */
+const RUNNER_SOURCE_FILES = [
+  "Dockerfile",
+  "package.json",
+  ".actor/actor.json",
+  ".actor/input_schema.json",
+  "src/main.js",
+];
 
 export class ApifyError extends Error {
   constructor(
@@ -28,18 +47,37 @@ function getTokenOrThrow(): string {
   return t;
 }
 
-function getRunnerActorIdOrThrow(): string {
-  const id = process.env.APIFY_RUNNER_ACTOR_ID;
-  if (!id) throw new ApifyError("APIFY_RUNNER_ACTOR_ID is not set", 503);
-  return id;
-}
-
 /**
  * Apify требует `~` вместо `/` в URL для actorId формата username/name.
  * Допустим обе формы на входе.
  */
 function normalizeActorId(id: string): string {
   return id.replace("/", "~");
+}
+
+/**
+ * Гарантирует наличие runner-актера в Apify-аккаунте пользователя.
+ * Кэшируется (по DB + in-process) — после первого вызова мгновенно.
+ */
+async function getRunnerActorId(): Promise<string> {
+  try {
+    const aimlKey = process.env.AIMLAPI_KEY;
+    return await ensureActor({
+      slug: RUNNER_SLUG,
+      actorName: RUNNER_ACTOR_NAME,
+      title: "AIBOOSTER AI Scraper Runner",
+      sourceDir: path.join(process.cwd(), "apify-runner"),
+      sourceFiles: RUNNER_SOURCE_FILES,
+      envVars: aimlKey
+        ? [{ name: "AIMLAPI_KEY", value: aimlKey, isSecret: true }]
+        : [],
+    });
+  } catch (err) {
+    if (err instanceof ApifyProvisionError) {
+      throw new ApifyError(err.message, err.status, err.body);
+    }
+    throw err;
+  }
 }
 
 export interface ApifyRunSummary {
@@ -71,7 +109,7 @@ export interface ApifyRunSummary {
  */
 export async function startRunnerRun(input: unknown): Promise<ApifyRunSummary> {
   const token = getTokenOrThrow();
-  const actorId = normalizeActorId(getRunnerActorIdOrThrow());
+  const actorId = normalizeActorId(await getRunnerActorId());
 
   const resp = await fetch(`${BASE_URL}/acts/${actorId}/runs?token=${token}`, {
     method: "POST",

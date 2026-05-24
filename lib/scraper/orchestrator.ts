@@ -377,13 +377,13 @@ function friendlyAiError(err: unknown): string {
 function friendlyApifyError(err: unknown): string {
   if (err instanceof ApifyError) {
     if (err.status === 503) {
-      return "Apify не настроен (APIFY_TOKEN или APIFY_RUNNER_ACTOR_ID). Проверь env.";
+      return "Apify не настроен (нет APIFY_TOKEN).";
     }
     if (err.status === 401 || err.status === 403) {
       return "Apify не принял токен. Проверь APIFY_TOKEN.";
     }
-    if (err.status === 404) {
-      return "Runner-актер не найден. Проверь APIFY_RUNNER_ACTOR_ID и что актер задеплоен.";
+    if (err.status === 504) {
+      return "Apify собирает runner-актер в первый раз (~1 минута). Повтори запрос через минуту.";
     }
     return `Apify вернул ${err.status}.`;
   }
