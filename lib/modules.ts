@@ -46,6 +46,15 @@ export const MODULES: ModuleEntry[] = [
     icon: "◉",
   },
   {
+    slug: "chat",
+    title: "AI Chat",
+    href: "/chat",
+    description: "Чат с авто-роутером моделей, файлами и генерацией картинок.",
+    pinned: true,
+    section: "main",
+    icon: "✦",
+  },
+  {
     slug: "ux-kit",
     title: "UX Kit",
     href: "/ux",
