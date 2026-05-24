@@ -266,6 +266,16 @@ export default function AdaptersClient({
                     </td>
                     <td style={td}>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {(s.kind === "gmail" || s.kind === "gcal") && (
+                          <a
+                            href={`/api/oauth/google/start?source_id=${encodeURIComponent(
+                              s.id,
+                            )}&kind=${encodeURIComponent(s.kind)}&token=${encodeURIComponent(token)}`}
+                            style={{ ...btnPrimary, textDecoration: "none" }}
+                          >
+                            connect google
+                          </a>
+                        )}
                         <button
                           style={btnPrimary}
                           disabled={busy === s.id + ":sync_now"}

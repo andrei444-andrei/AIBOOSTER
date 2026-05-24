@@ -289,6 +289,49 @@ export const TABLES: TableDef[] = [
       { name: "embedded_at", description: "Когда чанк был эмбеднут." },
     ],
   },
+
+  // Per-source таблицы. Идея: raw данные как есть + минимально нормализованные
+  // поля для индексов. Полный API-ответ — в колонке raw (JSON), чтобы при
+  // изменении схемы не нужно было пересинкивать.
+  {
+    name: "gmail_messages",
+    description:
+      "Письма Gmail. Одна строка = одно письмо. Заполняется адаптером Gmail инкрементально через users.history.list. Raw содержит полный ответ users.messages.get для отладки.",
+    ddl: `CREATE TABLE IF NOT EXISTS gmail_messages (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      thread_id TEXT,
+      history_id TEXT,
+      internal_date TEXT,
+      from_addr TEXT,
+      to_addrs TEXT,
+      cc TEXT,
+      subject TEXT,
+      snippet TEXT,
+      body_text TEXT,
+      labels TEXT,
+      has_attachments INTEGER NOT NULL DEFAULT 0,
+      raw TEXT,
+      fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "Gmail message id (RFC 822 id внутри Gmail)." },
+      { name: "source_id", description: "FK на adapter_sources.id — какой gmail-аккаунт (для multi-account)." },
+      { name: "thread_id", description: "Идентификатор треда Gmail." },
+      { name: "history_id", description: "history_id, при котором письмо появилось — для инкрементального sync." },
+      { name: "internal_date", description: "Время доставки в Gmail (UTC, ISO; источник — internalDate в ms)." },
+      { name: "from_addr", description: "Заголовок From целиком (например, 'Имя <addr@host>')." },
+      { name: "to_addrs", description: "Заголовок To (одной строкой)." },
+      { name: "cc", description: "Заголовок Cc." },
+      { name: "subject", description: "Тема письма." },
+      { name: "snippet", description: "Превью от Gmail (~120 символов)." },
+      { name: "body_text", description: "Плоский текст тела (text/plain или конвертированный из text/html)." },
+      { name: "labels", description: "JSON-массив label-id (INBOX, IMPORTANT, CATEGORY_*, ...)." },
+      { name: "has_attachments", description: "1 если в письме есть вложения (по multipart-частям с filename)." },
+      { name: "raw", description: "JSON полного ответа Gmail users.messages.get — для дебага/реиндекса." },
+      { name: "fetched_at", description: "Когда впервые сохранено." },
+    ],
+  },
 ];
 
 // Индекс для быстрого чтения последних ошибок.
@@ -314,4 +357,8 @@ export const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_context_snippets_source_ts ON context_snippets (source, ts DESC)`,
   // Поиск сниппетов без посчитанного эмбеддинга — для embed-job'а.
   `CREATE INDEX IF NOT EXISTS idx_context_snippets_unembedded ON context_snippets (embedded_at) WHERE embedded_at IS NULL`,
+
+  // Gmail: по треду и по дате (для UI и для агентов).
+  `CREATE INDEX IF NOT EXISTS idx_gmail_messages_thread ON gmail_messages (thread_id, internal_date DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_gmail_messages_date ON gmail_messages (source_id, internal_date DESC)`,
 ];
