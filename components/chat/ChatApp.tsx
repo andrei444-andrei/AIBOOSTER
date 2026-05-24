@@ -228,13 +228,17 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           setMessages([]);
           return;
         }
-        setMessages(data.messages ?? []);
+        const loaded = (data.messages ?? []) as Message[];
+        setMessages(loaded);
         if (data.session) {
           setSelection(sessionToSelection(data.session as SessionRow));
         }
+        // С историей — в самый низ; пустой чат — наверх, чтобы welcome
+        // не уехал в padding-bottom.
         requestAnimationFrame(() => {
           const el = scrollerRef.current;
-          if (el) el.scrollTop = el.scrollHeight;
+          if (!el) return;
+          el.scrollTop = loaded.length > 0 ? el.scrollHeight : 0;
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -288,11 +292,18 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
         return;
       }
       setSessions((s) => [data.session, ...s]);
+      // useEffect[activeId] вызовет loadMessages, который для нового
+      // пустого чата сам уведёт scroll наверх.
+      skipLoadRef.current = null;
       setActiveId(data.session.id);
       setMessages([]);
       setInput("");
       setPendingAttachments([]);
       setSelection({ type: "auto" });
+      requestAnimationFrame(() => {
+        const el = scrollerRef.current;
+        if (el) el.scrollTop = 0;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -675,7 +686,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
         </header>
 
         <div ref={scrollerRef} className={styles.scroller}>
-          <div className={styles.messages}>
+          <div className={`${styles.messages} ${messages.length === 0 ? styles.messagesEmpty : ""}`}>
             {messages.length === 0 && !loadingMessages && (
               <div className={styles.welcome}>
                 <h2>С чего начнём?</h2>
@@ -799,32 +810,25 @@ function MessageBlock({ message }: { message: Message }) {
 
   // assistant
   const live = message.liveRoute;
-  const showLiveHint = message.streaming && live && !message.content;
-  const showTypeHint = message.streaming && !live && !message.content;
+  const isThinking = message.streaming && !message.content;
+  const hintText = live ? routeLabel(live, message.model) : "Маршрутизирую запрос";
 
   return (
     <div className={styles.msgAssistant} data-msg-id={message.id}>
       <div className={styles.assistantBody}>
-        {showLiveHint && live && (
-          <div className={styles.streamHint}>
-            <span className={styles.streamHintPulse} />
-            <span>{routeLabel(live, message.model)}</span>
-          </div>
-        )}
-        {showTypeHint && (
-          <div className={styles.streamHint}>
-            <span className={styles.streamHintPulse} />
-            <span>Маршрутизирую запрос…</span>
-          </div>
-        )}
-
-        {message.content ? (
-          <Markdown source={message.content} />
-        ) : message.streaming ? (
-          <div className={styles.typing}>
-            <span /><span /><span />
+        {isThinking ? (
+          <div className={styles.thinking}>
+            <span className={styles.thinkingDot} />
+            <span className={styles.thinkingText}>{hintText}</span>
+            <span className={styles.thinkingEllipsis} aria-hidden>
+              <span />
+              <span />
+              <span />
+            </span>
           </div>
         ) : null}
+
+        {message.content && <Markdown source={message.content} />}
         {message.streaming && message.content && (
           <span className={styles.streamCursor} aria-hidden>▍</span>
         )}
