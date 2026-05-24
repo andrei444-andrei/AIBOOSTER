@@ -34,7 +34,7 @@ export const MODELS = {
   GEMINI_FLASH: "gemini-2.5-flash",
   PERPLEXITY_SONAR: "perplexity/sonar-pro",
   // xAI Grok через AIMLAPI
-  GROK_4: "x-ai/grok-4-fast-reasoning",
+  GROK_4: "x-ai/grok-4-1-fast-reasoning",
   GROK_3: "x-ai/grok-3-beta",
   // DeepSeek V3.1 серии (стабильные, не -exp)
   DEEPSEEK_V3: "deepseek/deepseek-chat-v3.1",
