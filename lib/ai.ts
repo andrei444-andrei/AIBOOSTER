@@ -141,9 +141,56 @@ export async function chat(opts: ChatOptions, init?: { signal?: AbortSignal }): 
  *
  * Возвращает полный собранный текст по завершении.
  */
+/** Картинка от веб-поиска (Perplexity Sonar `return_images: true`). */
+export interface WebImage {
+  /** URL картинки. */
+  image_url: string;
+  /** URL исходной страницы (опционально). */
+  origin_url?: string;
+  /** Заголовок страницы-источника (опционально). */
+  title?: string;
+}
+
+/** Цитата от веб-поиска. */
+export interface WebCitation {
+  url: string;
+  title?: string;
+}
+
 export interface StreamHandlers {
   onDelta?: (text: string) => void;
   onUsage?: (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void;
+  /** Картинки от веб-поиска (если модель их вернула — Perplexity Sonar и др.). */
+  onImages?: (images: WebImage[]) => void;
+  /** Источники-цитаты, на которые ссылается модель. */
+  onCitations?: (citations: WebCitation[]) => void;
+}
+
+interface PplxImageItem {
+  image_url?: string;
+  url?: string;
+  origin_url?: string;
+  origin?: string;
+  title?: string;
+}
+interface PplxCitationItem {
+  url?: string;
+  title?: string;
+}
+function normalizeImage(it: unknown): WebImage | null {
+  if (typeof it === "string") return { image_url: it };
+  if (!it || typeof it !== "object") return null;
+  const x = it as PplxImageItem;
+  const url = x.image_url ?? x.url;
+  if (!url || typeof url !== "string") return null;
+  return { image_url: url, origin_url: x.origin_url ?? x.origin, title: x.title };
+}
+function normalizeCitation(it: unknown): WebCitation | null {
+  if (typeof it === "string") return { url: it };
+  if (!it || typeof it !== "object") return null;
+  const x = it as PplxCitationItem;
+  if (!x.url || typeof x.url !== "string") return null;
+  return { url: x.url, title: x.title };
 }
 
 export async function chatStream(
@@ -196,6 +243,10 @@ export async function chatStream(
           const obj = JSON.parse(payload) as {
             choices?: Array<{ delta?: { content?: string } }>;
             usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+            // Perplexity Sonar и им подобные шлют доп. поля в финальном/верхнем chunk:
+            images?: unknown[];
+            citations?: unknown[];
+            search_results?: unknown[];
           };
           const delta = obj.choices?.[0]?.delta?.content;
           if (typeof delta === "string" && delta.length > 0) {
@@ -203,6 +254,21 @@ export async function chatStream(
             handlers.onDelta?.(delta);
           }
           if (obj.usage) handlers.onUsage?.(obj.usage);
+          // Картинки и цитаты от Perplexity: могут быть в любом chunk.
+          // Дедупликацию пускай делает потребитель — сюда отправим как есть.
+          if (Array.isArray(obj.images) && obj.images.length > 0) {
+            const imgs = obj.images.map(normalizeImage).filter(Boolean) as WebImage[];
+            if (imgs.length) handlers.onImages?.(imgs);
+          }
+          if (Array.isArray(obj.citations) && obj.citations.length > 0) {
+            const cits = obj.citations.map(normalizeCitation).filter(Boolean) as WebCitation[];
+            if (cits.length) handlers.onCitations?.(cits);
+          }
+          // search_results тоже могут содержать url + title (без image) — берём как цитаты.
+          if (Array.isArray(obj.search_results) && obj.search_results.length > 0) {
+            const cits = obj.search_results.map(normalizeCitation).filter(Boolean) as WebCitation[];
+            if (cits.length) handlers.onCitations?.(cits);
+          }
         } catch {
           // битый чанк — пропускаем
         }

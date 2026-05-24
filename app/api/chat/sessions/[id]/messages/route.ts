@@ -15,7 +15,7 @@ import {
   type RouteMeta,
   type CreateAttachmentInput,
 } from "@/lib/chat";
-import { chatStream, generateImage, AIError } from "@/lib/ai";
+import { chatStream, generateImage, AIError, type WebImage, type WebCitation } from "@/lib/ai";
 import { compactRecentHistory, routeRequest } from "@/lib/router";
 import { logServerError } from "@/lib/logger";
 
@@ -351,11 +351,24 @@ export async function POST(req: Request, ctx: Ctx) {
       if (decision.reasoning_effort && isReasoningCapable(chosenModel)) {
         aimlOpts.reasoning_effort = decision.reasoning_effort;
       }
+      // Для Perplexity Sonar в research-категории просим вернуть картинки
+      // из источников и связанные ссылки — отрендерим под ответом.
+      const isSearchModel = chosenModel.startsWith("perplexity/");
+      if (isSearchModel && decision.category === "research") {
+        aimlOpts.return_images = true;
+        aimlOpts.return_related_questions = false;
+      }
 
       const t0 = Date.now();
       let acc = "";
       const usageRef: { current: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null } =
         { current: null };
+      // Дедупликация: модель может прислать одни и те же images/citations
+      // несколько раз — в разных chunks. Храним set по URL.
+      const seenImages = new Set<string>();
+      const collectedImages: WebImage[] = [];
+      const seenCitations = new Set<string>();
+      const collectedCitations: WebCitation[] = [];
 
       try {
         await chatStream(aimlOpts, {
@@ -365,6 +378,26 @@ export async function POST(req: Request, ctx: Ctx) {
           },
           onUsage: (u) => {
             usageRef.current = u;
+          },
+          onImages: (imgs) => {
+            const fresh: WebImage[] = [];
+            for (const img of imgs) {
+              if (seenImages.has(img.image_url)) continue;
+              seenImages.add(img.image_url);
+              collectedImages.push(img);
+              fresh.push(img);
+            }
+            if (fresh.length) send("web_images", { images: fresh });
+          },
+          onCitations: (cits) => {
+            const fresh: WebCitation[] = [];
+            for (const c of cits) {
+              if (seenCitations.has(c.url)) continue;
+              seenCitations.add(c.url);
+              collectedCitations.push(c);
+              fresh.push(c);
+            }
+            if (fresh.length) send("citations", { citations: fresh });
           },
         });
       } catch (err) {
@@ -409,12 +442,23 @@ export async function POST(req: Request, ctx: Ctx) {
         routing_latency_ms: decision.routing_latency_ms,
       };
 
+      // Веб-картинки от Perplexity сохраняем как attachments kind='image_url',
+      // URL кладём в content_text. Не скачиваем — экономим место + быстрее.
+      const webImageAttachments = collectedImages.slice(0, 8).map((img, i) => ({
+        filename: img.title ? img.title.slice(0, 100) : `web-image-${i + 1}`,
+        mime_type: "image/*",
+        size: 0,
+        kind: "image_url" as const,
+        content_text: img.image_url,
+      }));
+
       const assistantMsg = await appendMessage(id, "assistant", acc, {
         model: chosenModel,
         tokensPrompt: usageRef.current?.prompt_tokens ?? null,
         tokensCompletion: usageRef.current?.completion_tokens ?? null,
         durationMs,
         routeMeta,
+        attachments: webImageAttachments.length ? webImageAttachments : undefined,
       }).catch(async (err) => {
         await logServerError(err, "/api/chat/sessions/[id]/messages save assistant", { session_id: id });
         return null;
@@ -429,6 +473,8 @@ export async function POST(req: Request, ctx: Ctx) {
         usage: usageRef.current,
         duration_ms: durationMs,
         route: routeMeta,
+        web_images: collectedImages.slice(0, 8),
+        citations: collectedCitations.slice(0, 20),
       });
       controller.close();
     },
