@@ -45,7 +45,7 @@ export interface ChatAttachment {
   filename: string;
   mime_type: string;
   size: number;
-  kind: "text" | "image";
+  kind: "text" | "image" | "image_url";
   content_text: string | null;
   content_base64: string | null;
   created_at: string;
@@ -243,7 +243,7 @@ export interface CreateAttachmentInput {
   filename: string;
   mime_type: string;
   size: number;
-  kind: "text" | "image";
+  kind: "text" | "image" | "image_url";
   content_text?: string | null;
   content_base64?: string | null;
 }
