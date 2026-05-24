@@ -12,22 +12,31 @@ function pickStr(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v[0] : v;
 }
 
-const wrap: React.CSSProperties = { maxWidth: 1100, margin: "0 auto", padding: "32px 24px" };
+const wrap: React.CSSProperties = {
+  maxWidth: 1100,
+  margin: "0 auto",
+  padding: "32px 24px",
+};
 const card: React.CSSProperties = {
-  background: "#12161c",
-  border: "1px solid #232a33",
-  borderRadius: 10,
-  padding: 16,
+  background: "var(--bg)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius-lg)",
+  padding: 20,
   marginBottom: 20,
 };
 const code: React.CSSProperties = {
-  background: "#1a1e24",
-  padding: "1px 5px",
+  background: "var(--bg-subtle)",
+  padding: "1px 6px",
   borderRadius: 4,
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  fontFamily: "var(--font-mono)",
+  fontSize: "0.9em",
 };
 
-export default async function AdaptersPage({ searchParams }: { searchParams: Promise<SP> }) {
+export default async function AdaptersPage({
+  searchParams,
+}: {
+  searchParams: Promise<SP>;
+}) {
   const sp = await searchParams;
   const token = pickStr(sp.token);
   const auth = checkAdminTokenValue(token);
@@ -41,8 +50,9 @@ export default async function AdaptersPage({ searchParams }: { searchParams: Pro
             Доступ закрыт: <b>{auth.reason}</b>.
           </p>
           {auth.status === 503 ? (
-            <p style={{ opacity: 0.7 }}>
-              Задайте переменную окружения <span style={code}>ADMIN_TOKEN</span> на сервере.
+            <p style={{ color: "var(--text-secondary)" }}>
+              Задайте переменную окружения <span style={code}>ADMIN_TOKEN</span>{" "}
+              на сервере.
             </p>
           ) : (
             <form method="get" style={{ display: "flex", gap: 8, marginTop: 8 }}>
@@ -52,22 +62,30 @@ export default async function AdaptersPage({ searchParams }: { searchParams: Pro
                 placeholder="admin token"
                 style={{
                   flex: 1,
-                  padding: "8px 10px",
-                  background: "#0b0d10",
-                  border: "1px solid #232a33",
-                  borderRadius: 6,
-                  color: "#e6e8eb",
+                  padding: "0 12px",
+                  height: 36,
+                  background: "var(--bg)",
+                  border: "1px solid var(--border-strong)",
+                  borderRadius: "var(--radius)",
+                  color: "var(--text)",
+                  fontFamily: "inherit",
+                  fontSize: 14,
+                  outline: "none",
                 }}
               />
               <button
                 type="submit"
                 style={{
-                  padding: "8px 16px",
-                  background: "#2b6cb0",
-                  border: 0,
-                  borderRadius: 6,
-                  color: "#fff",
+                  padding: "0 16px",
+                  height: 36,
+                  background: "var(--accent)",
+                  border: "1px solid var(--accent)",
+                  borderRadius: "var(--radius)",
+                  color: "var(--text-on-accent)",
                   cursor: "pointer",
+                  fontFamily: "inherit",
+                  fontSize: 14,
+                  fontWeight: 500,
                 }}
               >
                 Войти
@@ -87,7 +105,6 @@ export default async function AdaptersPage({ searchParams }: { searchParams: Pro
     listError = err instanceof Error ? err.message : String(err);
   }
 
-  // Последние записи журнала по каждому источнику (для блока «история»).
   let recentRuns: Array<{
     id: string;
     source_id: string;
@@ -118,13 +135,22 @@ export default async function AdaptersPage({ searchParams }: { searchParams: Pro
   return (
     <main style={wrap}>
       <h1 style={{ marginBottom: 4 }}>AIBOOSTER · /admin/adapters</h1>
-      <p style={{ opacity: 0.6, marginTop: 0 }}>
-        Подключённые источники контекста. Cron <span style={code}>/api/adapters/tick</span> раз в минуту
-        ставит pull-job'ы. Воркер забирает через <span style={code}>/api/adapters/claim</span>.
+      <p style={{ color: "var(--text-secondary)", marginTop: 0, marginBottom: 20 }}>
+        Подключённые источники контекста. Cron{" "}
+        <span style={code}>/api/adapters/tick</span> раз в минуту ставит
+        pull-job&apos;ы. Воркер забирает через{" "}
+        <span style={code}>/api/adapters/claim</span>.
       </p>
 
       {listError && (
-        <div style={{ ...card, borderColor: "#7a2b2b" }}>
+        <div
+          style={{
+            ...card,
+            borderColor: "var(--danger)",
+            color: "var(--danger)",
+            background: "var(--danger-bg)",
+          }}
+        >
           Ошибка: <span style={code}>{listError}</span>
         </div>
       )}
