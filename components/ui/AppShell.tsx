@@ -10,7 +10,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className={styles.layout}>
       <Sidebar />
-      <main className={styles.main}>{children}</main>
+      <div className={styles.main}>{children}</div>
     </div>
   );
 }
