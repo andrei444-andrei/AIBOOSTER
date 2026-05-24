@@ -57,6 +57,10 @@ async function hasColumn(table: string, column: string): Promise<boolean> {
   return false;
 }
 
+/** Фиксированный UID владельца — продукт single-user.
+ *  Должен совпадать с константой OWNER_UID в components/chat/ChatApp.tsx. */
+const OWNER_UID = "owner-andrei-2026";
+
 export function ensureSchema(): Promise<void> {
   if (_schemaReady) return _schemaReady;
 
@@ -75,6 +79,18 @@ export function ensureSchema(): Promise<void> {
         await db.execute(`ALTER TABLE ${m.table} ADD COLUMN ${m.ddl}`);
       }
     }
+    // Single-owner-миграция: все исторические chat-сессии собираем под
+    // одним owner-UID. Раньше каждый браузер получал случайный uid и
+    // история «терялась» при смене устройства. Идемпотентно: если уже
+    // всё под OWNER_UID, UPDATE затрагивает 0 строк.
+    await db
+      .execute({
+        sql: `UPDATE chat_sessions SET uid = ? WHERE uid != ?`,
+        args: [OWNER_UID, OWNER_UID],
+      })
+      .catch(() => {
+        // Не критично — таблица могла не существовать на старте.
+      });
   })();
 
   // Если провижининг упал — сбрасываем кэш, чтобы следующая попытка повторила.

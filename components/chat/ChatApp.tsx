@@ -97,16 +97,17 @@ function sessionToSelection(s: SessionRow | null): Selection {
 
 // ─── Утилиты UID ─────────────────────────────────────────────────────
 
-const UID_KEY = "chat_uid";
+// ─── UID владельца ──────────────────────────────────────────────────
+//
+// Продукт — для одного пользователя (см. CLAUDE.md). Все чаты собираются
+// под фиксированным OWNER_UID, чтобы история была одна на все браузеры,
+// устройства и сессии. Раньше каждый клиент получал случайный UID в
+// localStorage — что в итоге дробило историю при смене браузера/инкогнито.
+
+const OWNER_UID = "owner-andrei-2026";
 
 function getOrCreateUid(): string {
-  if (typeof window === "undefined") return "";
-  let v = window.localStorage.getItem(UID_KEY);
-  if (!v) {
-    v = (crypto.randomUUID?.() ?? `uid_${Date.now()}_${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9_\-]/g, "");
-    window.localStorage.setItem(UID_KEY, v);
-  }
-  return v;
+  return OWNER_UID;
 }
 
 // ─── Файлы ───────────────────────────────────────────────────────────
