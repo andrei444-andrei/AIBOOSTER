@@ -4,10 +4,11 @@ import {
   getSession,
   listMessages,
   renameSession,
-  setSessionMode,
   setSessionModelOverride,
+  setSessionCategoryOverride,
+  clearSessionOverride,
   isKnownModel,
-  isValidMode,
+  isTaskCategory,
 } from "@/lib/chat";
 import { logServerError } from "@/lib/logger";
 
@@ -54,10 +55,12 @@ export async function GET(req: Request, ctx: Ctx) {
 
 interface PatchBody {
   title?: string;
-  /** Старое поле — теперь интерпретируем как modelOverride (стик в чате). */
-  model?: string;
+  /** Конкретная модель (строка) ИЛИ null = снять. */
   modelOverride?: string | null;
-  mode?: string;
+  /** Категория-пресет (quick|...) ИЛИ null = снять. */
+  categoryOverride?: string | null;
+  /** Полностью сбросить выбор → Auto. Эквивалентно modelOverride=null + categoryOverride=null. */
+  reset?: boolean;
 }
 
 export async function PATCH(req: Request, ctx: Ctx) {
@@ -83,19 +86,20 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (typeof body.title === "string") {
       await renameSession(id, uid, body.title);
     }
-    // modelOverride: явный null = вернуть в auto; строка с известной моделью = стик.
-    if ("modelOverride" in body) {
+    if (body.reset) {
+      await clearSessionOverride(id, uid);
+    } else if ("modelOverride" in body) {
       if (body.modelOverride === null) {
         await setSessionModelOverride(id, uid, null);
       } else if (typeof body.modelOverride === "string" && isKnownModel(body.modelOverride)) {
         await setSessionModelOverride(id, uid, body.modelOverride);
       }
-    } else if (typeof body.model === "string" && isKnownModel(body.model)) {
-      // обратная совместимость: старый клиент шлёт {model: ...}
-      await setSessionModelOverride(id, uid, body.model);
-    }
-    if (typeof body.mode === "string" && isValidMode(body.mode)) {
-      await setSessionMode(id, uid, body.mode);
+    } else if ("categoryOverride" in body) {
+      if (body.categoryOverride === null) {
+        await setSessionCategoryOverride(id, uid, null);
+      } else if (typeof body.categoryOverride === "string" && isTaskCategory(body.categoryOverride)) {
+        await setSessionCategoryOverride(id, uid, body.categoryOverride);
+      }
     }
     return NextResponse.json({ ok: true });
   } catch (err) {

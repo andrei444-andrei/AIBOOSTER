@@ -5,12 +5,13 @@ import {
   getSession,
   getSettings,
   isKnownModel,
-  isValidMode,
+  isTaskCategory,
   listMessages,
   renameSession,
   setSessionLastModel,
-  setSessionMode,
+  setSessionCategoryOverride,
   setSessionModelOverride,
+  clearSessionOverride,
   type RouteMeta,
   type CreateAttachmentInput,
 } from "@/lib/chat";
@@ -42,12 +43,9 @@ interface IncomingAttachment {
 
 interface IncomingBody {
   content: string;
-  /** Если передан и валиден — обновляем mode сессии перед роутингом. */
-  mode?: string;
-  /** Если передан — обновляем model_override сессии. null = вернуть в Auto. */
+  /** Если переданы — обновляем выбор сессии перед роутингом. null = сбросить в Auto. */
   modelOverride?: string | null;
-  /** Устаревшее: старый клиент шлёт явную модель — трактуем как override. */
-  model?: string;
+  categoryOverride?: string | null;
   attachments?: IncomingAttachment[];
 }
 
@@ -164,31 +162,51 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
 
-  // Принимаем точечные изменения сессии из тела запроса (mode + override).
-  // Это даёт UI право отправить сообщение и одновременно зафиксировать выбор —
-  // без отдельного PATCH-раунда. Все валидаторы — внутри setSession*.
-  let currentMode = session.mode;
-  let currentOverride = session.model_override;
-  if (typeof body.mode === "string" && isValidMode(body.mode) && body.mode !== currentMode) {
-    currentMode = body.mode;
-    await setSessionMode(id, uid, currentMode);
-  }
+  // Принимаем точечные изменения выбора сессии из тела запроса — это даёт UI право
+  // отправить сообщение и одновременно зафиксировать выбор без отдельного PATCH.
+  // Правила: model и category взаимоисключающие; null = сброс в Auto.
+  let currentModelOverride = session.model_override;
+  let currentCategoryOverride = session.category_override;
   if ("modelOverride" in body) {
-    if (body.modelOverride === null && currentOverride !== null) {
-      currentOverride = null;
-      await setSessionModelOverride(id, uid, null);
+    if (body.modelOverride === null) {
+      if (currentModelOverride !== null) {
+        currentModelOverride = null;
+        await setSessionModelOverride(id, uid, null);
+      }
     } else if (
       typeof body.modelOverride === "string" &&
       isKnownModel(body.modelOverride) &&
-      body.modelOverride !== currentOverride
+      body.modelOverride !== currentModelOverride
     ) {
-      currentOverride = body.modelOverride;
-      await setSessionModelOverride(id, uid, currentOverride);
+      currentModelOverride = body.modelOverride;
+      currentCategoryOverride = null; // взаимоисключающие
+      await setSessionModelOverride(id, uid, currentModelOverride);
     }
-  } else if (typeof body.model === "string" && isKnownModel(body.model) && body.model !== currentOverride) {
-    // обратная совместимость
-    currentOverride = body.model;
-    await setSessionModelOverride(id, uid, currentOverride);
+  } else if ("categoryOverride" in body) {
+    if (body.categoryOverride === null) {
+      if (currentCategoryOverride !== null) {
+        currentCategoryOverride = null;
+        await setSessionCategoryOverride(id, uid, null);
+      }
+    } else if (
+      typeof body.categoryOverride === "string" &&
+      isTaskCategory(body.categoryOverride) &&
+      body.categoryOverride !== currentCategoryOverride
+    ) {
+      currentCategoryOverride = body.categoryOverride;
+      currentModelOverride = null;
+      await setSessionCategoryOverride(id, uid, currentCategoryOverride);
+    }
+  }
+
+  // Авто-режим (оба null) — если в body передан reset, явно очищаем (хотя setSessionModelOverride
+  // уже это делает выше). Дополнительной обработки не требуется.
+  if (currentModelOverride === null && currentCategoryOverride === null && session.model_override === null && session.category_override === null) {
+    // No-op: уже в Auto.
+  } else if (body.modelOverride === null && body.categoryOverride === null) {
+    await clearSessionOverride(id, uid);
+    currentModelOverride = null;
+    currentCategoryOverride = null;
   }
 
   // Сохраняем сообщение пользователя со вложениями
@@ -207,9 +225,9 @@ export async function POST(req: Request, ctx: Ctx) {
   // ─── Роутинг ──────────────────────────────────────────────────────
   const multimodalNeeded = validation.attachments.some((a) => a.kind === "image");
   const decision = await routeRequest({
-    mode: currentMode,
     userText: content,
-    overrideModel: currentOverride,
+    overrideModel: currentModelOverride,
+    overrideCategory: currentCategoryOverride,
     multimodalNeeded,
     recentHistory: compactRecentHistory(
       history.slice(-5).map((m) => ({ role: m.role, content: m.content })),
@@ -217,7 +235,6 @@ export async function POST(req: Request, ctx: Ctx) {
   });
   const chosenModel = decision.model;
 
-  // Готовим стрим
   const settings = await getSettings();
   const systemPrompt = buildSystemPrompt(settings, { addon: decision.system_addon });
   const aiMessages = buildMessagesForModel(systemPrompt, history, chosenModel);
@@ -234,9 +251,9 @@ export async function POST(req: Request, ctx: Ctx) {
         model: chosenModel,
         category: decision.category,
         complexity: decision.complexity,
-        mode: decision.mode,
         source: decision.source,
         reason: decision.reason,
+        reasoning_effort: decision.reasoning_effort,
         routing_latency_ms: decision.routing_latency_ms,
         uncertain: decision.uncertain ?? false,
       });
@@ -247,9 +264,10 @@ export async function POST(req: Request, ctx: Ctx) {
         messages: aiMessages,
         max_tokens: decision.max_tokens,
       };
-      // reasoning_effort — поддерживается gpt-5*. На других моделях AIMLAPI
-      // обычно игнорирует неизвестные поля, но не передаём лишнего.
-      if (decision.reasoning_effort && chosenModel.startsWith("gpt-5")) {
+      // reasoning_effort пробрасываем только для моделей, которые его поддерживают
+      // (gpt-5*, grok-4*, deepseek-reasoner-*). AIMLAPI игнорирует на остальных,
+      // но лучше не отправлять «мусор».
+      if (decision.reasoning_effort && isReasoningCapable(chosenModel)) {
         aimlOpts.reasoning_effort = decision.reasoning_effort;
       }
 
@@ -280,7 +298,6 @@ export async function POST(req: Request, ctx: Ctx) {
         const error_id = await logServerError(err, "/api/chat/sessions/[id]/messages", {
           session_id: id,
           model: chosenModel,
-          mode: currentMode,
           status,
         });
         send("error", { message, error_id });
@@ -294,7 +311,7 @@ export async function POST(req: Request, ctx: Ctx) {
         const error_id = await logServerError(
           new Error("empty response from model"),
           "/api/chat/sessions/[id]/messages",
-          { session_id: id, model: chosenModel, mode: currentMode },
+          { session_id: id, model: chosenModel },
         );
         send("error", { message: "Модель вернула пустой ответ.", error_id });
         controller.close();
@@ -304,7 +321,6 @@ export async function POST(req: Request, ctx: Ctx) {
       const routeMeta: RouteMeta = {
         category: decision.category,
         complexity: decision.complexity,
-        mode: decision.mode,
         source: decision.source,
         reason: decision.reason,
         reasoning_effort: decision.reasoning_effort,
@@ -323,7 +339,6 @@ export async function POST(req: Request, ctx: Ctx) {
         return null;
       });
 
-      // Обновляем «последнюю модель» в сессии — для дисплея в сайдбаре.
       await setSessionLastModel(id, uid, chosenModel).catch(() => {});
 
       send("done", {
@@ -346,4 +361,14 @@ export async function POST(req: Request, ctx: Ctx) {
       "X-Accel-Buffering": "no",
     },
   });
+}
+
+/** Поддерживает ли модель параметр reasoning_effort. */
+function isReasoningCapable(modelId: string): boolean {
+  return (
+    modelId.startsWith("gpt-5") ||
+    modelId.startsWith("x-ai/grok-4") ||
+    modelId.includes("deepseek-reasoner") ||
+    modelId.includes("deepseek-thinking")
+  );
 }

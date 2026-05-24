@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createSession, listSessions, isKnownModel, isValidMode } from "@/lib/chat";
+import { createSession, listSessions, isKnownModel, isTaskCategory } from "@/lib/chat";
 import { logServerError } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -8,7 +8,6 @@ export const dynamic = "force-dynamic";
 function getUid(req: Request): string | null {
   const h = req.headers.get("x-chat-uid");
   if (!h) return null;
-  // принимаем только разумные UID (UUID-формат или просто [a-zA-Z0-9-_], 8..64 символа)
   const v = h.trim();
   if (!/^[A-Za-z0-9_\-]{8,64}$/.test(v)) return null;
   return v;
@@ -35,9 +34,8 @@ export async function GET(req: Request) {
 }
 
 interface CreateBody {
-  model?: string;
-  mode?: string;
   modelOverride?: string | null;
+  categoryOverride?: string | null;
   title?: string;
 }
 
@@ -55,18 +53,15 @@ export async function POST(req: Request) {
   } catch {
     // пустое тело — OK
   }
-  const mode = isValidMode(body.mode) ? body.mode : undefined;
   const modelOverride =
     body.modelOverride && isKnownModel(body.modelOverride) ? body.modelOverride : null;
-  // body.model — устаревший поле, оставлено для совместимости: если override не задан,
-  // но прилетела явная модель, считаем её override.
-  const fallbackOverride =
-    !modelOverride && body.model && isKnownModel(body.model) ? body.model : null;
+  const categoryOverride =
+    body.categoryOverride && isTaskCategory(body.categoryOverride) ? body.categoryOverride : null;
   const title = body.title?.slice(0, 200);
   try {
     const session = await createSession(uid, {
-      mode,
-      modelOverride: modelOverride ?? fallbackOverride,
+      modelOverride,
+      categoryOverride,
       title,
     });
     return NextResponse.json({ session });

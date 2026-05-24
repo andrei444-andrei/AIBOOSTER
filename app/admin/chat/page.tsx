@@ -1,6 +1,8 @@
 import { checkAdminTokenValue } from "@/lib/auth";
 import { getSettings } from "@/lib/chat";
+import { listRoutes } from "@/lib/routing-config";
 import { ChatSettingsForm } from "./ChatSettingsForm";
+import { RoutingForm } from "./RoutingForm";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -83,7 +85,7 @@ export default async function AdminChatPage({ searchParams }: { searchParams: Pr
     );
   }
 
-  const settings = await getSettings();
+  const [settings, routes] = await Promise.all([getSettings(), listRoutes()]);
 
   return (
     <main style={wrap}>
@@ -94,9 +96,16 @@ export default async function AdminChatPage({ searchParams }: { searchParams: Pr
         </a>
       </div>
       <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
-        Системный промт и набор разрешённых блоков форматирования. Применяется ко всем чатам в <span style={code}>/chat</span>.
+        Настройки чата в <span style={code}>/chat</span>: маршрутизация задач на модели, системный промт, разрешённые блоки форматирования.
       </p>
 
+      <h2 style={{ fontSize: 18, marginTop: 24, marginBottom: 8 }}>Маршрутизация (категория → модель)</h2>
+      <p style={{ color: "var(--text-secondary)", marginTop: 0, fontSize: 14 }}>
+        Auto-роутер классифицирует запрос пользователя в одну из 5 категорий и берёт модель + параметры отсюда. То же используется при выборе категории-пресета в селекторе чата.
+      </p>
+      <RoutingForm initial={routes} token={token ?? ""} />
+
+      <h2 style={{ fontSize: 18, marginTop: 24, marginBottom: 8 }}>Системный промт и форматирование</h2>
       <ChatSettingsForm initial={settings} token={token ?? ""} />
     </main>
   );

@@ -1,25 +1,26 @@
 // AI-роутер: на каждый запрос подбирает модель и параметры.
 //
-// Вход: режим (normal | pro), история, текст последнего сообщения,
-// необязательный override-модель. Выход: RoutingDecision — какая модель,
-// какие параметры, какой system-addon приклеить.
+// Вход: текст последнего сообщения, опционально category-пресет или override-модель.
+// Выход: RoutingDecision — какая модель, какие параметры, какой system-addon приклеить.
 //
-// Стратегия:
-// 1. Если override задан — берём его модель, но всё равно подбираем
-//    параметры под режим (max_tokens, reasoning_effort).
-// 2. Иначе — спрашиваем у быстрой модели (Gemini Flash), классификация
-//    в строгом JSON. Если она упала или ответила криво — эвристический
-//    фолбэк по ключевым словам.
-// 3. По категории + режиму выбираем модель из таблицы. Параметры —
-//    из той же таблицы.
+// Приоритеты:
+// 1. overrideModel — пользователь явно выбрал модель в селекторе.
+// 2. overrideCategory — пользователь явно выбрал категорию-пресет.
+// 3. Авто-классификация через Gemini Flash (≤8с таймаут).
+// 4. Эвристика по ключевым словам, если Flash недоступен.
+//
+// Параметры (model, reasoning_effort, max_tokens) для каждой категории
+// берутся из таблицы chat_category_routing (редактируется в /admin/chat).
 
 import { MODELS, chatText, AIError } from "./ai";
 import {
-  type ChatMode,
   type TaskCategory,
+  type ReasoningEffort,
   getModelOption,
   isKnownModel,
+  CATEGORY_META,
 } from "./chat-client";
+import { getRoute } from "./routing-config";
 
 export type Complexity = "low" | "medium" | "high";
 
@@ -27,63 +28,17 @@ export interface RoutingDecision {
   model: string;
   category: TaskCategory;
   complexity: Complexity;
-  mode: ChatMode;
   max_tokens: number;
-  reasoning_effort?: "low" | "medium" | "high";
+  reasoning_effort: ReasoningEffort | null;
   /** Доп. инструкции к system-промту, специфичные для категории. */
   system_addon?: string;
-  /** Как принято решение: override от пользователя, авто-роутер, фолбэк. */
-  source: "override" | "auto" | "fallback";
+  /** Как принято решение. */
+  source: "override-model" | "override-category" | "auto" | "fallback";
   /** Короткая причина для UI. */
   reason: string;
-  /** Сколько занял сам роутер. 0 если override/fallback без сетевого запроса. */
   routing_latency_ms: number;
   /** Эвристика безопасности: классификация уверенная? */
   uncertain?: boolean;
-}
-
-// ─── Таблица выбора модели по (категория × режим) ───────────────────
-
-interface ModelPick {
-  model: string;
-  max_tokens: number;
-  reasoning_effort?: "low" | "medium" | "high";
-}
-
-function pickModelFor(category: TaskCategory, mode: ChatMode, multimodalNeeded: boolean): ModelPick {
-  // multimodal-кейс (есть картинки) — фильтруем модели, поддерживающие images.
-  // Sonar Pro не multimodal, отсекаем его.
-  if (mode === "normal") {
-    switch (category) {
-      case "quick":
-        return { model: MODELS.GEMINI_FLASH, max_tokens: 2000 };
-      case "research":
-        return multimodalNeeded
-          ? { model: MODELS.CLAUDE_SONNET, max_tokens: 4000 }
-          : { model: MODELS.PERPLEXITY_SONAR, max_tokens: 4000 };
-      case "code":
-        return { model: MODELS.CLAUDE_SONNET, max_tokens: 4000 };
-      case "analyze":
-        return { model: MODELS.CLAUDE_SONNET, max_tokens: 4000 };
-      case "strategy":
-        return { model: MODELS.CLAUDE_SONNET, max_tokens: 4000 };
-    }
-  }
-  // pro
-  switch (category) {
-    case "quick":
-      return { model: MODELS.CLAUDE_SONNET, max_tokens: 4000 };
-    case "research":
-      return multimodalNeeded
-        ? { model: MODELS.CLAUDE_OPUS, max_tokens: 8000 }
-        : { model: MODELS.PERPLEXITY_SONAR, max_tokens: 6000 };
-    case "code":
-      return { model: MODELS.CLAUDE_OPUS, max_tokens: 8000 };
-    case "analyze":
-      return { model: MODELS.GEMINI_PRO, max_tokens: 8000 };
-    case "strategy":
-      return { model: MODELS.GPT_5, max_tokens: 8000, reasoning_effort: "high" };
-  }
 }
 
 // ─── System-аддоны по категориям ────────────────────────────────────
@@ -99,33 +54,6 @@ const SYSTEM_ADDONS: Record<TaskCategory, string> = {
   strategy:
     "Это стратегическая задача. Дай 2–3 варианта с pro/con каждого, заверши явной рекомендацией и причинами. Не уклоняйся от выбора.",
 };
-
-// ─── Параметры под режим ────────────────────────────────────────────
-
-function tuneForMode(pick: ModelPick, mode: ChatMode): ModelPick {
-  // reasoning-модели (gpt-5*) едят бюджет на скрытые рассуждения.
-  // В normal — экономим. В pro — даём думать.
-  const isReasoning = pick.model.startsWith("gpt-5");
-  if (mode === "pro") {
-    if (isReasoning) {
-      return {
-        ...pick,
-        max_tokens: Math.max(pick.max_tokens, 8000),
-        reasoning_effort: pick.reasoning_effort ?? "high",
-      };
-    }
-    return { ...pick, max_tokens: Math.max(pick.max_tokens, 6000) };
-  }
-  // normal
-  if (isReasoning) {
-    return {
-      ...pick,
-      max_tokens: Math.max(pick.max_tokens, 4000),
-      reasoning_effort: pick.reasoning_effort ?? "low",
-    };
-  }
-  return pick;
-}
 
 // ─── Авто-классификация через Gemini Flash ──────────────────────────
 
@@ -152,16 +80,12 @@ Complexity:
 
 Только JSON, никакого текста вокруг.`;
 
-/** Вытащить первый JSON-объект из произвольной строки. Модели любят добавлять
- *  префикс ("Конечно, вот JSON:") или обернуть в ```json ... ``` — режем всё это. */
 function extractJsonObject(s: string): string | null {
-  // приоритет: первый блок ```json ... ``` (если есть)
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence && fence[1]) {
     const inner = fence[1].trim();
     if (inner.startsWith("{")) return inner;
   }
-  // фолбэк: первая `{` до последней `}` со сбалансированными скобками
   const start = s.indexOf("{");
   if (start < 0) return null;
   let depth = 0;
@@ -198,12 +122,9 @@ async function classify(
         model: MODELS.GEMINI_FLASH,
         system: CLASSIFIER_SYSTEM,
         user: prompt,
-        // Gemini Flash тратит часть бюджета на скрытые reasoning-токены —
-        // ставим достаточно, чтобы хватило и на них, и на короткий JSON.
         max_tokens: 1200,
         temperature: 0,
       },
-      // короткий таймаут — если роутер тупит, идём на эвристику
       { signal: AbortSignal.timeout(8000) },
     );
     const jsonStr = extractJsonObject(raw);
@@ -222,6 +143,9 @@ async function classify(
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn("[router] classifier failed:", err instanceof Error ? err.message : String(err));
+    if (err instanceof AIError) {
+      // молча
+    }
     return null;
   }
 }
@@ -237,8 +161,6 @@ function isComplexity(v: unknown): v is Complexity {
 
 function heuristicClassify(userText: string): ClassifierOutput {
   const t = userText.toLowerCase();
-  // JS \b некорректно работает с кириллицей, поэтому для русских корней
-  // не ставим \b — ищем подстроки. Для латинских ключевых слов оставляем \b.
   const hasCode = /(код|ошибк|исключени)/i.test(t)
     || /\b(code|function|class|bug|exception|stack ?trace|typescript|javascript|python|sql|api|endpoint)\b/i.test(t)
     || /```/.test(userText)
@@ -247,8 +169,6 @@ function heuristicClassify(userText: string): ClassifierOutput {
     || /\b(recent|latest|news|article|google|search)\b/i.test(t);
   const looksAnalyze = /(проанализир|разбери|разобрат|оцени|сделай разбор|метрик|логи?)/i.test(t)
     || /\b(analyze|analyse|metrics|breakdown)\b/i.test(t);
-  // Корни: выбр (выбрать/выбор), вариант, стратеги, план, решени, рекоменд,
-  // плюс «что лучше» и «стоит ли».
   const looksStrategy = /(стратеги|план|вариант|решени|выбр|выбор|рекоменд|что лучше|стоит ли|должен ли|посовет)/i.test(t)
     || /\b(strategy|plan|recommend|tradeoff|trade-off)\b/i.test(t);
 
@@ -266,11 +186,12 @@ function heuristicClassify(userText: string): ClassifierOutput {
 // ─── Основная точка входа ───────────────────────────────────────────
 
 export interface RouteInput {
-  mode: ChatMode;
   userText: string;
-  /** Если задано — пользователь явно выбрал модель в чате, авто-выбор отключён. */
+  /** Если задано — пользователь явно выбрал модель в селекторе. Приоритет 1. */
   overrideModel?: string | null;
-  /** Есть ли в сообщении картинки — влияет на выбор модели. */
+  /** Если задано — пользователь явно выбрал категорию-пресет. Приоритет 2. */
+  overrideCategory?: TaskCategory | null;
+  /** Есть ли в сообщении картинки — влияет на выбор fallback-модели. */
   multimodalNeeded?: boolean;
   /** Последние реплики истории (компактно) — помогают классификатору. */
   recentHistory?: string;
@@ -278,79 +199,84 @@ export interface RouteInput {
 
 export async function routeRequest(input: RouteInput): Promise<RoutingDecision> {
   const t0 = Date.now();
-  const { mode, userText, overrideModel, multimodalNeeded = false } = input;
+  const { userText, overrideModel, overrideCategory, multimodalNeeded = false } = input;
 
-  // 1. Override — пользователь явно выбрал модель в этом чате.
+  // 1. Override model — пользователь явно выбрал модель.
   if (overrideModel && isKnownModel(overrideModel)) {
-    const opt = getModelOption(overrideModel);
-    // Подбираем категорию для system-аддона эвристикой — без сетевого запроса
-    // (override означает «я знаю что делаю», не тратим Flash зря).
     const h = heuristicClassify(userText);
-    const tuned = tuneForMode(
-      {
-        model: overrideModel,
-        max_tokens: mode === "pro" ? 8000 : 4000,
-        reasoning_effort: undefined,
-      },
-      mode,
-    );
+    // Параметры берём из таблицы для соответствующей категории,
+    // но модель остаётся такой, как выбрал пользователь.
+    const route = await getRoute(h.category);
+    const opt = getModelOption(overrideModel);
     return {
       model: overrideModel,
       category: h.category,
       complexity: h.complexity,
-      mode,
-      max_tokens: tuned.max_tokens,
-      reasoning_effort: tuned.reasoning_effort,
+      max_tokens: route.max_tokens,
+      reasoning_effort: route.reasoning_effort,
       system_addon: SYSTEM_ADDONS[h.category],
-      source: "override",
+      source: "override-model",
       reason: `вручную выбрана ${opt.label}`,
       routing_latency_ms: 0,
       uncertain: false,
     };
   }
 
-  // 2. Авто-роутер.
+  // 2. Override category — пользователь выбрал пресет.
+  if (overrideCategory) {
+    const route = await getRoute(overrideCategory);
+    const model = pickModelWithMultimodal(route.model, multimodalNeeded);
+    const opt = getModelOption(model);
+    return {
+      model,
+      category: overrideCategory,
+      complexity: "medium",
+      max_tokens: route.max_tokens,
+      reasoning_effort: route.reasoning_effort,
+      system_addon: SYSTEM_ADDONS[overrideCategory],
+      source: "override-category",
+      reason: `${CATEGORY_META[overrideCategory].label} · ${opt.label}`,
+      routing_latency_ms: 0,
+      uncertain: false,
+    };
+  }
+
+  // 3. Авто-классификация.
   const classification = await classify(userText, input.recentHistory ?? "");
   const t1 = Date.now();
   const cls = classification ?? heuristicClassify(userText);
   const source: RoutingDecision["source"] = classification ? "auto" : "fallback";
 
-  const basePick = pickModelFor(cls.category, mode, multimodalNeeded);
-  const tuned = tuneForMode(basePick, mode);
-  const opt = getModelOption(tuned.model);
+  const route = await getRoute(cls.category);
+  const model = pickModelWithMultimodal(route.model, multimodalNeeded);
+  const opt = getModelOption(model);
 
   return {
-    model: tuned.model,
+    model,
     category: cls.category,
     complexity: cls.complexity,
-    mode,
-    max_tokens: tuned.max_tokens,
-    reasoning_effort: tuned.reasoning_effort,
+    max_tokens: route.max_tokens,
+    reasoning_effort: route.reasoning_effort,
     system_addon: SYSTEM_ADDONS[cls.category],
     source,
     reason: classification
-      ? `${opt.label} · ${labelForCategory(cls.category)}`
-      : `${opt.label} · ${labelForCategory(cls.category)} (эвристика)`,
+      ? `${opt.label} · ${CATEGORY_META[cls.category].label.toLowerCase()}`
+      : `${opt.label} · ${CATEGORY_META[cls.category].label.toLowerCase()} (эвристика)`,
     routing_latency_ms: t1 - t0,
     uncertain: !classification,
   };
 }
 
-function labelForCategory(c: TaskCategory): string {
-  return {
-    quick: "быстрый",
-    research: "ресёрч",
-    code: "код",
-    analyze: "анализ",
-    strategy: "стратегия",
-  }[c];
+/** Если сообщение содержит картинку, а выбранная модель не multimodal,
+ *  подменяем её на Sonnet 4.5 (multimodal-универсал). */
+function pickModelWithMultimodal(model: string, multimodalNeeded: boolean): string {
+  if (!multimodalNeeded) return model;
+  const opt = getModelOption(model);
+  if (opt.multimodal) return model;
+  return MODELS.CLAUDE_SONNET;
 }
 
 // ─── Утилита: компактная история для классификатора ────────────────
-//
-// Берём последние N реплик, обрезаем длинное содержимое. Цель — дать
-// классификатору контекст («это продолжение разговора про X»), не сжигая
-// токены Flash.
 
 export function compactRecentHistory(
   msgs: Array<{ role: string; content: string }>,

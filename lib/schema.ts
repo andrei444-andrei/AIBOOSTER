@@ -53,14 +53,14 @@ export const TABLES: TableDef[] = [
   {
     name: "chat_sessions",
     description:
-      "Сессия (один чат). Группируется по uid пользователя (анонимный, из localStorage). Хранит режим, явно выбранную пользователем модель (override) и заголовок.",
+      "Сессия (один чат). Группируется по uid пользователя (анонимный, из localStorage). Хранит выбор пользователя (модель ИЛИ категория-пресет ИЛИ ничего = Auto) и заголовок.",
     ddl: `CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
       uid TEXT NOT NULL,
       title TEXT NOT NULL DEFAULT 'Новый чат',
       model TEXT NOT NULL,
-      mode TEXT NOT NULL DEFAULT 'normal',
       model_override TEXT,
+      category_override TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
@@ -69,10 +69,31 @@ export const TABLES: TableDef[] = [
       { name: "uid", description: "Анонимный идентификатор владельца (chat_uid из localStorage)." },
       { name: "title", description: "Заголовок чата (первая строка первого сообщения или ручная)." },
       { name: "model", description: "Последняя фактически использованная модель в сессии (для дисплея в сайдбаре)." },
-      { name: "mode", description: "Режим работы: normal | pro. Влияет на выбор моделей и reasoning_effort." },
-      { name: "model_override", description: "NULL = авто-роутинг. Иначе — модель, выбранная пользователем явно (стикает в рамках чата до сброса)." },
+      { name: "model_override", description: "Если задано — модель, выбранная пользователем явно (стикает в чате до сброса). Имеет приоритет над category_override." },
+      { name: "category_override", description: "Если задано — пресет-категория из 5 (quick/research/code/analyze/strategy). Берёт модель и параметры из chat_category_routing." },
       { name: "created_at", description: "Когда создана." },
       { name: "updated_at", description: "Когда было последнее сообщение." },
+    ],
+  },
+  {
+    name: "chat_category_routing",
+    description:
+      "Маршрутизация категорий задач на модели. По одной строке для каждой из 5 категорий: quick / research / code / analyze / strategy. Auto-роутер и пресеты в селекторе модели читают эту таблицу. Редактируется в /admin/chat.",
+    ddl: `CREATE TABLE IF NOT EXISTS chat_category_routing (
+      category TEXT PRIMARY KEY,
+      model TEXT NOT NULL,
+      reasoning_effort TEXT,
+      max_tokens INTEGER NOT NULL DEFAULT 4000,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "category", description: "Идентификатор категории: quick | research | code | analyze | strategy." },
+      { name: "model", description: "Идентификатор модели AIMLAPI для этой категории." },
+      { name: "reasoning_effort", description: "Уровень reasoning для reasoning-моделей (gpt-5*, grok-4, deepseek-r1): minimal | low | medium | high. NULL — не передавать." },
+      { name: "max_tokens", description: "Лимит токенов ответа." },
+      { name: "created_at", description: "Когда создана строка." },
+      { name: "updated_at", description: "Когда правили." },
     ],
   },
   {

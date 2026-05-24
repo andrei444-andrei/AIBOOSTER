@@ -5,10 +5,9 @@ import {
   MODEL_OPTIONS,
   getModelOption,
   isKnownModel,
-  isValidMode,
+  isTaskCategory,
   DEFAULT_ENABLED_BLOCKS,
-  DEFAULT_MODE,
-  type ChatMode,
+  type TaskCategory,
   type EnabledBlocks,
   type ModelOption,
 } from "./chat-client";
@@ -17,11 +16,10 @@ export {
   MODEL_OPTIONS,
   getModelOption,
   isKnownModel,
-  isValidMode,
+  isTaskCategory,
   DEFAULT_ENABLED_BLOCKS,
-  DEFAULT_MODE,
 };
-export type { ChatMode, EnabledBlocks, ModelOption };
+export type { TaskCategory, EnabledBlocks, ModelOption };
 
 // ─── Типы ────────────────────────────────────────────────────────────
 
@@ -31,10 +29,10 @@ export interface ChatSession {
   title: string;
   /** Последняя фактически использованная модель (для дисплея). */
   model: string;
-  /** Режим работы чата. */
-  mode: ChatMode;
-  /** NULL = авто-роутинг. Иначе явный выбор пользователя, стикает в чате. */
+  /** Конкретная модель, явно выбранная пользователем. Имеет приоритет. */
   model_override: string | null;
+  /** Категория-пресет, явно выбранная пользователем. */
+  category_override: TaskCategory | null;
   created_at: string;
   updated_at: string;
 }
@@ -56,10 +54,9 @@ export interface ChatAttachment {
 export interface RouteMeta {
   category: string;
   complexity: string;
-  mode: ChatMode;
-  source: "override" | "auto" | "fallback";
+  source: "override-model" | "override-category" | "auto" | "fallback";
   reason: string;
-  reasoning_effort?: string;
+  reasoning_effort?: string | null;
   uncertain?: boolean;
   /** Сколько мс занял сам роутер (классификатор). */
   routing_latency_ms?: number;
@@ -91,9 +88,8 @@ export const DEFAULT_SYSTEM_PROMPT = `Ты — AI-ассистент в AIBOOSTE
 // ─── Сессии ──────────────────────────────────────────────────────────
 
 export interface CreateSessionOpts {
-  model?: string;
-  mode?: ChatMode;
   modelOverride?: string | null;
+  categoryOverride?: TaskCategory | null;
   title?: string;
 }
 
@@ -105,31 +101,31 @@ export async function createSession(
   const db = getDb();
   const id = randomUUID();
   const now = new Date().toISOString();
-  const mode: ChatMode = opts.mode && isValidMode(opts.mode) ? opts.mode : DEFAULT_MODE;
   const modelOverride =
     opts.modelOverride && isKnownModel(opts.modelOverride) ? opts.modelOverride : null;
+  const categoryOverride =
+    opts.categoryOverride && isTaskCategory(opts.categoryOverride) ? opts.categoryOverride : null;
   // model — стартовое значение для UI (что писать в сайдбаре до первого ответа).
-  // Если override задан — берём его. Иначе — дефолт.
-  const model = modelOverride ?? (opts.model && isKnownModel(opts.model) ? opts.model : DEFAULT_MODEL);
+  const model = modelOverride ?? DEFAULT_MODEL;
   const title = opts.title?.slice(0, 200) ?? "Новый чат";
   await db.execute({
-    sql: `INSERT INTO chat_sessions (id, uid, title, model, mode, model_override, created_at, updated_at)
+    sql: `INSERT INTO chat_sessions (id, uid, title, model, model_override, category_override, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    args: [id, uid, title, model, mode, modelOverride, now, now],
+    args: [id, uid, title, model, modelOverride, categoryOverride, now, now],
   });
   return {
     id,
     uid,
     title,
     model,
-    mode,
     model_override: modelOverride,
+    category_override: categoryOverride,
     created_at: now,
     updated_at: now,
   };
 }
 
-const SESSION_COLS = "id, uid, title, model, mode, model_override, created_at, updated_at";
+const SESSION_COLS = "id, uid, title, model, model_override, category_override, created_at, updated_at";
 
 export async function listSessions(uid: string, limit = 100): Promise<ChatSession[]> {
   await ensureSchema();
@@ -188,17 +184,8 @@ export async function setSessionLastModel(id: string, uid: string, model: string
   });
 }
 
-/** Установить режим (normal | pro) для сессии. */
-export async function setSessionMode(id: string, uid: string, mode: ChatMode): Promise<void> {
-  await ensureSchema();
-  const db = getDb();
-  await db.execute({
-    sql: `UPDATE chat_sessions SET mode = ?, updated_at = ? WHERE id = ? AND uid = ?`,
-    args: [mode, new Date().toISOString(), id, uid],
-  });
-}
-
-/** Зафиксировать явно выбранную пользователем модель (стикает в чате). NULL = вернуться в Auto. */
+/** Зафиксировать конкретную модель для чата. NULL = снять override.
+ *  Установка модели сбрасывает category_override (нельзя оба сразу). */
 export async function setSessionModelOverride(
   id: string,
   uid: string,
@@ -207,8 +194,38 @@ export async function setSessionModelOverride(
   await ensureSchema();
   const db = getDb();
   await db.execute({
-    sql: `UPDATE chat_sessions SET model_override = ?, updated_at = ? WHERE id = ? AND uid = ?`,
+    sql: `UPDATE chat_sessions
+          SET model_override = ?, category_override = NULL, updated_at = ?
+          WHERE id = ? AND uid = ?`,
     args: [model, new Date().toISOString(), id, uid],
+  });
+}
+
+/** Зафиксировать категорию-пресет для чата. NULL = снять. Сбрасывает model_override. */
+export async function setSessionCategoryOverride(
+  id: string,
+  uid: string,
+  category: TaskCategory | null,
+): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE chat_sessions
+          SET category_override = ?, model_override = NULL, updated_at = ?
+          WHERE id = ? AND uid = ?`,
+    args: [category, new Date().toISOString(), id, uid],
+  });
+}
+
+/** Полностью сбросить выбор пользователя — вернуться в Auto. */
+export async function clearSessionOverride(id: string, uid: string): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE chat_sessions
+          SET model_override = NULL, category_override = NULL, updated_at = ?
+          WHERE id = ? AND uid = ?`,
+    args: [new Date().toISOString(), id, uid],
   });
 }
 

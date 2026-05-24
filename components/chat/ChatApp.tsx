@@ -4,11 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./Markdown";
 import {
   MODEL_OPTIONS,
-  MODE_OPTIONS,
   CATEGORY_META,
-  DEFAULT_MODE,
+  TASK_CATEGORIES,
   getModelOption,
-  type ChatMode,
+  isTaskCategory,
+  isKnownModel,
+  type TaskCategory,
   type ModelOption,
 } from "@/lib/chat-client";
 import styles from "./ChatApp.module.css";
@@ -19,8 +20,8 @@ interface SessionRow {
   id: string;
   title: string;
   model: string;
-  mode: ChatMode;
   model_override: string | null;
+  category_override: TaskCategory | null;
   updated_at: string;
 }
 
@@ -39,10 +40,9 @@ interface Attachment {
 interface RouteMeta {
   category: string;
   complexity: string;
-  mode: ChatMode;
-  source: "override" | "auto" | "fallback";
+  source: "override-model" | "override-category" | "auto" | "fallback";
   reason: string;
-  reasoning_effort?: string;
+  reasoning_effort?: string | null;
   uncertain?: boolean;
   routing_latency_ms?: number;
 }
@@ -60,8 +60,39 @@ interface Message {
   tokens_completion?: number | null;
   duration_ms?: number | null;
   route_meta?: RouteMeta | null;
-  /** Дополнительная информация о текущем стриме (для индикатора над контентом). */
   liveRoute?: RouteMeta | null;
+}
+
+// ─── Selection: что пользователь выбрал в селекторе ──────────────────
+
+type Selection =
+  | { type: "auto" }
+  | { type: "category"; value: TaskCategory }
+  | { type: "model"; value: string };
+
+const AUTO_VALUE = "auto";
+function encodeSelection(s: Selection): string {
+  if (s.type === "auto") return AUTO_VALUE;
+  if (s.type === "category") return `cat:${s.value}`;
+  return `model:${s.value}`;
+}
+function decodeSelection(v: string): Selection {
+  if (v === AUTO_VALUE) return { type: "auto" };
+  if (v.startsWith("cat:")) {
+    const cat = v.slice(4);
+    if (isTaskCategory(cat)) return { type: "category", value: cat };
+  }
+  if (v.startsWith("model:")) {
+    const m = v.slice(6);
+    if (isKnownModel(m)) return { type: "model", value: m };
+  }
+  return { type: "auto" };
+}
+function sessionToSelection(s: SessionRow | null): Selection {
+  if (!s) return { type: "auto" };
+  if (s.model_override) return { type: "model", value: s.model_override };
+  if (s.category_override) return { type: "category", value: s.category_override };
+  return { type: "auto" };
 }
 
 // ─── Утилиты UID ─────────────────────────────────────────────────────
@@ -122,8 +153,6 @@ function readAsBase64(file: File): Promise<string> {
 
 // ─── Форматирование ──────────────────────────────────────────────────
 
-const AUTO_VALUE = "__auto__";
-
 function formatDuration(ms?: number | null): string | null {
   if (!ms || ms <= 0) return null;
   if (ms < 1000) return `${ms} мс`;
@@ -135,7 +164,7 @@ function formatDuration(ms?: number | null): string | null {
 
 function categoryLabel(c?: string | null): string | null {
   if (!c) return null;
-  return CATEGORY_META[c as keyof typeof CATEGORY_META]?.label ?? c;
+  return CATEGORY_META[c as TaskCategory]?.label ?? c;
 }
 
 // ─── Компонент ───────────────────────────────────────────────────────
@@ -146,10 +175,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  // Состояние режима и override-модели. Авто = модель не зафиксирована, роутер выбирает сам.
-  // Эти значения хранятся per-chat в БД. Здесь — локальное зеркало для активной сессии.
-  const [mode, setMode] = useState<ChatMode>(DEFAULT_MODE);
-  const [modelOverride, setModelOverride] = useState<string | null>(null);
+  // Выбор пользователя в селекторе. Хранится per-chat в БД, тут локальное зеркало.
+  const [selection, setSelection] = useState<Selection>({ type: "auto" });
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -159,7 +186,6 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // инициализация uid и списка сессий
   useEffect(() => {
     const v = getOrCreateUid();
     setUid(v);
@@ -194,10 +220,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
         }
         setMessages(data.messages ?? []);
         if (data.session) {
-          setMode((data.session.mode as ChatMode) ?? DEFAULT_MODE);
-          setModelOverride(data.session.model_override ?? null);
+          setSelection(sessionToSelection(data.session as SessionRow));
         }
-        // При открытии чата — один раз прокрутить в самый низ, чтобы видеть последние сообщения.
         requestAnimationFrame(() => {
           const el = scrollerRef.current;
           if (el) el.scrollTop = el.scrollHeight;
@@ -216,9 +240,6 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     else setMessages([]);
   }, [activeId, loadMessages]);
 
-  // ID последнего отправленного user-сообщения — на следующем рендере прокручиваем
-  // его к ~18% от верха scrollerа, чтобы оставить ~80% места ниже под ответ.
-  // Во время стрима НЕ скроллим — пользователь читает в своём темпе.
   const [pendingScrollUserMsg, setPendingScrollUserMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -227,14 +248,12 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     if (!scroller) return;
     const el = scroller.querySelector<HTMLElement>(`[data-msg-id="${pendingScrollUserMsg}"]`);
     if (!el) return;
-    // целевая позиция верха сообщения в координатах вьюпорта scrollerа
     const targetTop = scroller.clientHeight * 0.18;
     const currentTop = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
     scroller.scrollTo({ top: scroller.scrollTop + currentTop - targetTop, behavior: "smooth" });
     setPendingScrollUserMsg(null);
   }, [pendingScrollUserMsg]);
 
-  // автовысота textarea
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
@@ -251,9 +270,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       const r = await fetch("/api/chat/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-chat-uid": uid },
-        // Новый чат всегда стартует в Auto + текущем режиме.
-        // Принудительно сбрасываем override, чтобы «следующий чат» открылся в Auto.
-        body: JSON.stringify({ mode, modelOverride: null }),
+        body: JSON.stringify({}), // новый чат всегда стартует в Auto
       });
       const data = await r.json();
       if (!r.ok) {
@@ -265,11 +282,11 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       setMessages([]);
       setInput("");
       setPendingAttachments([]);
-      setModelOverride(null);
+      setSelection({ type: "auto" });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [uid, mode]);
+  }, [uid]);
 
   const deleteChat = useCallback(
     async (id: string) => {
@@ -294,41 +311,24 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     [uid, activeId],
   );
 
-  // ─── Переключатели Pro/Обычный и Auto/Модель ──────────────────────
-
-  const changeMode = useCallback(
-    async (next: ChatMode) => {
-      if (next === mode) return;
-      setMode(next);
+  const changeSelection = useCallback(
+    async (next: Selection) => {
+      setSelection(next);
       if (activeId && uid) {
+        const body: Record<string, unknown> =
+          next.type === "auto"
+            ? { reset: true }
+            : next.type === "category"
+              ? { categoryOverride: next.value }
+              : { modelOverride: next.value };
         try {
           await fetch(`/api/chat/sessions/${activeId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json", "x-chat-uid": uid },
-            body: JSON.stringify({ mode: next }),
+            body: JSON.stringify(body),
           });
         } catch {
-          /* тихо — UI уже переключился, при следующей отправке улетит в body */
-        }
-      }
-    },
-    [mode, activeId, uid],
-  );
-
-  const changeModel = useCallback(
-    async (next: string) => {
-      // AUTO_VALUE → сбрасываем override и возвращаемся к роутеру.
-      const newOverride = next === AUTO_VALUE ? null : next;
-      setModelOverride(newOverride);
-      if (activeId && uid) {
-        try {
-          await fetch(`/api/chat/sessions/${activeId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json", "x-chat-uid": uid },
-            body: JSON.stringify({ modelOverride: newOverride }),
-          });
-        } catch {
-          /* тихо */
+          // тихо — UI уже переключился, на следующий send улетит в теле сообщения
         }
       }
     },
@@ -390,14 +390,19 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     if (!uid) return;
     setError(null);
 
-    // если активной сессии нет — создадим
     let sid = activeId;
     if (!sid) {
       try {
+        const initBody: Record<string, unknown> =
+          selection.type === "category"
+            ? { categoryOverride: selection.value }
+            : selection.type === "model"
+              ? { modelOverride: selection.value }
+              : {};
         const r = await fetch("/api/chat/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-chat-uid": uid },
-          body: JSON.stringify({ mode, modelOverride }),
+          body: JSON.stringify(initBody),
         });
         const data = await r.json();
         if (!r.ok) {
@@ -427,18 +432,25 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       content: "",
       created_at: new Date().toISOString(),
       streaming: true,
-      model: modelOverride,
+      model: selection.type === "model" ? selection.value : null,
       liveRoute: null,
     };
     setMessages((m) => [...m, userMsgLocal, assistantLocal]);
     setInput("");
     setPendingAttachments([]);
     setSending(true);
-    // прокрутить только что отправленное сообщение в верхнюю четверть экрана
     setPendingScrollUserMsg(userMsgLocal.id);
 
     const controller = new AbortController();
     abortRef.current = controller;
+
+    const overrideBody: Record<string, unknown> = {};
+    if (selection.type === "model") overrideBody.modelOverride = selection.value;
+    else if (selection.type === "category") overrideBody.categoryOverride = selection.value;
+    else {
+      overrideBody.modelOverride = null;
+      overrideBody.categoryOverride = null;
+    }
 
     try {
       const r = await fetch(`/api/chat/sessions/${sid}/messages`, {
@@ -447,8 +459,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
         headers: { "Content-Type": "application/json", "x-chat-uid": uid },
         body: JSON.stringify({
           content: text,
-          mode,
-          modelOverride,
+          ...overrideBody,
           attachments: userAttachments,
         }),
       });
@@ -516,7 +527,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, uid, input, mode, modelOverride, pendingAttachments, sending, fetchSessions]);
+  }, [activeId, uid, input, selection, pendingAttachments, sending, fetchSessions]);
 
   const handleSseEvent = useCallback((event: string, payload: unknown, assistantLocalId: string) => {
     if (event === "user_message") {
@@ -532,9 +543,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       const p = payload as RouteMeta & { model: string };
       setMessages((arr) =>
         arr.map((m) =>
-          m.id === assistantLocalId
-            ? { ...m, model: p.model, liveRoute: p }
-            : m,
+          m.id === assistantLocalId ? { ...m, model: p.model, liveRoute: p } : m,
         ),
       );
     } else if (event === "delta") {
@@ -601,21 +610,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     [send],
   );
 
-  // Селектор моделей: для нормального режима показываем только доступные в normal,
-  // плюс всегда — текущий override (даже если он deep). В Pro доступны все.
-  const modelOptionsForMode = useMemo<ModelOption[]>(() => {
-    if (mode === "pro") return MODEL_OPTIONS;
-    const base = MODEL_OPTIONS.filter((m) => m.availableInModes.includes("normal"));
-    if (modelOverride && !base.some((m) => m.id === modelOverride)) {
-      const extra = MODEL_OPTIONS.find((m) => m.id === modelOverride);
-      if (extra) return [...base, extra];
-    }
-    return base;
-  }, [mode, modelOverride]);
-
   return (
     <div className={styles.app}>
-      {/* Sidebar */}
       <aside className={`${styles.sidebar} ${sidebarOpen ? "" : styles.sidebarClosed}`}>
         <div className={styles.sidebarHeader}>
           <button className={styles.newBtn} onClick={newChat}>
@@ -652,7 +648,6 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
         </div>
       </aside>
 
-      {/* Main */}
       <main className={styles.main}>
         <header className={styles.header}>
           <button
@@ -667,22 +662,11 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
             {currentSession?.title || "AI Chat"}
           </div>
 
-          <select
-            className={styles.modelSelect}
-            value={modelOverride ?? AUTO_VALUE}
-            onChange={(e) => changeModel(e.target.value)}
+          <ModelSelector
+            value={encodeSelection(selection)}
+            onChange={(v) => changeSelection(decodeSelection(v))}
             disabled={sending}
-            title={modelOverride ? "Принудительно выбрана модель (стикает в этом чате)" : "Авто-роутер выбирает модель под задачу"}
-          >
-            <option value={AUTO_VALUE}>
-              {mode === "pro" ? "⚡ Auto · Pro" : "⚡ Auto"}
-            </option>
-            {modelOptionsForMode.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
+          />
         </header>
 
         <div ref={scrollerRef} className={styles.scroller}>
@@ -691,8 +675,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
               <div className={styles.welcome}>
                 <h2 style={{ marginBottom: 8 }}>AI Chat</h2>
                 <p style={{ color: "var(--text-secondary)" }}>
-                  Задайте вопрос, прикрепите файлы или картинки. Роутер сам выберет модель —
-                  или выберите вручную: тогда она стикнет в этом чате.
+                  В Auto роутер сам подбирает модель под задачу. Или выберите категорию-пресет
+                  (Быстрый/Ресёрч/Код/Анализ/Стратегия) — модели для них настраиваются в /admin/chat.
                 </p>
               </div>
             )}
@@ -720,19 +704,78 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           onKeyDown={onKeyDown}
           textareaRef={textareaRef}
           sending={sending}
-          mode={mode}
-          onChangeMode={changeMode}
         />
       </main>
     </div>
   );
 }
 
-// ─── Подкомпоненты ───────────────────────────────────────────────────
+// ─── Селектор моделей ────────────────────────────────────────────────
+
+function ModelSelector({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled: boolean;
+}) {
+  // Группируем модели по vendor для optgroup'ов внутри секции «Модели».
+  const byVendor = useMemo(() => {
+    const map = new Map<string, ModelOption[]>();
+    for (const m of MODEL_OPTIONS) {
+      const arr = map.get(m.vendor) ?? [];
+      arr.push(m);
+      map.set(m.vendor, arr);
+    }
+    return Array.from(map.entries());
+  }, []);
+
+  let title: string;
+  if (value === AUTO_VALUE) title = "Auto: роутер сам выбирает модель под задачу";
+  else if (value.startsWith("cat:")) {
+    const cat = value.slice(4) as TaskCategory;
+    title = `Пресет «${CATEGORY_META[cat]?.label ?? cat}» — модель из настроек /admin/chat`;
+  } else if (value.startsWith("model:")) {
+    title = `Принудительно выбрана модель: ${getModelOption(value.slice(6)).label}`;
+  } else {
+    title = "Выбор модели";
+  }
+
+  return (
+    <select
+      className={styles.modelSelect}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      title={title}
+    >
+      <option value={AUTO_VALUE}>⚡ Auto — роутер выбирает</option>
+      <optgroup label="── Категории ──">
+        {TASK_CATEGORIES.map((cat) => (
+          <option key={cat} value={`cat:${cat}`}>
+            {CATEGORY_META[cat].icon} {CATEGORY_META[cat].label}
+          </option>
+        ))}
+      </optgroup>
+      {byVendor.map(([vendor, models]) => (
+        <optgroup key={vendor} label={`── ${vendor} ──`}>
+          {models.map((m) => (
+            <option key={m.id} value={`model:${m.id}`}>
+              {m.label}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
+
+// ─── Сообщение ───────────────────────────────────────────────────────
 
 function MessageBlock({ message }: { message: Message }) {
   const isUser = message.role === "user";
-  const route = message.route_meta;
   const live = message.liveRoute;
   const showLiveHint = message.streaming && live && !message.content;
   const showTypeHint = message.streaming && !live && !message.content;
@@ -752,7 +795,6 @@ function MessageBlock({ message }: { message: Message }) {
           </div>
         )}
 
-        {/* Подсказка стрима: «Маршрутизирую…» → «Claude Opus · ресёрч · pro» */}
         {!isUser && showLiveHint && live && (
           <div className={styles.streamHint}>
             <span className={styles.streamHintPulse} />
@@ -782,7 +824,6 @@ function MessageBlock({ message }: { message: Message }) {
           <div className={styles.msgError}>Ошибка: {message.error}</div>
         )}
 
-        {/* Бейдж под завершённым ответом */}
         {!isUser && !message.streaming && !message.error && message.content && (
           <MessageMeta message={message} />
         )}
@@ -794,10 +835,7 @@ function MessageBlock({ message }: { message: Message }) {
 function routeLabel(route: RouteMeta, model: string | null | undefined): string {
   const modelLabel = model ? getModelOption(model).label : "Маршрутизирую";
   const cat = categoryLabel(route.category);
-  const parts = [modelLabel];
-  if (cat) parts.push(cat);
-  if (route.mode === "pro") parts.push("pro");
-  return parts.join(" · ");
+  return cat ? `${modelLabel} · ${cat.toLowerCase()}` : modelLabel;
 }
 
 function MessageMeta({ message }: { message: Message }) {
@@ -807,7 +845,12 @@ function MessageMeta({ message }: { message: Message }) {
   const cat = categoryLabel(route?.category);
   const tokensIn = message.tokens_prompt;
   const tokensOut = message.tokens_completion;
-  const isPro = route?.mode === "pro";
+  const sourceLabel: Record<string, string> = {
+    auto: "⚡ auto",
+    fallback: "эвристика",
+    "override-model": "вручную модель",
+    "override-category": "вручную категория",
+  };
 
   return (
     <div className={styles.msgMeta}>
@@ -816,15 +859,15 @@ function MessageMeta({ message }: { message: Message }) {
           className={`${styles.metaChip} ${route?.source === "auto" ? styles.metaChipAuto : ""}`}
           title={modelOption.description}
         >
-          <span className={`${styles.metaDot} ${isPro ? styles.metaDotPro : ""}`} />
+          <span className={styles.metaDot} />
           {modelOption.label}
         </span>
       )}
-      {route?.source === "auto" && <span className={styles.metaChip}>⚡ auto</span>}
-      {route?.source === "fallback" && <span className={styles.metaChip}>эвристика</span>}
-      {route?.source === "override" && <span className={styles.metaChip}>вручную</span>}
+      {route?.source && <span className={styles.metaChip}>{sourceLabel[route.source] ?? route.source}</span>}
       {cat && <span className={styles.metaChip}>{cat}</span>}
-      {isPro && <span className={styles.metaChip}>pro</span>}
+      {route?.reasoning_effort && (
+        <span className={styles.metaChip}>think: {route.reasoning_effort}</span>
+      )}
       {duration && <span className={styles.metaChip}>⏱ {duration}</span>}
       {tokensIn != null && tokensOut != null && (
         <span className={styles.metaChip} title="prompt / completion tokens">
@@ -866,8 +909,6 @@ function Composer({
   onKeyDown,
   textareaRef,
   sending,
-  mode,
-  onChangeMode,
 }: {
   input: string;
   setInput: (s: string) => void;
@@ -879,8 +920,6 @@ function Composer({
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   sending: boolean;
-  mode: ChatMode;
-  onChangeMode: (m: ChatMode) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -958,31 +997,6 @@ function Composer({
             e.target.value = "";
           }}
         />
-        <div className={styles.modeGroup} role="tablist" aria-label="Режим">
-          {MODE_OPTIONS.map((opt) => {
-            const isPro = opt.id === "pro";
-            const isActive = mode === opt.id;
-            return (
-              <button
-                key={opt.id}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                className={`${styles.modeBtn} ${isActive ? styles.modeBtnActive : ""}`}
-                onClick={() => onChangeMode(opt.id)}
-                disabled={sending}
-                title={
-                  isPro
-                    ? "Pro: думающие модели (Claude Opus, GPT-5 с extended reasoning, Gemini 2.5 Pro). Дольше, точнее."
-                    : `${opt.description} ${opt.hint}`
-                }
-              >
-                {isPro ? "🧠 " : ""}
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
         <div className={styles.toolsSpacer} />
         {sending ? (
           <button type="button" className={styles.sendBtn} onClick={onStop}>

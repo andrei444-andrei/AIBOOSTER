@@ -3,37 +3,6 @@
 
 import { MODELS } from "./ai";
 
-// ─── Режимы ──────────────────────────────────────────────────────────
-//
-// Обычный — быстрый качественный ответ за 5–10 сек: лёгкие модели,
-// без расширенного reasoning. Pro — глубже и дольше: тяжёлые модели,
-// reasoning_effort high, больше max_tokens.
-
-export type ChatMode = "normal" | "pro";
-export const DEFAULT_MODE: ChatMode = "normal";
-
-export interface ChatModeOption {
-  id: ChatMode;
-  label: string;
-  description: string;
-  hint: string;
-}
-
-export const MODE_OPTIONS: ChatModeOption[] = [
-  {
-    id: "normal",
-    label: "Обычный",
-    description: "Быстрый качественный ответ за 5–10 сек.",
-    hint: "Sonnet, GPT-4o, Flash — без расширенного reasoning.",
-  },
-  {
-    id: "pro",
-    label: "Pro",
-    description: "Глубже и дольше — для сложных задач.",
-    hint: "Opus, GPT-5, Gemini Pro — extended thinking, больше токенов.",
-  },
-];
-
 // ─── Модели ──────────────────────────────────────────────────────────
 
 export type ModelTier = "fast" | "balanced" | "deep";
@@ -46,19 +15,20 @@ export interface ModelOption {
   description: string;
   /** fast = ≤10s, balanced = 10–30s, deep = >30s. */
   tier: ModelTier;
-  /** В каких режимах модель доступна авто-роутером. Override игнорирует это. */
-  availableInModes: ChatMode[];
+  /** Reasoning-модель — поддерживает reasoning_effort minimal/low/medium/high. */
+  reasoning: boolean;
 }
 
 export const MODEL_OPTIONS: ModelOption[] = [
+  // Anthropic
   {
     id: MODELS.CLAUDE_SONNET,
     label: "Claude Sonnet 4.5",
     vendor: "Anthropic",
     multimodal: true,
     tier: "balanced",
-    availableInModes: ["normal", "pro"],
-    description: "Универсальный дефолт. Хорошо держит формат и инструкции.",
+    reasoning: false,
+    description: "Универсальная сильная модель. Хорошо держит формат и инструкции.",
   },
   {
     id: MODELS.CLAUDE_OPUS,
@@ -66,17 +36,18 @@ export const MODEL_OPTIONS: ModelOption[] = [
     vendor: "Anthropic",
     multimodal: true,
     tier: "deep",
-    availableInModes: ["pro"],
+    reasoning: false,
     description: "Самая способная модель Anthropic. Дольше и дороже.",
   },
+  // OpenAI
   {
     id: MODELS.GPT_5,
     label: "GPT-5",
     vendor: "OpenAI",
     multimodal: true,
     tier: "deep",
-    availableInModes: ["pro"],
-    description: "Reasoning-модель OpenAI. Думает дольше, ответы точнее.",
+    reasoning: true,
+    description: "Флагман OpenAI с extended thinking. reasoning_effort: minimal..high.",
   },
   {
     id: MODELS.GPT_5_MINI,
@@ -84,8 +55,8 @@ export const MODEL_OPTIONS: ModelOption[] = [
     vendor: "OpenAI",
     multimodal: true,
     tier: "balanced",
-    availableInModes: ["normal", "pro"],
-    description: "Быстрая reasoning-модель.",
+    reasoning: true,
+    description: "Лёгкая reasoning-модель OpenAI.",
   },
   {
     id: MODELS.GPT_4O,
@@ -93,17 +64,18 @@ export const MODEL_OPTIONS: ModelOption[] = [
     vendor: "OpenAI",
     multimodal: true,
     tier: "fast",
-    availableInModes: ["normal"],
+    reasoning: false,
     description: "Быстрый универсал, без reasoning.",
   },
+  // Google
   {
     id: MODELS.GEMINI_PRO,
     label: "Gemini 2.5 Pro",
     vendor: "Google",
     multimodal: true,
     tier: "deep",
-    availableInModes: ["pro"],
-    description: "Большой контекст, хорошо с длинными документами.",
+    reasoning: false,
+    description: "Большой контекст, хорошо с длинными документами и кодом.",
   },
   {
     id: MODELS.GEMINI_FLASH,
@@ -111,17 +83,56 @@ export const MODEL_OPTIONS: ModelOption[] = [
     vendor: "Google",
     multimodal: true,
     tier: "fast",
-    availableInModes: ["normal"],
+    reasoning: false,
     description: "Быстрый Gemini для коротких задач.",
   },
+  // xAI
+  {
+    id: MODELS.GROK_4,
+    label: "Grok 4",
+    vendor: "xAI",
+    multimodal: true,
+    tier: "deep",
+    reasoning: true,
+    description: "Думающая модель xAI. Сильна в математике и логике.",
+  },
+  {
+    id: MODELS.GROK_3,
+    label: "Grok 3",
+    vendor: "xAI",
+    multimodal: false,
+    tier: "balanced",
+    reasoning: false,
+    description: "Предыдущее поколение xAI.",
+  },
+  // DeepSeek
+  {
+    id: MODELS.DEEPSEEK_R1,
+    label: "DeepSeek R1",
+    vendor: "DeepSeek",
+    multimodal: false,
+    tier: "deep",
+    reasoning: true,
+    description: "Reasoning-модель DeepSeek с видимыми рассуждениями.",
+  },
+  {
+    id: MODELS.DEEPSEEK_V3,
+    label: "DeepSeek V3.1",
+    vendor: "DeepSeek",
+    multimodal: false,
+    tier: "balanced",
+    reasoning: false,
+    description: "Сильный универсал, открытые веса.",
+  },
+  // Perplexity
   {
     id: MODELS.PERPLEXITY_SONAR,
     label: "Perplexity Sonar Pro",
     vendor: "Perplexity",
     multimodal: false,
     tier: "balanced",
-    availableInModes: ["normal", "pro"],
-    description: "С поиском по интернету. Текстовые запросы.",
+    reasoning: false,
+    description: "С поиском по интернету. Используется при ресёрч-задачах.",
   },
 ];
 
@@ -133,27 +144,56 @@ export function isKnownModel(id: string): boolean {
   return MODEL_OPTIONS.some((m) => m.id === id);
 }
 
-export function isValidMode(v: unknown): v is ChatMode {
-  return v === "normal" || v === "pro";
-}
-
-// ─── Категории задач (для роутера) ───────────────────────────────────
+// ─── Категории задач ─────────────────────────────────────────────────
+//
+// Это и классификация роутера, и набор пресетов в селекторе модели.
+// За каждой категорией закреплены: модель, reasoning_effort, max_tokens —
+// настраивается в /admin/chat (таблица chat_category_routing).
 
 export type TaskCategory = "quick" | "research" | "code" | "analyze" | "strategy";
+
+export const TASK_CATEGORIES: TaskCategory[] = ["quick", "research", "code", "analyze", "strategy"];
 
 export interface CategoryMeta {
   id: TaskCategory;
   label: string;
+  icon: string;
   hint: string;
 }
 
 export const CATEGORY_META: Record<TaskCategory, CategoryMeta> = {
-  quick: { id: "quick", label: "Быстрый ответ", hint: "Короткий факт или уточнение." },
-  research: { id: "research", label: "Ресёрч", hint: "Сбор фактов, сравнение, ссылки." },
-  code: { id: "code", label: "Код", hint: "Написать, починить, объяснить код." },
-  analyze: { id: "analyze", label: "Анализ", hint: "Разобрать данные, документ, логи." },
-  strategy: { id: "strategy", label: "Стратегия", hint: "Продумать варианты и решения." },
+  quick: { id: "quick", label: "Быстрый ответ", icon: "💬", hint: "Короткий факт или уточнение." },
+  research: { id: "research", label: "Ресёрч", icon: "🔍", hint: "Поиск, факты, ссылки, источники." },
+  code: { id: "code", label: "Код", icon: "💻", hint: "Написать, починить, объяснить код." },
+  analyze: { id: "analyze", label: "Анализ", icon: "📊", hint: "Разобрать данные, документ, логи." },
+  strategy: { id: "strategy", label: "Стратегия", icon: "🎯", hint: "Продумать варианты и решения." },
 };
+
+export function isTaskCategory(v: unknown): v is TaskCategory {
+  return v === "quick" || v === "research" || v === "code" || v === "analyze" || v === "strategy";
+}
+
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
+export const REASONING_EFFORTS: ReasoningEffort[] = ["minimal", "low", "medium", "high"];
+export function isReasoningEffort(v: unknown): v is ReasoningEffort {
+  return v === "minimal" || v === "low" || v === "medium" || v === "high";
+}
+
+/** Дефолтная маршрутизация — используется, если в БД нет записей. */
+export interface CategoryRoute {
+  category: TaskCategory;
+  model: string;
+  reasoning_effort: ReasoningEffort | null;
+  max_tokens: number;
+}
+
+export const DEFAULT_CATEGORY_ROUTES: CategoryRoute[] = [
+  { category: "quick",    model: MODELS.GEMINI_FLASH,   reasoning_effort: null,   max_tokens: 2000 },
+  { category: "research", model: MODELS.PERPLEXITY_SONAR, reasoning_effort: null, max_tokens: 4000 },
+  { category: "code",     model: MODELS.CLAUDE_OPUS,    reasoning_effort: null,   max_tokens: 8000 },
+  { category: "analyze",  model: MODELS.GEMINI_PRO,     reasoning_effort: null,   max_tokens: 8000 },
+  { category: "strategy", model: MODELS.GPT_5,          reasoning_effort: "high", max_tokens: 8000 },
+];
 
 // ─── Markdown-блоки ──────────────────────────────────────────────────
 
