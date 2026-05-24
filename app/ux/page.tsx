@@ -279,6 +279,46 @@ export default function UxKitPage() {
         </Row>
       </Section>
 
+      <Section
+        title="Навигация"
+        subtitle="Sidebar слева ← смотри на него сейчас · единый реестр модулей"
+      >
+        <Card padded>
+          <p style={{ color: "var(--text-secondary)", marginBottom: 16 }}>
+            Слева — постоянный <code>Sidebar</code> (компонент UX&nbsp;Kit). Включает
+            бренд, активный пункт, разделы main/service и чип <code>token</code> для
+            защищённых страниц. Появляется на каждой странице через{" "}
+            <code>AppShell</code> в <code>app/layout.tsx</code>.
+          </p>
+          <p style={{ color: "var(--text-secondary)", marginBottom: 16 }}>
+            Единый источник правды — <code>lib/modules.ts</code>. Новый модуль =
+            одна запись в реестре. Sidebar и любой будущий «индекс модулей»
+            читают одно и то же.
+          </p>
+          <pre
+            style={{
+              background: "var(--bg-subtle)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              padding: 12,
+              fontSize: 12,
+              fontFamily: "var(--font-mono)",
+              overflowX: "auto",
+              margin: 0,
+            }}
+          >
+{`// lib/modules.ts
+export const MODULES: ModuleEntry[] = [
+  { slug: "home",   title: "Главная", href: "/",     section: "main",    pinned: true, icon: "·" },
+  { slug: "ux-kit", title: "UX Kit",  href: "/ux",   section: "service", pinned: true, icon: "◐" },
+  { slug: "admin",  title: "Админка", href: "/admin", section: "service", pinned: true,
+    icon: "⌘", requiresAdminToken: true },
+  // ← добавь свой модуль здесь
+];`}
+          </pre>
+        </Card>
+      </Section>
+
       <Section title="Палитра и токены" subtitle="Цвета · типографика · скругления · тени">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
           <div>

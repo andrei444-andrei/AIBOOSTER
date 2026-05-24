@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./Markdown";
-import { AppShell } from "@/components/shell/AppShell";
 import {
   MODEL_OPTIONS,
   CATEGORY_META,
@@ -655,50 +654,48 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     [send],
   );
 
-  const sessionsPanel = (
-    <div className={styles.sessionsPanel}>
-      <div className={styles.sessionsPanelHeader}>
-        <button className={styles.newBtn} onClick={newChat}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M12 5v14" />
-            <path d="M5 12h14" />
-          </svg>
-          <span>Новый чат</span>
-        </button>
-      </div>
-      <div className={styles.sessions}>
-        {sessions.length === 0 ? (
-          <div className={styles.empty}>Нет чатов</div>
-        ) : (
-          sessions.map((s) => (
-            <div
-              key={s.id}
-              className={`${styles.sessionItem} ${activeId === s.id ? styles.active : ""}`}
-              onClick={() => setActiveId(s.id)}
-            >
-              <div className={styles.sessionTitle} title={s.title}>
-                {s.title || "Без названия"}
-              </div>
-              <button
-                className={styles.delBtn}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteChat(s.id);
-                }}
-                aria-label="Удалить"
-                title="Удалить"
-              >
-                ×
-              </button>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-
   return (
-    <AppShell fullBleed secondaryPanel={sessionsPanel}>
+    <div className={styles.chatLayout}>
+      <aside className={styles.chatSidebar}>
+        <div className={styles.sessionsPanel}>
+          <button className={styles.newBtn} onClick={newChat}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 5v14" />
+              <path d="M5 12h14" />
+            </svg>
+            <span>Новый чат</span>
+          </button>
+          <div className={styles.sessions}>
+            {sessions.length === 0 ? (
+              <div className={styles.empty}>Нет чатов</div>
+            ) : (
+              sessions.map((s) => (
+                <div
+                  key={s.id}
+                  className={`${styles.sessionItem} ${activeId === s.id ? styles.active : ""}`}
+                  onClick={() => setActiveId(s.id)}
+                >
+                  <div className={styles.sessionTitle} title={s.title}>
+                    {s.title || "Без названия"}
+                  </div>
+                  <button
+                    className={styles.delBtn}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteChat(s.id);
+                    }}
+                    aria-label="Удалить"
+                    title="Удалить"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </aside>
+
       <div className={styles.main}>
         <header className={styles.header}>
           <div className={styles.headerTitle}>
@@ -751,7 +748,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           onChangeSelection={(v) => changeSelection(decodeSelection(v))}
         />
       </div>
-    </AppShell>
+    </div>
   );
 }
 

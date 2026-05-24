@@ -1,4 +1,32 @@
-/* ─── Боковая панель с сессиями (внутри AppShell как secondaryPanel) ──── */
+/* ─── Внешний layout: 2 колонки — история чатов + основной чат.
+       Вкладывается внутрь AppShell .main (тот, что после глобального Sidebar). */
+
+.chatLayout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+}
+.chatSidebar {
+  border-right: var(--hairline-w) solid var(--border);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .chatLayout {
+    grid-template-columns: 1fr;
+  }
+  .chatSidebar {
+    display: none;
+  }
+}
+
+/* ─── Внутри боковой панели чата ─────────────────────────────────── */
 
 .sessionsPanel {
   display: flex;
