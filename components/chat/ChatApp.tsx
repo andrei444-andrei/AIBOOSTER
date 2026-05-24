@@ -197,6 +197,11 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           setMode((data.session.mode as ChatMode) ?? DEFAULT_MODE);
           setModelOverride(data.session.model_override ?? null);
         }
+        // При открытии чата — один раз прокрутить в самый низ, чтобы видеть последние сообщения.
+        requestAnimationFrame(() => {
+          const el = scrollerRef.current;
+          if (el) el.scrollTop = el.scrollHeight;
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -211,12 +216,23 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     else setMessages([]);
   }, [activeId, loadMessages]);
 
-  // автоскролл к низу
+  // ID последнего отправленного user-сообщения — на следующем рендере прокручиваем
+  // его к ~18% от верха scrollerа, чтобы оставить ~80% места ниже под ответ.
+  // Во время стрима НЕ скроллим — пользователь читает в своём темпе.
+  const [pendingScrollUserMsg, setPendingScrollUserMsg] = useState<string | null>(null);
+
   useEffect(() => {
-    const el = scrollerRef.current;
+    if (!pendingScrollUserMsg) return;
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const el = scroller.querySelector<HTMLElement>(`[data-msg-id="${pendingScrollUserMsg}"]`);
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    // целевая позиция верха сообщения в координатах вьюпорта scrollerа
+    const targetTop = scroller.clientHeight * 0.18;
+    const currentTop = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    scroller.scrollTo({ top: scroller.scrollTop + currentTop - targetTop, behavior: "smooth" });
+    setPendingScrollUserMsg(null);
+  }, [pendingScrollUserMsg]);
 
   // автовысота textarea
   useEffect(() => {
@@ -418,6 +434,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     setInput("");
     setPendingAttachments([]);
     setSending(true);
+    // прокрутить только что отправленное сообщение в верхнюю четверть экрана
+    setPendingScrollUserMsg(userMsgLocal.id);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -649,23 +667,6 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
             {currentSession?.title || "AI Chat"}
           </div>
 
-          {/* Mode toggle (Обычный / Pro) */}
-          <div className={styles.modeGroup} role="tablist" aria-label="Режим">
-            {MODE_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                role="tab"
-                aria-selected={mode === opt.id}
-                className={`${styles.modeBtn} ${mode === opt.id ? styles.modeBtnActive : ""}`}
-                onClick={() => changeMode(opt.id)}
-                disabled={sending}
-                title={`${opt.description}\n${opt.hint}`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-
           <select
             className={styles.modelSelect}
             value={modelOverride ?? AUTO_VALUE}
@@ -719,6 +720,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           onKeyDown={onKeyDown}
           textareaRef={textareaRef}
           sending={sending}
+          mode={mode}
+          onChangeMode={changeMode}
         />
       </main>
     </div>
@@ -735,7 +738,10 @@ function MessageBlock({ message }: { message: Message }) {
   const showTypeHint = message.streaming && !live && !message.content;
 
   return (
-    <div className={`${styles.msgRow} ${isUser ? styles.msgUser : styles.msgAssistant}`}>
+    <div
+      className={`${styles.msgRow} ${isUser ? styles.msgUser : styles.msgAssistant}`}
+      data-msg-id={message.id}
+    >
       <div className={styles.avatar}>{isUser ? "Ты" : "AI"}</div>
       <div className={styles.msgBody}>
         {message.attachments && message.attachments.length > 0 && (
@@ -860,6 +866,8 @@ function Composer({
   onKeyDown,
   textareaRef,
   sending,
+  mode,
+  onChangeMode,
 }: {
   input: string;
   setInput: (s: string) => void;
@@ -871,6 +879,8 @@ function Composer({
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   sending: boolean;
+  mode: ChatMode;
+  onChangeMode: (m: ChatMode) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -916,7 +926,18 @@ function Composer({
           ))}
         </div>
       )}
-      <div className={styles.composerRow}>
+      <div className={styles.composerInputRow}>
+        <textarea
+          ref={textareaRef}
+          className={styles.textarea}
+          rows={1}
+          placeholder="Спросите что-нибудь… (Enter — отправить, Shift+Enter — новая строка)"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+        />
+      </div>
+      <div className={styles.composerTools}>
         <button
           type="button"
           className={styles.iconBtn}
@@ -937,15 +958,32 @@ function Composer({
             e.target.value = "";
           }}
         />
-        <textarea
-          ref={textareaRef}
-          className={styles.textarea}
-          rows={1}
-          placeholder="Спросите что-нибудь… (Enter — отправить, Shift+Enter — новая строка)"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-        />
+        <div className={styles.modeGroup} role="tablist" aria-label="Режим">
+          {MODE_OPTIONS.map((opt) => {
+            const isPro = opt.id === "pro";
+            const isActive = mode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                className={`${styles.modeBtn} ${isActive ? styles.modeBtnActive : ""}`}
+                onClick={() => onChangeMode(opt.id)}
+                disabled={sending}
+                title={
+                  isPro
+                    ? "Pro: думающие модели (Claude Opus, GPT-5 с extended reasoning, Gemini 2.5 Pro). Дольше, точнее."
+                    : `${opt.description} ${opt.hint}`
+                }
+              >
+                {isPro ? "🧠 " : ""}
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className={styles.toolsSpacer} />
         {sending ? (
           <button type="button" className={styles.sendBtn} onClick={onStop}>
             ■ Стоп
