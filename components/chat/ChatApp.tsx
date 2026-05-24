@@ -707,7 +707,13 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
         </header>
 
         <div ref={scrollerRef} className={styles.scroller}>
-          <div className={`${styles.messages} ${messages.length === 0 ? styles.messagesEmpty : ""}`}>
+          <div
+            className={[
+              styles.messages,
+              messages.length === 0 ? styles.messagesEmpty : "",
+              sending ? styles.messagesWaiting : "",
+            ].filter(Boolean).join(" ")}
+          >
             {messages.length === 0 && !loadingMessages && (
               <div className={styles.welcome}>
                 <h2>С чего начнём?</h2>
