@@ -332,6 +332,131 @@ export const TABLES: TableDef[] = [
       { name: "fetched_at", description: "Когда впервые сохранено." },
     ],
   },
+
+  // ────────────────────────────────────────────────────────────────────
+  // Модуль AI Chat
+  // ────────────────────────────────────────────────────────────────────
+  {
+    name: "chat_sessions",
+    description:
+      "Сессия (один чат). Группируется по uid пользователя (анонимный, из localStorage). Хранит выбор пользователя (модель ИЛИ категория-пресет ИЛИ ничего = Auto) и заголовок.",
+    ddl: `CREATE TABLE IF NOT EXISTS chat_sessions (
+      id TEXT PRIMARY KEY,
+      uid TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT 'Новый чат',
+      model TEXT NOT NULL,
+      model_override TEXT,
+      category_override TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "UUID сессии." },
+      { name: "uid", description: "Анонимный идентификатор владельца (chat_uid из localStorage)." },
+      { name: "title", description: "Заголовок чата (первая строка первого сообщения или ручная)." },
+      { name: "model", description: "Последняя фактически использованная модель в сессии (для дисплея в сайдбаре)." },
+      { name: "model_override", description: "Если задано — модель, выбранная пользователем явно (стикает в чате до сброса). Имеет приоритет над category_override." },
+      { name: "category_override", description: "Если задано — пресет-категория из 6 (quick/research/code/analyze/strategy/image). Берёт модель и параметры из chat_category_routing." },
+      { name: "created_at", description: "Когда создана." },
+      { name: "updated_at", description: "Когда было последнее сообщение." },
+    ],
+  },
+  {
+    name: "chat_category_routing",
+    description:
+      "Маршрутизация категорий задач на модели. По одной строке для каждой из 6 категорий: quick / research / code / analyze / strategy / image. Auto-роутер и пресеты в селекторе модели читают эту таблицу. Редактируется в /admin/chat.",
+    ddl: `CREATE TABLE IF NOT EXISTS chat_category_routing (
+      category TEXT PRIMARY KEY,
+      model TEXT NOT NULL,
+      reasoning_effort TEXT,
+      max_tokens INTEGER NOT NULL DEFAULT 4000,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "category", description: "Идентификатор категории: quick | research | code | analyze | strategy | image." },
+      { name: "model", description: "Идентификатор модели AIMLAPI для этой категории." },
+      { name: "reasoning_effort", description: "Уровень reasoning для reasoning-моделей (gpt-5*, grok-4, deepseek-r1): minimal | low | medium | high. NULL — не передавать." },
+      { name: "max_tokens", description: "Лимит токенов ответа." },
+      { name: "created_at", description: "Когда создана строка." },
+      { name: "updated_at", description: "Когда правили." },
+    ],
+  },
+  {
+    name: "chat_messages",
+    description:
+      "Сообщения чата в хронологическом порядке. Хранятся все: и пользовательские, и ответы модели — для контекста и анализа.",
+    ddl: `CREATE TABLE IF NOT EXISTS chat_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      model TEXT,
+      tokens_prompt INTEGER,
+      tokens_completion INTEGER,
+      duration_ms INTEGER,
+      route_meta TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "UUID сообщения." },
+      { name: "session_id", description: "FK на chat_sessions.id." },
+      { name: "role", description: "user | assistant | system." },
+      { name: "content", description: "Текст сообщения (markdown для assistant)." },
+      { name: "model", description: "Какой моделью сгенерировано (для assistant)." },
+      { name: "tokens_prompt", description: "Токены промта по отчёту AIMLAPI (если есть)." },
+      { name: "tokens_completion", description: "Токены ответа по отчёту AIMLAPI (если есть)." },
+      { name: "duration_ms", description: "Сколько мс заняла генерация ответа (для assistant)." },
+      { name: "route_meta", description: "JSON с решением роутера: category, complexity, source, reasoning_effort." },
+      { name: "created_at", description: "Когда отправлено." },
+    ],
+  },
+  {
+    name: "chat_attachments",
+    description:
+      "Файлы, прикреплённые к сообщениям (и пользовательским, и assistant — для сгенерированных картинок). Текст — content_text, изображения — content_base64 без data: префикса.",
+    ddl: `CREATE TABLE IF NOT EXISTS chat_attachments (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      content_text TEXT,
+      content_base64 TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "UUID вложения." },
+      { name: "message_id", description: "FK на chat_messages.id." },
+      { name: "filename", description: "Имя файла как у пользователя." },
+      { name: "mime_type", description: "MIME-тип." },
+      { name: "size", description: "Размер в байтах." },
+      { name: "kind", description: "text | image — определяет, как подмешивать в промт." },
+      { name: "content_text", description: "Содержимое для текстовых вложений (UTF-8)." },
+      { name: "content_base64", description: "Содержимое для изображений (base64 без data: префикса)." },
+      { name: "created_at", description: "Когда загружено." },
+    ],
+  },
+  {
+    name: "chat_settings",
+    description:
+      "Единственная строка с настройками модуля чата: системный промт и набор разрешённых блоков форматирования. Редактируется в /admin/chat.",
+    ddl: `CREATE TABLE IF NOT EXISTS chat_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      system_prompt TEXT NOT NULL DEFAULT '',
+      enabled_blocks TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "Всегда 1 — настройки одни на инсталляцию." },
+      { name: "system_prompt", description: "Системный промт, который добавляется поверх каждой сессии." },
+      { name: "enabled_blocks", description: "JSON: какие типы markdown-блоков разрешены." },
+      { name: "created_at", description: "Когда строка появилась." },
+      { name: "updated_at", description: "Когда была последняя правка." },
+    ],
+  },
 ];
 
 // Индекс для быстрого чтения последних ошибок.
@@ -361,4 +486,9 @@ export const INDEXES: string[] = [
   // Gmail: по треду и по дате (для UI и для агентов).
   `CREATE INDEX IF NOT EXISTS idx_gmail_messages_thread ON gmail_messages (thread_id, internal_date DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_gmail_messages_date ON gmail_messages (source_id, internal_date DESC)`,
+
+  // AI Chat: списки сессий и сообщений.
+  `CREATE INDEX IF NOT EXISTS idx_chat_sessions_uid ON chat_sessions (uid, updated_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages (session_id, created_at ASC)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_attachments_message ON chat_attachments (message_id)`,
 ];

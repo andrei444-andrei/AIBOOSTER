@@ -47,7 +47,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
   if (!auth.ok) {
     return (
-      <main style={wrap}>
+      <div style={wrap}>
         <h1>AIBOOSTER · /admin</h1>
         <div style={card}>
           <p style={{ marginTop: 0 }}>
@@ -96,7 +96,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             </form>
           )}
         </div>
-      </main>
+      </div>
     );
   }
 
@@ -131,7 +131,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   const adaptersLink = `/admin/adapters${token ? `?token=${encodeURIComponent(token)}` : ""}`;
 
   return (
-    <main style={wrap}>
+    <div style={wrap}>
       <h1 style={{ marginBottom: 4 }}>AIBOOSTER · /admin</h1>
       <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
         Структура и данные БД (read-only). Логи — таблица <span style={code}>app_errors</span>,
@@ -144,6 +144,16 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         </a>{" "}
         — управление источниками контекста (gmail/notion/slack/telegram/gcal).
       </p>
+
+      <section style={{ ...card, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontWeight: 500 }}>Модули:</span>
+        <a
+          href={`/admin/chat?token=${encodeURIComponent(token ?? "")}`}
+          style={{ color: "var(--text)" }}
+        >
+          AI Chat — настройки промта и блоков →
+        </a>
+      </section>
 
       {introspectError && (
         <div style={{ ...card, borderColor: "var(--danger)", color: "var(--danger)" }}>
@@ -247,7 +257,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           ) : null}
         </section>
       )}
-    </main>
+    </div>
   );
 }
 
