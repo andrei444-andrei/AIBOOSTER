@@ -185,6 +185,10 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // ID сессии, для которой нужно пропустить ближайший loadMessages —
+  // используется когда send() сам создал сессию и уже заполнил state
+  // локальными user+assistant сообщениями; иначе useEffect[activeId] их сотрёт.
+  const skipLoadRef = useRef<string | null>(null);
 
   useEffect(() => {
     const v = getOrCreateUid();
@@ -209,6 +213,12 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
   const loadMessages = useCallback(
     async (sessionId: string) => {
       if (!uid) return;
+      // Если сессию только что создал send() и сам обновил state,
+      // повторно тянуть пустой список из БД нельзя — затрёт локальные сообщения.
+      if (skipLoadRef.current === sessionId) {
+        skipLoadRef.current = null;
+        return;
+      }
       setLoadingMessages(true);
       try {
         const r = await fetch(`/api/chat/sessions/${sessionId}`, { headers: { "x-chat-uid": uid } });
@@ -410,6 +420,9 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           return;
         }
         sid = data.session.id as string;
+        // Помечаем сессию как «только что создана здесь» — loadMessages, который
+        // триггерится через useEffect[activeId], пропустит её и не сотрёт state.
+        skipLoadRef.current = sid;
         setSessions((s) => [data.session, ...s]);
         setActiveId(sid);
       } catch (err) {
@@ -661,12 +674,6 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           <div className={styles.headerTitle}>
             {currentSession?.title || "AI Chat"}
           </div>
-
-          <ModelSelector
-            value={encodeSelection(selection)}
-            onChange={(v) => changeSelection(decodeSelection(v))}
-            disabled={sending}
-          />
         </header>
 
         <div ref={scrollerRef} className={styles.scroller}>
@@ -704,6 +711,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           onKeyDown={onKeyDown}
           textareaRef={textareaRef}
           sending={sending}
+          selectionValue={encodeSelection(selection)}
+          onChangeSelection={(v) => changeSelection(decodeSelection(v))}
         />
       </main>
     </div>
@@ -909,6 +918,8 @@ function Composer({
   onKeyDown,
   textareaRef,
   sending,
+  selectionValue,
+  onChangeSelection,
 }: {
   input: string;
   setInput: (s: string) => void;
@@ -920,52 +931,66 @@ function Composer({
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   sending: boolean;
+  selectionValue: string;
+  onChangeSelection: (v: string) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const dragCounter = useRef(0);
 
   return (
-    <div
-      className={`${styles.composer} ${dragOver ? styles.dragOver : ""}`}
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragOver(false);
-        onAddFiles(e.dataTransfer.files);
-      }}
-    >
-      {attachments.length > 0 && (
-        <div className={styles.composerAttachments}>
-          {attachments.map((a, i) => (
-            <div key={i} className={styles.composerChip}>
-              {a.kind === "image" && a.content_base64 ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={`data:${a.mime_type};base64,${a.content_base64}`}
-                  alt={a.filename}
-                  className={styles.composerChipImg}
-                />
-              ) : (
-                <span className={styles.composerChipIcon}>📄</span>
-              )}
-              <span className={styles.composerChipName}>{a.filename}</span>
-              <button
-                type="button"
-                className={styles.composerChipX}
-                onClick={() => onRemoveAttachment(i)}
-                aria-label="Убрать вложение"
-              >
-                ×
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className={styles.composerInputRow}>
+    <div className={styles.composerOuter}>
+      <div
+        className={`${styles.composer} ${dragOver ? styles.dragOver : ""}`}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          dragCounter.current += 1;
+          if (e.dataTransfer.types?.includes("Files")) setDragOver(true);
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+        }}
+        onDragLeave={() => {
+          dragCounter.current -= 1;
+          if (dragCounter.current <= 0) {
+            dragCounter.current = 0;
+            setDragOver(false);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          dragCounter.current = 0;
+          setDragOver(false);
+          onAddFiles(e.dataTransfer.files);
+        }}
+      >
+        {attachments.length > 0 && (
+          <div className={styles.composerAttachments}>
+            {attachments.map((a, i) => (
+              <div key={i} className={styles.composerChip}>
+                {a.kind === "image" && a.content_base64 ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`data:${a.mime_type};base64,${a.content_base64}`}
+                    alt={a.filename}
+                    className={styles.composerChipImg}
+                  />
+                ) : (
+                  <span className={styles.composerChipIcon}>📄</span>
+                )}
+                <span className={styles.composerChipName}>{a.filename}</span>
+                <button
+                  type="button"
+                  className={styles.composerChipX}
+                  onClick={() => onRemoveAttachment(i)}
+                  aria-label="Убрать вложение"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           className={styles.textarea}
@@ -975,42 +1000,62 @@ function Composer({
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
         />
-      </div>
-      <div className={styles.composerTools}>
-        <button
-          type="button"
-          className={styles.iconBtn}
-          onClick={() => fileInputRef.current?.click()}
-          disabled={sending}
-          title="Прикрепить файл"
-          aria-label="Прикрепить файл"
-        >
-          📎
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          hidden
-          onChange={(e) => {
-            onAddFiles(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <div className={styles.toolsSpacer} />
-        {sending ? (
-          <button type="button" className={styles.sendBtn} onClick={onStop}>
-            ■ Стоп
-          </button>
-        ) : (
+        <div className={styles.composerTools}>
           <button
             type="button"
-            className={styles.sendBtn}
-            onClick={onSend}
-            disabled={!input.trim() && attachments.length === 0}
+            className={styles.iconBtn}
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sending}
+            title="Прикрепить файл"
+            aria-label="Прикрепить файл"
           >
-            Отправить →
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
           </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              onAddFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+
+          <ModelSelector value={selectionValue} onChange={onChangeSelection} disabled={sending} />
+
+          <div className={styles.toolsSpacer} />
+
+          {sending ? (
+            <button type="button" className={`${styles.sendBtn} ${styles.sendBtnStop}`} onClick={onStop}>
+              <span className={styles.sendBtnIcon}>■</span>
+              <span>Стоп</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={styles.sendBtn}
+              onClick={onSend}
+              disabled={!input.trim() && attachments.length === 0}
+            >
+              <span>Отправить</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M5 12h14" />
+                <path d="m12 5 7 7-7 7" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {dragOver && (
+          <div className={styles.dropOverlay}>
+            <div className={styles.dropOverlayInner}>
+              <div className={styles.dropOverlayIcon}>↓</div>
+              <div>Отпустите, чтобы прикрепить файл</div>
+            </div>
+          </div>
         )}
       </div>
     </div>
