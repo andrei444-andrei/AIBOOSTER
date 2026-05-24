@@ -29,12 +29,12 @@ function run(
     p.on("error", reject);
     p.on("close", (code) => {
       if (code === 0) resolve(Buffer.concat(out));
-      else
-        reject(
-          new Error(
-            `${cmd} exited ${code}: ${Buffer.concat(err).toString().slice(0, 500)}`,
-          ),
-        );
+      else {
+        // ffmpeg выводит ~500 символов баннера версии в самом начале stderr;
+        // реальная ошибка всегда в хвосте, поэтому берём последние 1500 байт.
+        const tail = Buffer.concat(err).toString().slice(-1500).trim();
+        reject(new Error(`${cmd} exited ${code}: ${tail}`));
+      }
     });
   });
 }
