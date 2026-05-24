@@ -9,7 +9,13 @@
 
 import { logError, logServerError } from "../logger";
 import { getAdapter } from "./registry";
-import { parseJsonField, markSourceError, scheduleNextRun, getSource } from "./sources";
+import {
+  parseJsonField,
+  markSourceError,
+  scheduleNextRun,
+  getSource,
+  updateSourceCredentials,
+} from "./sources";
 import {
   claimNextSyncJob,
   finishSyncJob,
@@ -105,6 +111,21 @@ async function runOneJob(args: {
         updateSyncJob({ id: args.jobId, progress: n }).catch(() => undefined);
       },
     });
+
+    // Если адаптер обновил creds (рефреш access_token, ротация ключа) — пишем
+    // до scheduleNextRun, чтобы следующий запуск увидел уже свежие данные.
+    // Best-effort: если запись упала, sync уже успешный, не валим всю job'у.
+    if (result.newCreds !== undefined) {
+      try {
+        await updateSourceCredentials(source.id, result.newCreds);
+      } catch (err) {
+        await logServerError(err, "adapters/runner", {
+          where: "persist_refreshed_credentials",
+          source_id: source.id,
+          kind: source.kind,
+        });
+      }
+    }
 
     await finishSyncJob({
       id: args.jobId,

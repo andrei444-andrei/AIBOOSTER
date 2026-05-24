@@ -1,4 +1,4 @@
-import { checkAdminTokenValue } from "@/lib/auth";
+import { resolveAdminAuth } from "@/lib/auth";
 import { listSources } from "@/lib/adapters/sources";
 import { getContextStats } from "@/lib/adapters/stats";
 import { getDb, ensureSchema } from "@/lib/db";
@@ -39,8 +39,9 @@ export default async function AdaptersPage({
   searchParams: Promise<SP>;
 }) {
   const sp = await searchParams;
-  const token = pickStr(sp.token);
-  const auth = checkAdminTokenValue(token);
+  const queryToken = pickStr(sp.token);
+  const { auth, token } = await resolveAdminAuth(queryToken);
+  const loginError = pickStr(sp.login_error);
 
   if (!auth.ok) {
     return (
@@ -48,7 +49,7 @@ export default async function AdaptersPage({
         <h1>AIBOOSTER · /admin/adapters</h1>
         <div style={card}>
           <p style={{ marginTop: 0 }}>
-            Доступ закрыт: <b>{auth.reason}</b>.
+            Доступ закрыт: <b>{loginError ?? auth.reason}</b>.
           </p>
           {auth.status === 503 ? (
             <p style={{ color: "var(--text-secondary)" }}>
@@ -56,11 +57,16 @@ export default async function AdaptersPage({
               на сервере.
             </p>
           ) : (
-            <form method="get" style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <form
+              method="post"
+              action="/api/admin/login?next=/admin/adapters"
+              style={{ display: "flex", gap: 8, marginTop: 8 }}
+            >
               <input
                 type="password"
                 name="token"
                 placeholder="admin token"
+                autoComplete="current-password"
                 style={{
                   flex: 1,
                   padding: "0 12px",

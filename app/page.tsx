@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Card } from "@/components/ui";
 import { MODULES } from "@/lib/modules";
-import { checkAdminTokenValue } from "@/lib/auth";
+import { resolveAdminAuth } from "@/lib/auth";
 import { listSources } from "@/lib/adapters/sources";
 import { getContextStats } from "@/lib/adapters/stats";
 import type { AdapterKind, AdapterSourceRow } from "@/lib/adapters/types";
@@ -61,8 +61,9 @@ export default async function Home({
   searchParams: Promise<SP>;
 }) {
   const sp = await searchParams;
-  const token = pickStr(sp.token) ?? "";
-  const tokenAuthed = checkAdminTokenValue(token).ok;
+  const queryToken = pickStr(sp.token);
+  const { auth } = await resolveAdminAuth(queryToken);
+  const tokenAuthed = auth.ok;
 
   // Все pinned-модули кроме самой Главной и Источников — последние уже выведены
   // отдельной секцией выше, незачем дублировать карточкой.
@@ -87,9 +88,13 @@ export default async function Home({
   const sourcesByKind: Partial<Record<AdapterKind, AdapterSourceRow>> = {};
   for (const s of sources) sourcesByKind[s.kind] = s;
 
-  const adapterHref = tokenAuthed
-    ? `/admin/adapters?token=${encodeURIComponent(token)}`
-    : "/admin/adapters";
+  // Когда auth уже идёт через cookie (resolvedToken был взят из cookie или после
+  // form-логина), `?token=` в URL не нужен. Если же auth провалился — кидаем на
+  // /admin/adapters, там пользователь увидит форму входа.
+  const adapterHref =
+    tokenAuthed && queryToken
+      ? `/admin/adapters?token=${encodeURIComponent(queryToken)}`
+      : "/admin/adapters";
 
   return (
     <main style={{ maxWidth: 920, margin: "0 auto", padding: "96px 32px 64px" }}>

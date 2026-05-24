@@ -88,6 +88,20 @@ export async function setSourceStatus(id: string, status: SourceStatus): Promise
   });
 }
 
+// Переписать credentials — для рантайма (адаптер обновил access_token после
+// OAuth-рефреша). Не трогаем status/cursor/interval — это поля админа/планировщика.
+export async function updateSourceCredentials(
+  id: string,
+  credentials: unknown,
+): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE adapter_sources SET credentials = ?, updated_at = ? WHERE id = ?`,
+    args: [JSON.stringify(credentials), new Date().toISOString(), id],
+  });
+}
+
 // Перепланируем следующий запуск: next_run_at = now + interval_sec.
 // Вызывается воркером в конце успешного sync'а.
 export async function scheduleNextRun(args: {

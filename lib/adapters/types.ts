@@ -52,10 +52,14 @@ export interface AdapterSyncJobRow {
 // Параметризован двумя generic'ами:
 //   Creds — форма JSON в adapter_sources.credentials
 //   Cursor — форма JSON в adapter_sources.cursor
-export interface SyncResult<Cursor> {
+export interface SyncResult<Cursor, Creds = unknown> {
   newCursor: Cursor;
   fetched: number;
   stats?: Record<string, unknown>;
+  // Если адаптер обновил свои credentials (рефреш OAuth access_token, ротация
+  // секрета и т.п.) — возвращает их сюда, runner запишет в БД. Если undefined —
+  // ничего не меняем.
+  newCreds?: Creds;
 }
 
 export interface SyncArgs<Creds, Cursor> {
@@ -72,5 +76,5 @@ export interface Adapter<Creds = unknown, Cursor = unknown> {
   // Pull-цикл. Может выполняться долго; воркер шлёт прогресс через onProgress.
   // Должен быть идемпотентным относительно cursor'а: если cursor совпадает, и
   // ничего нового нет — возвращает { fetched: 0, newCursor: cursor ?? initial }.
-  sync(args: SyncArgs<Creds, Cursor>): Promise<SyncResult<Cursor>>;
+  sync(args: SyncArgs<Creds, Cursor>): Promise<SyncResult<Cursor, Creds>>;
 }
