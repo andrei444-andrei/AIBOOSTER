@@ -153,6 +153,98 @@
   cursor: not-allowed;
 }
 
+.modeGroup {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg);
+}
+.modeBtn {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  padding: 0 12px;
+  height: 32px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.modeBtn:hover:not(.modeBtnActive) {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+.modeBtnActive {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  cursor: default;
+}
+.modeBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Бейдж под ассистентским сообщением */
+.msgMeta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  align-items: center;
+}
+.metaChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.metaChipAuto {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.metaDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.metaDotPro {
+  background: var(--accent);
+}
+
+/* Индикатор стадии стрима: "Думаю...", "Маршрутизация...", "Claude Opus · ресёрч" */
+.streamHint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 4px 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.streamHintPulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: streamPulse 1s ease-in-out infinite;
+}
+@keyframes streamPulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
 .scroller {
   flex: 1;
   overflow-y: auto;

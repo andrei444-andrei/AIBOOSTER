@@ -21,12 +21,38 @@ export function getDb(): Client {
   return _client;
 }
 
-// Самопровижининг схемы: идемпотентно создаём все таблицы и индексы.
+// Самопровижининг схемы: идемпотентно создаём все таблицы и индексы,
+// затем добавляем недостающие колонки (мягкая миграция в стиле «таблица
+// уже могла существовать с прошлой версии — дополним её»).
 // Запускается один раз на процесс (промис кэшируется). Провал не должен
 // валить приложение у вызывающего — оборачивай вызов в try/catch там, где
 // это критично, но сам ensureSchema здесь не глотает ошибку, чтобы её было
 // видно в логах при старте.
 let _schemaReady: Promise<void> | null = null;
+
+// Список добавлений колонок (мягкая миграция). SQLite позволяет
+// ALTER TABLE ADD COLUMN с дефолтом, поэтому это безопасно.
+interface ColumnAddition {
+  table: string;
+  column: string;
+  ddl: string; // полное выражение после ADD COLUMN, включая имя и тип
+}
+
+const COLUMN_MIGRATIONS: ColumnAddition[] = [
+  { table: "chat_sessions", column: "mode", ddl: "mode TEXT NOT NULL DEFAULT 'normal'" },
+  { table: "chat_sessions", column: "model_override", ddl: "model_override TEXT" },
+  { table: "chat_messages", column: "duration_ms", ddl: "duration_ms INTEGER" },
+  { table: "chat_messages", column: "route_meta", ddl: "route_meta TEXT" },
+];
+
+async function hasColumn(table: string, column: string): Promise<boolean> {
+  const db = getDb();
+  const res = await db.execute(`PRAGMA table_info(${table})`);
+  for (const row of res.rows as unknown as Array<{ name: string }>) {
+    if (row.name === column) return true;
+  }
+  return false;
+}
 
 export function ensureSchema(): Promise<void> {
   if (_schemaReady) return _schemaReady;
@@ -38,6 +64,13 @@ export function ensureSchema(): Promise<void> {
     }
     for (const idx of INDEXES) {
       await db.execute(idx);
+    }
+    // Мягкая миграция: добавляем колонки, которых нет в существующих таблицах.
+    for (const m of COLUMN_MIGRATIONS) {
+      const exists = await hasColumn(m.table, m.column);
+      if (!exists) {
+        await db.execute(`ALTER TABLE ${m.table} ADD COLUMN ${m.ddl}`);
+      }
     }
   })();
 

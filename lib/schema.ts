@@ -53,12 +53,14 @@ export const TABLES: TableDef[] = [
   {
     name: "chat_sessions",
     description:
-      "Сессия (один чат). Группируется по uid пользователя (анонимный, из localStorage). Хранит выбранную модель и заголовок.",
+      "Сессия (один чат). Группируется по uid пользователя (анонимный, из localStorage). Хранит режим, явно выбранную пользователем модель (override) и заголовок.",
     ddl: `CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
       uid TEXT NOT NULL,
       title TEXT NOT NULL DEFAULT 'Новый чат',
       model TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'normal',
+      model_override TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
@@ -66,7 +68,9 @@ export const TABLES: TableDef[] = [
       { name: "id", description: "UUID сессии." },
       { name: "uid", description: "Анонимный идентификатор владельца (chat_uid из localStorage)." },
       { name: "title", description: "Заголовок чата (первая строка первого сообщения или ручная)." },
-      { name: "model", description: "Идентификатор модели по умолчанию для сессии (см. MODELS в lib/ai.ts)." },
+      { name: "model", description: "Последняя фактически использованная модель в сессии (для дисплея в сайдбаре)." },
+      { name: "mode", description: "Режим работы: normal | pro. Влияет на выбор моделей и reasoning_effort." },
+      { name: "model_override", description: "NULL = авто-роутинг. Иначе — модель, выбранная пользователем явно (стикает в рамках чата до сброса)." },
       { name: "created_at", description: "Когда создана." },
       { name: "updated_at", description: "Когда было последнее сообщение." },
     ],
@@ -83,6 +87,8 @@ export const TABLES: TableDef[] = [
       model TEXT,
       tokens_prompt INTEGER,
       tokens_completion INTEGER,
+      duration_ms INTEGER,
+      route_meta TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
     columns: [
@@ -93,6 +99,8 @@ export const TABLES: TableDef[] = [
       { name: "model", description: "Какой моделью сгенерировано (для assistant)." },
       { name: "tokens_prompt", description: "Токены промта по отчёту AIMLAPI (если есть)." },
       { name: "tokens_completion", description: "Токены ответа по отчёту AIMLAPI (если есть)." },
+      { name: "duration_ms", description: "Сколько мс заняла генерация ответа (для assistant)." },
+      { name: "route_meta", description: "JSON с решением роутера: category, complexity, source, reasoning_effort, mode." },
       { name: "created_at", description: "Когда отправлено." },
     ],
   },

@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server";
-import { deleteSession, getSession, listMessages, renameSession, setSessionModel, isKnownModel } from "@/lib/chat";
+import {
+  deleteSession,
+  getSession,
+  listMessages,
+  renameSession,
+  setSessionMode,
+  setSessionModelOverride,
+  isKnownModel,
+  isValidMode,
+} from "@/lib/chat";
 import { logServerError } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -43,6 +52,14 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 }
 
+interface PatchBody {
+  title?: string;
+  /** Старое поле — теперь интерпретируем как modelOverride (стик в чате). */
+  model?: string;
+  modelOverride?: string | null;
+  mode?: string;
+}
+
 export async function PATCH(req: Request, ctx: Ctx) {
   const uid = getUid(req);
   if (!uid) {
@@ -52,9 +69,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
     );
   }
   const { id } = await ctx.params;
-  let body: { title?: string; model?: string } = {};
+  let body: PatchBody = {};
   try {
-    body = (await req.json()) as typeof body;
+    body = (await req.json()) as PatchBody;
   } catch {
     return NextResponse.json({ error: { code: "bad_json", message: "invalid JSON" } }, { status: 400 });
   }
@@ -66,8 +83,19 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (typeof body.title === "string") {
       await renameSession(id, uid, body.title);
     }
-    if (typeof body.model === "string" && isKnownModel(body.model)) {
-      await setSessionModel(id, uid, body.model);
+    // modelOverride: явный null = вернуть в auto; строка с известной моделью = стик.
+    if ("modelOverride" in body) {
+      if (body.modelOverride === null) {
+        await setSessionModelOverride(id, uid, null);
+      } else if (typeof body.modelOverride === "string" && isKnownModel(body.modelOverride)) {
+        await setSessionModelOverride(id, uid, body.modelOverride);
+      }
+    } else if (typeof body.model === "string" && isKnownModel(body.model)) {
+      // обратная совместимость: старый клиент шлёт {model: ...}
+      await setSessionModelOverride(id, uid, body.model);
+    }
+    if (typeof body.mode === "string" && isValidMode(body.mode)) {
+      await setSessionMode(id, uid, body.mode);
     }
     return NextResponse.json({ ok: true });
   } catch (err) {

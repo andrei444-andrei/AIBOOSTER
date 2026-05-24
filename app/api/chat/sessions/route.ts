@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { createSession, listSessions, isKnownModel } from "@/lib/chat";
-import { DEFAULT_MODEL } from "@/lib/ai";
+import { createSession, listSessions, isKnownModel, isValidMode } from "@/lib/chat";
 import { logServerError } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -35,6 +34,13 @@ export async function GET(req: Request) {
   }
 }
 
+interface CreateBody {
+  model?: string;
+  mode?: string;
+  modelOverride?: string | null;
+  title?: string;
+}
+
 export async function POST(req: Request) {
   const uid = getUid(req);
   if (!uid) {
@@ -43,16 +49,26 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  let body: { model?: string; title?: string } = {};
+  let body: CreateBody = {};
   try {
-    body = (await req.json()) as typeof body;
+    body = (await req.json()) as CreateBody;
   } catch {
     // пустое тело — OK
   }
-  const model = body.model && isKnownModel(body.model) ? body.model : DEFAULT_MODEL;
-  const title = (body.title ?? "Новый чат").slice(0, 200);
+  const mode = isValidMode(body.mode) ? body.mode : undefined;
+  const modelOverride =
+    body.modelOverride && isKnownModel(body.modelOverride) ? body.modelOverride : null;
+  // body.model — устаревший поле, оставлено для совместимости: если override не задан,
+  // но прилетела явная модель, считаем её override.
+  const fallbackOverride =
+    !modelOverride && body.model && isKnownModel(body.model) ? body.model : null;
+  const title = body.title?.slice(0, 200);
   try {
-    const session = await createSession(uid, model, title);
+    const session = await createSession(uid, {
+      mode,
+      modelOverride: modelOverride ?? fallbackOverride,
+      title,
+    });
     return NextResponse.json({ session });
   } catch (err) {
     const error_id = await logServerError(err, "/api/chat/sessions POST");

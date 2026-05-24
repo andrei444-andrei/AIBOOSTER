@@ -2,7 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./Markdown";
-import { MODEL_OPTIONS, type ModelOption } from "@/lib/chat-client";
+import {
+  MODEL_OPTIONS,
+  MODE_OPTIONS,
+  CATEGORY_META,
+  DEFAULT_MODE,
+  getModelOption,
+  type ChatMode,
+  type ModelOption,
+} from "@/lib/chat-client";
 import styles from "./ChatApp.module.css";
 
 // ─── Типы ────────────────────────────────────────────────────────────
@@ -11,6 +19,8 @@ interface SessionRow {
   id: string;
   title: string;
   model: string;
+  mode: ChatMode;
+  model_override: string | null;
   updated_at: string;
 }
 
@@ -26,6 +36,17 @@ interface Attachment {
   content_base64?: string | null;
 }
 
+interface RouteMeta {
+  category: string;
+  complexity: string;
+  mode: ChatMode;
+  source: "override" | "auto" | "fallback";
+  reason: string;
+  reasoning_effort?: string;
+  uncertain?: boolean;
+  routing_latency_ms?: number;
+}
+
 interface Message {
   id: string;
   role: Role;
@@ -35,6 +56,12 @@ interface Message {
   attachments?: Attachment[];
   streaming?: boolean;
   error?: string | null;
+  tokens_prompt?: number | null;
+  tokens_completion?: number | null;
+  duration_ms?: number | null;
+  route_meta?: RouteMeta | null;
+  /** Дополнительная информация о текущем стриме (для индикатора над контентом). */
+  liveRoute?: RouteMeta | null;
 }
 
 // ─── Утилиты UID ─────────────────────────────────────────────────────
@@ -66,7 +93,6 @@ const IMAGE_MIME = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image
 function classifyFile(file: File): "text" | "image" | null {
   if (IMAGE_MIME.includes(file.type)) return "image";
   if (TEXT_MIME_PREFIXES.some((p) => file.type.startsWith(p))) return "text";
-  // фолбэк по расширению
   const ext = file.name.split(".").pop()?.toLowerCase();
   if (ext && TEXT_EXT.includes(ext)) return "text";
   return null;
@@ -87,12 +113,29 @@ function readAsBase64(file: File): Promise<string> {
     r.onerror = () => reject(r.error);
     r.onload = () => {
       const s = String(r.result ?? "");
-      // data:image/png;base64,XXXX → XXXX
       const idx = s.indexOf(",");
       resolve(idx >= 0 ? s.slice(idx + 1) : s);
     };
     r.readAsDataURL(file);
   });
+}
+
+// ─── Форматирование ──────────────────────────────────────────────────
+
+const AUTO_VALUE = "__auto__";
+
+function formatDuration(ms?: number | null): string | null {
+  if (!ms || ms <= 0) return null;
+  if (ms < 1000) return `${ms} мс`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} с`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.round((ms % 60_000) / 1000);
+  return `${m}м ${s}с`;
+}
+
+function categoryLabel(c?: string | null): string | null {
+  if (!c) return null;
+  return CATEGORY_META[c as keyof typeof CATEGORY_META]?.label ?? c;
 }
 
 // ─── Компонент ───────────────────────────────────────────────────────
@@ -103,7 +146,10 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [model, setModel] = useState<string>(MODEL_OPTIONS[0].id);
+  // Состояние режима и override-модели. Авто = модель не зафиксирована, роутер выбирает сам.
+  // Эти значения хранятся per-chat в БД. Здесь — локальное зеркало для активной сессии.
+  const [mode, setMode] = useState<ChatMode>(DEFAULT_MODE);
+  const [modelOverride, setModelOverride] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -147,7 +193,10 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           return;
         }
         setMessages(data.messages ?? []);
-        if (data.session?.model) setModel(data.session.model);
+        if (data.session) {
+          setMode((data.session.mode as ChatMode) ?? DEFAULT_MODE);
+          setModelOverride(data.session.model_override ?? null);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -186,7 +235,9 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       const r = await fetch("/api/chat/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-chat-uid": uid },
-        body: JSON.stringify({ model }),
+        // Новый чат всегда стартует в Auto + текущем режиме.
+        // Принудительно сбрасываем override, чтобы «следующий чат» открылся в Auto.
+        body: JSON.stringify({ mode, modelOverride: null }),
       });
       const data = await r.json();
       if (!r.ok) {
@@ -198,10 +249,11 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       setMessages([]);
       setInput("");
       setPendingAttachments([]);
+      setModelOverride(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [uid, model]);
+  }, [uid, mode]);
 
   const deleteChat = useCallback(
     async (id: string) => {
@@ -226,18 +278,41 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     [uid, activeId],
   );
 
-  const changeModel = useCallback(
-    async (next: string) => {
-      setModel(next);
+  // ─── Переключатели Pro/Обычный и Auto/Модель ──────────────────────
+
+  const changeMode = useCallback(
+    async (next: ChatMode) => {
+      if (next === mode) return;
+      setMode(next);
       if (activeId && uid) {
         try {
           await fetch(`/api/chat/sessions/${activeId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json", "x-chat-uid": uid },
-            body: JSON.stringify({ model: next }),
+            body: JSON.stringify({ mode: next }),
           });
         } catch {
-          // тихо — UI уже переключил
+          /* тихо — UI уже переключился, при следующей отправке улетит в body */
+        }
+      }
+    },
+    [mode, activeId, uid],
+  );
+
+  const changeModel = useCallback(
+    async (next: string) => {
+      // AUTO_VALUE → сбрасываем override и возвращаемся к роутеру.
+      const newOverride = next === AUTO_VALUE ? null : next;
+      setModelOverride(newOverride);
+      if (activeId && uid) {
+        try {
+          await fetch(`/api/chat/sessions/${activeId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", "x-chat-uid": uid },
+            body: JSON.stringify({ modelOverride: newOverride }),
+          });
+        } catch {
+          /* тихо */
         }
       }
     },
@@ -306,7 +381,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
         const r = await fetch("/api/chat/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-chat-uid": uid },
-          body: JSON.stringify({ model }),
+          body: JSON.stringify({ mode, modelOverride }),
         });
         const data = await r.json();
         if (!r.ok) {
@@ -336,7 +411,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       content: "",
       created_at: new Date().toISOString(),
       streaming: true,
-      model,
+      model: modelOverride,
+      liveRoute: null,
     };
     setMessages((m) => [...m, userMsgLocal, assistantLocal]);
     setInput("");
@@ -351,7 +427,12 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
         method: "POST",
         signal: controller.signal,
         headers: { "Content-Type": "application/json", "x-chat-uid": uid },
-        body: JSON.stringify({ content: text, model, attachments: userAttachments }),
+        body: JSON.stringify({
+          content: text,
+          mode,
+          modelOverride,
+          attachments: userAttachments,
+        }),
       });
       if (!r.ok || !r.body) {
         const data = await r.json().catch(() => null);
@@ -413,12 +494,11 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       setSending(false);
       abortRef.current = null;
       if (sid) {
-        // обновляем сайдбар (updated_at и заголовок)
         fetchSessions(uid);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, uid, input, model, pendingAttachments, sending, fetchSessions]);
+  }, [activeId, uid, input, mode, modelOverride, pendingAttachments, sending, fetchSessions]);
 
   const handleSseEvent = useCallback((event: string, payload: unknown, assistantLocalId: string) => {
     if (event === "user_message") {
@@ -430,17 +510,44 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
             : m,
         ),
       );
+    } else if (event === "route") {
+      const p = payload as RouteMeta & { model: string };
+      setMessages((arr) =>
+        arr.map((m) =>
+          m.id === assistantLocalId
+            ? { ...m, model: p.model, liveRoute: p }
+            : m,
+        ),
+      );
     } else if (event === "delta") {
       const p = payload as { text: string };
       setMessages((arr) =>
         arr.map((m) => (m.id === assistantLocalId ? { ...m, content: m.content + p.text } : m)),
       );
     } else if (event === "done") {
-      const p = payload as { id: string | null; created_at: string };
+      const p = payload as {
+        id: string | null;
+        created_at: string;
+        model?: string;
+        duration_ms?: number;
+        route?: RouteMeta;
+        usage?: { prompt_tokens: number; completion_tokens: number };
+      };
       setMessages((arr) =>
         arr.map((m) =>
           m.id === assistantLocalId
-            ? { ...m, streaming: false, id: p.id ?? m.id, created_at: p.created_at }
+            ? {
+                ...m,
+                streaming: false,
+                id: p.id ?? m.id,
+                created_at: p.created_at,
+                model: p.model ?? m.model,
+                duration_ms: p.duration_ms ?? null,
+                route_meta: p.route ?? m.route_meta ?? null,
+                tokens_prompt: p.usage?.prompt_tokens ?? null,
+                tokens_completion: p.usage?.completion_tokens ?? null,
+                liveRoute: null,
+              }
             : m,
         ),
       );
@@ -475,6 +582,18 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     },
     [send],
   );
+
+  // Селектор моделей: для нормального режима показываем только доступные в normal,
+  // плюс всегда — текущий override (даже если он deep). В Pro доступны все.
+  const modelOptionsForMode = useMemo<ModelOption[]>(() => {
+    if (mode === "pro") return MODEL_OPTIONS;
+    const base = MODEL_OPTIONS.filter((m) => m.availableInModes.includes("normal"));
+    if (modelOverride && !base.some((m) => m.id === modelOverride)) {
+      const extra = MODEL_OPTIONS.find((m) => m.id === modelOverride);
+      if (extra) return [...base, extra];
+    }
+    return base;
+  }, [mode, modelOverride]);
 
   return (
     <div className={styles.app}>
@@ -529,14 +648,35 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           <div className={styles.headerTitle}>
             {currentSession?.title || "AI Chat"}
           </div>
+
+          {/* Mode toggle (Обычный / Pro) */}
+          <div className={styles.modeGroup} role="tablist" aria-label="Режим">
+            {MODE_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                role="tab"
+                aria-selected={mode === opt.id}
+                className={`${styles.modeBtn} ${mode === opt.id ? styles.modeBtnActive : ""}`}
+                onClick={() => changeMode(opt.id)}
+                disabled={sending}
+                title={`${opt.description}\n${opt.hint}`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           <select
             className={styles.modelSelect}
-            value={model}
+            value={modelOverride ?? AUTO_VALUE}
             onChange={(e) => changeModel(e.target.value)}
             disabled={sending}
-            title="Модель"
+            title={modelOverride ? "Принудительно выбрана модель (стикает в этом чате)" : "Авто-роутер выбирает модель под задачу"}
           >
-            {MODEL_OPTIONS.map((m: ModelOption) => (
+            <option value={AUTO_VALUE}>
+              {mode === "pro" ? "⚡ Auto · Pro" : "⚡ Auto"}
+            </option>
+            {modelOptionsForMode.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
               </option>
@@ -550,8 +690,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
               <div className={styles.welcome}>
                 <h2 style={{ marginBottom: 8 }}>AI Chat</h2>
                 <p style={{ color: "var(--text-secondary)" }}>
-                  Задайте вопрос, прикрепите файлы или картинки. Модель и системный
-                  промт настраиваются в /admin/chat.
+                  Задайте вопрос, прикрепите файлы или картинки. Роутер сам выберет модель —
+                  или выберите вручную: тогда она стикнет в этом чате.
                 </p>
               </div>
             )}
@@ -589,6 +729,11 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
 
 function MessageBlock({ message }: { message: Message }) {
   const isUser = message.role === "user";
+  const route = message.route_meta;
+  const live = message.liveRoute;
+  const showLiveHint = message.streaming && live && !message.content;
+  const showTypeHint = message.streaming && !live && !message.content;
+
   return (
     <div className={`${styles.msgRow} ${isUser ? styles.msgUser : styles.msgAssistant}`}>
       <div className={styles.avatar}>{isUser ? "Ты" : "AI"}</div>
@@ -600,6 +745,21 @@ function MessageBlock({ message }: { message: Message }) {
             ))}
           </div>
         )}
+
+        {/* Подсказка стрима: «Маршрутизирую…» → «Claude Opus · ресёрч · pro» */}
+        {!isUser && showLiveHint && live && (
+          <div className={styles.streamHint}>
+            <span className={styles.streamHintPulse} />
+            <span>{routeLabel(live, message.model)}</span>
+          </div>
+        )}
+        {!isUser && showTypeHint && (
+          <div className={styles.streamHint}>
+            <span className={styles.streamHintPulse} />
+            <span>Маршрутизирую запрос…</span>
+          </div>
+        )}
+
         {isUser ? (
           <div className={styles.userText}>{message.content}</div>
         ) : message.content ? (
@@ -615,7 +775,56 @@ function MessageBlock({ message }: { message: Message }) {
         {message.error && (
           <div className={styles.msgError}>Ошибка: {message.error}</div>
         )}
+
+        {/* Бейдж под завершённым ответом */}
+        {!isUser && !message.streaming && !message.error && message.content && (
+          <MessageMeta message={message} />
+        )}
       </div>
+    </div>
+  );
+}
+
+function routeLabel(route: RouteMeta, model: string | null | undefined): string {
+  const modelLabel = model ? getModelOption(model).label : "Маршрутизирую";
+  const cat = categoryLabel(route.category);
+  const parts = [modelLabel];
+  if (cat) parts.push(cat);
+  if (route.mode === "pro") parts.push("pro");
+  return parts.join(" · ");
+}
+
+function MessageMeta({ message }: { message: Message }) {
+  const modelOption = message.model ? getModelOption(message.model) : null;
+  const route = message.route_meta;
+  const duration = formatDuration(message.duration_ms);
+  const cat = categoryLabel(route?.category);
+  const tokensIn = message.tokens_prompt;
+  const tokensOut = message.tokens_completion;
+  const isPro = route?.mode === "pro";
+
+  return (
+    <div className={styles.msgMeta}>
+      {modelOption && (
+        <span
+          className={`${styles.metaChip} ${route?.source === "auto" ? styles.metaChipAuto : ""}`}
+          title={modelOption.description}
+        >
+          <span className={`${styles.metaDot} ${isPro ? styles.metaDotPro : ""}`} />
+          {modelOption.label}
+        </span>
+      )}
+      {route?.source === "auto" && <span className={styles.metaChip}>⚡ auto</span>}
+      {route?.source === "fallback" && <span className={styles.metaChip}>эвристика</span>}
+      {route?.source === "override" && <span className={styles.metaChip}>вручную</span>}
+      {cat && <span className={styles.metaChip}>{cat}</span>}
+      {isPro && <span className={styles.metaChip}>pro</span>}
+      {duration && <span className={styles.metaChip}>⏱ {duration}</span>}
+      {tokensIn != null && tokensOut != null && (
+        <span className={styles.metaChip} title="prompt / completion tokens">
+          {tokensIn}↑ {tokensOut}↓
+        </span>
+      )}
     </div>
   );
 }

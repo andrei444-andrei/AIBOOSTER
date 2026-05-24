@@ -5,13 +5,23 @@ import {
   MODEL_OPTIONS,
   getModelOption,
   isKnownModel,
+  isValidMode,
   DEFAULT_ENABLED_BLOCKS,
+  DEFAULT_MODE,
+  type ChatMode,
   type EnabledBlocks,
   type ModelOption,
 } from "./chat-client";
 
-export { MODEL_OPTIONS, getModelOption, isKnownModel, DEFAULT_ENABLED_BLOCKS };
-export type { EnabledBlocks, ModelOption };
+export {
+  MODEL_OPTIONS,
+  getModelOption,
+  isKnownModel,
+  isValidMode,
+  DEFAULT_ENABLED_BLOCKS,
+  DEFAULT_MODE,
+};
+export type { ChatMode, EnabledBlocks, ModelOption };
 
 // ─── Типы ────────────────────────────────────────────────────────────
 
@@ -19,7 +29,12 @@ export interface ChatSession {
   id: string;
   uid: string;
   title: string;
+  /** Последняя фактически использованная модель (для дисплея). */
   model: string;
+  /** Режим работы чата. */
+  mode: ChatMode;
+  /** NULL = авто-роутинг. Иначе явный выбор пользователя, стикает в чате. */
+  model_override: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -38,6 +53,18 @@ export interface ChatAttachment {
   created_at: string;
 }
 
+export interface RouteMeta {
+  category: string;
+  complexity: string;
+  mode: ChatMode;
+  source: "override" | "auto" | "fallback";
+  reason: string;
+  reasoning_effort?: string;
+  uncertain?: boolean;
+  /** Сколько мс занял сам роутер (классификатор). */
+  routing_latency_ms?: number;
+}
+
 export interface ChatMessage {
   id: string;
   session_id: string;
@@ -46,6 +73,8 @@ export interface ChatMessage {
   model: string | null;
   tokens_prompt: number | null;
   tokens_completion: number | null;
+  duration_ms: number | null;
+  route_meta: RouteMeta | null;
   created_at: string;
   attachments?: ChatAttachment[];
 }
@@ -61,28 +90,52 @@ export const DEFAULT_SYSTEM_PROMPT = `Ты — AI-ассистент в AIBOOSTE
 
 // ─── Сессии ──────────────────────────────────────────────────────────
 
+export interface CreateSessionOpts {
+  model?: string;
+  mode?: ChatMode;
+  modelOverride?: string | null;
+  title?: string;
+}
+
 export async function createSession(
   uid: string,
-  model: string = DEFAULT_MODEL,
-  title = "Новый чат",
+  opts: CreateSessionOpts = {},
 ): Promise<ChatSession> {
   await ensureSchema();
   const db = getDb();
   const id = randomUUID();
   const now = new Date().toISOString();
+  const mode: ChatMode = opts.mode && isValidMode(opts.mode) ? opts.mode : DEFAULT_MODE;
+  const modelOverride =
+    opts.modelOverride && isKnownModel(opts.modelOverride) ? opts.modelOverride : null;
+  // model — стартовое значение для UI (что писать в сайдбаре до первого ответа).
+  // Если override задан — берём его. Иначе — дефолт.
+  const model = modelOverride ?? (opts.model && isKnownModel(opts.model) ? opts.model : DEFAULT_MODEL);
+  const title = opts.title?.slice(0, 200) ?? "Новый чат";
   await db.execute({
-    sql: `INSERT INTO chat_sessions (id, uid, title, model, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)`,
-    args: [id, uid, title, model, now, now],
+    sql: `INSERT INTO chat_sessions (id, uid, title, model, mode, model_override, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [id, uid, title, model, mode, modelOverride, now, now],
   });
-  return { id, uid, title, model, created_at: now, updated_at: now };
+  return {
+    id,
+    uid,
+    title,
+    model,
+    mode,
+    model_override: modelOverride,
+    created_at: now,
+    updated_at: now,
+  };
 }
+
+const SESSION_COLS = "id, uid, title, model, mode, model_override, created_at, updated_at";
 
 export async function listSessions(uid: string, limit = 100): Promise<ChatSession[]> {
   await ensureSchema();
   const db = getDb();
   const res = await db.execute({
-    sql: `SELECT id, uid, title, model, created_at, updated_at
+    sql: `SELECT ${SESSION_COLS}
           FROM chat_sessions WHERE uid = ?
           ORDER BY updated_at DESC LIMIT ?`,
     args: [uid, limit],
@@ -94,7 +147,7 @@ export async function getSession(id: string, uid: string): Promise<ChatSession |
   await ensureSchema();
   const db = getDb();
   const res = await db.execute({
-    sql: `SELECT id, uid, title, model, created_at, updated_at
+    sql: `SELECT ${SESSION_COLS}
           FROM chat_sessions WHERE id = ? AND uid = ?`,
     args: [id, uid],
   });
@@ -106,7 +159,6 @@ export async function deleteSession(id: string, uid: string): Promise<boolean> {
   const db = getDb();
   const session = await getSession(id, uid);
   if (!session) return false;
-  // удаляем сообщения и вложения тоже — самопровижининг без FK, но логически связано
   await db.execute({
     sql: `DELETE FROM chat_attachments WHERE message_id IN
            (SELECT id FROM chat_messages WHERE session_id = ?)`,
@@ -126,11 +178,36 @@ export async function renameSession(id: string, uid: string, title: string): Pro
   });
 }
 
-export async function setSessionModel(id: string, uid: string, model: string): Promise<void> {
+/** Обновить «последнюю модель», которой ассистент отвечал (для дисплея). */
+export async function setSessionLastModel(id: string, uid: string, model: string): Promise<void> {
   await ensureSchema();
   const db = getDb();
   await db.execute({
     sql: `UPDATE chat_sessions SET model = ?, updated_at = ? WHERE id = ? AND uid = ?`,
+    args: [model, new Date().toISOString(), id, uid],
+  });
+}
+
+/** Установить режим (normal | pro) для сессии. */
+export async function setSessionMode(id: string, uid: string, mode: ChatMode): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE chat_sessions SET mode = ?, updated_at = ? WHERE id = ? AND uid = ?`,
+    args: [mode, new Date().toISOString(), id, uid],
+  });
+}
+
+/** Зафиксировать явно выбранную пользователем модель (стикает в чате). NULL = вернуться в Auto. */
+export async function setSessionModelOverride(
+  id: string,
+  uid: string,
+  model: string | null,
+): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE chat_sessions SET model_override = ?, updated_at = ? WHERE id = ? AND uid = ?`,
     args: [model, new Date().toISOString(), id, uid],
   });
 }
@@ -162,6 +239,8 @@ export async function appendMessage(
     model?: string | null;
     tokensPrompt?: number | null;
     tokensCompletion?: number | null;
+    durationMs?: number | null;
+    routeMeta?: RouteMeta | null;
     attachments?: CreateAttachmentInput[];
   } = {},
 ): Promise<ChatMessage> {
@@ -171,8 +250,8 @@ export async function appendMessage(
   const now = new Date().toISOString();
   await db.execute({
     sql: `INSERT INTO chat_messages
-            (id, session_id, role, content, model, tokens_prompt, tokens_completion, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            (id, session_id, role, content, model, tokens_prompt, tokens_completion, duration_ms, route_meta, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       id,
       sessionId,
@@ -181,6 +260,8 @@ export async function appendMessage(
       opts.model ?? null,
       opts.tokensPrompt ?? null,
       opts.tokensCompletion ?? null,
+      opts.durationMs ?? null,
+      opts.routeMeta ? JSON.stringify(opts.routeMeta) : null,
       now,
     ],
   });
@@ -227,20 +308,56 @@ export async function appendMessage(
     model: opts.model ?? null,
     tokens_prompt: opts.tokensPrompt ?? null,
     tokens_completion: opts.tokensCompletion ?? null,
+    duration_ms: opts.durationMs ?? null,
+    route_meta: opts.routeMeta ?? null,
     created_at: now,
     attachments,
   };
+}
+
+interface ChatMessageRow {
+  id: string;
+  session_id: string;
+  role: ChatRole;
+  content: string;
+  model: string | null;
+  tokens_prompt: number | null;
+  tokens_completion: number | null;
+  duration_ms: number | null;
+  route_meta: string | null;
+  created_at: string;
+}
+
+function parseRouteMeta(raw: string | null): RouteMeta | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as RouteMeta;
+  } catch {
+    return null;
+  }
 }
 
 export async function listMessages(sessionId: string): Promise<ChatMessage[]> {
   await ensureSchema();
   const db = getDb();
   const msgs = await db.execute({
-    sql: `SELECT id, session_id, role, content, model, tokens_prompt, tokens_completion, created_at
+    sql: `SELECT id, session_id, role, content, model, tokens_prompt, tokens_completion, duration_ms, route_meta, created_at
           FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`,
     args: [sessionId],
   });
-  const messages = msgs.rows as unknown as ChatMessage[];
+  const rows = msgs.rows as unknown as ChatMessageRow[];
+  const messages: ChatMessage[] = rows.map((r) => ({
+    id: r.id,
+    session_id: r.session_id,
+    role: r.role,
+    content: r.content,
+    model: r.model,
+    tokens_prompt: r.tokens_prompt,
+    tokens_completion: r.tokens_completion,
+    duration_ms: r.duration_ms,
+    route_meta: parseRouteMeta(r.route_meta),
+    created_at: r.created_at,
+  }));
   if (messages.length === 0) return [];
 
   // подгружаем вложения одним запросом
@@ -270,7 +387,6 @@ export async function getSettings(): Promise<ChatSettings> {
   const row = res.rows[0] as { system_prompt?: string; enabled_blocks?: string; updated_at?: string } | undefined;
 
   if (!row) {
-    // первая инициализация — пишем дефолты
     const now = new Date().toISOString();
     await db.execute({
       sql: `INSERT INTO chat_settings (id, system_prompt, enabled_blocks, created_at, updated_at)
@@ -305,7 +421,6 @@ export async function updateSettings(
   await ensureSchema();
   const db = getDb();
   const now = new Date().toISOString();
-  // upsert: гарантируем строку с id=1
   await db.execute({
     sql: `INSERT INTO chat_settings (id, system_prompt, enabled_blocks, created_at, updated_at)
           VALUES (1, ?, ?, ?, ?)
@@ -341,17 +456,17 @@ export function buildFormattingRules(blocks: EnabledBlocks): string {
   return parts.join(" ");
 }
 
-export function buildSystemPrompt(settings: ChatSettings): string {
+export function buildSystemPrompt(
+  settings: ChatSettings,
+  options: { addon?: string | null } = {},
+): string {
   const head = settings.system_prompt.trim();
   const rules = buildFormattingRules(settings.enabled_blocks);
-  return [head, rules].filter(Boolean).join("\n\n");
+  const addon = options.addon?.trim();
+  return [head, addon, rules].filter(Boolean).join("\n\n");
 }
 
 // ─── Конструктор контента в формате AIMLAPI ──────────────────────────
-//
-// Для multimodal-моделей контент user-сообщения — массив частей
-// [{ type: "text", text }, { type: "image_url", image_url: { url } }, ...].
-// Для не-multimodal моделей картинки игнорируем, всё схлопываем в строку.
 
 export interface BuiltMessage {
   role: ChatRole;
@@ -371,7 +486,6 @@ export function buildMessagesForModel(
     if (m.role === "system") continue;
     const atts = m.attachments ?? [];
 
-    // текстовые вложения — всегда инлайнятся в текст
     const textBlock = atts
       .filter((a) => a.kind === "text" && a.content_text != null)
       .map(
@@ -407,7 +521,6 @@ export function buildMessagesForModel(
   return out;
 }
 
-// Усечение длинных файлов, чтобы не сжечь контекст модели.
 function truncateForPrompt(s: string, limit = 60_000): string {
   if (s.length <= limit) return s;
   return s.slice(0, limit) + `\n\n[…усечено, всего ${s.length} символов]`;

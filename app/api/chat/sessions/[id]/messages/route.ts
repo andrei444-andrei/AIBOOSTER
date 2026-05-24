@@ -5,12 +5,17 @@ import {
   getSession,
   getSettings,
   isKnownModel,
+  isValidMode,
   listMessages,
   renameSession,
-  setSessionModel,
+  setSessionLastModel,
+  setSessionMode,
+  setSessionModelOverride,
+  type RouteMeta,
   type CreateAttachmentInput,
 } from "@/lib/chat";
 import { chatStream, AIError } from "@/lib/ai";
+import { compactRecentHistory, routeRequest } from "@/lib/router";
 import { logServerError } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -37,6 +42,11 @@ interface IncomingAttachment {
 
 interface IncomingBody {
   content: string;
+  /** Если передан и валиден — обновляем mode сессии перед роутингом. */
+  mode?: string;
+  /** Если передан — обновляем model_override сессии. null = вернуть в Auto. */
+  modelOverride?: string | null;
+  /** Устаревшее: старый клиент шлёт явную модель — трактуем как override. */
   model?: string;
   attachments?: IncomingAttachment[];
 }
@@ -84,7 +94,6 @@ function validateAttachments(input: IncomingAttachment[] | undefined): {
       if (typeof a.content_base64 !== "string" || a.content_base64.length === 0) {
         return { ok: false, reason: "attachment.content_base64 required for image" };
       }
-      // base64 → bytes ≈ length * 3/4
       const bytes = Math.floor((a.content_base64.length * 3) / 4);
       if (bytes > MAX_IMAGE_BYTES) {
         return { ok: false, reason: `image "${a.filename}" too large (max ${MAX_IMAGE_BYTES} bytes)` };
@@ -155,11 +164,31 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
 
-  // если модель в body отличается — обновляем и сессию
-  let model = session.model;
-  if (body.model && isKnownModel(body.model) && body.model !== model) {
-    model = body.model;
-    await setSessionModel(id, uid, model);
+  // Принимаем точечные изменения сессии из тела запроса (mode + override).
+  // Это даёт UI право отправить сообщение и одновременно зафиксировать выбор —
+  // без отдельного PATCH-раунда. Все валидаторы — внутри setSession*.
+  let currentMode = session.mode;
+  let currentOverride = session.model_override;
+  if (typeof body.mode === "string" && isValidMode(body.mode) && body.mode !== currentMode) {
+    currentMode = body.mode;
+    await setSessionMode(id, uid, currentMode);
+  }
+  if ("modelOverride" in body) {
+    if (body.modelOverride === null && currentOverride !== null) {
+      currentOverride = null;
+      await setSessionModelOverride(id, uid, null);
+    } else if (
+      typeof body.modelOverride === "string" &&
+      isKnownModel(body.modelOverride) &&
+      body.modelOverride !== currentOverride
+    ) {
+      currentOverride = body.modelOverride;
+      await setSessionModelOverride(id, uid, currentOverride);
+    }
+  } else if (typeof body.model === "string" && isKnownModel(body.model) && body.model !== currentOverride) {
+    // обратная совместимость
+    currentOverride = body.model;
+    await setSessionModelOverride(id, uid, currentOverride);
   }
 
   // Сохраняем сообщение пользователя со вложениями
@@ -175,10 +204,23 @@ export async function POST(req: Request, ctx: Ctx) {
     if (title) await renameSession(id, uid, title);
   }
 
+  // ─── Роутинг ──────────────────────────────────────────────────────
+  const multimodalNeeded = validation.attachments.some((a) => a.kind === "image");
+  const decision = await routeRequest({
+    mode: currentMode,
+    userText: content,
+    overrideModel: currentOverride,
+    multimodalNeeded,
+    recentHistory: compactRecentHistory(
+      history.slice(-5).map((m) => ({ role: m.role, content: m.content })),
+    ),
+  });
+  const chosenModel = decision.model;
+
   // Готовим стрим
   const settings = await getSettings();
-  const systemPrompt = buildSystemPrompt(settings);
-  const aiMessages = buildMessagesForModel(systemPrompt, history, model);
+  const systemPrompt = buildSystemPrompt(settings, { addon: decision.system_addon });
+  const aiMessages = buildMessagesForModel(systemPrompt, history, chosenModel);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -188,29 +230,44 @@ export async function POST(req: Request, ctx: Ctx) {
       };
 
       send("user_message", { id: userMsg.id, created_at: userMsg.created_at });
+      send("route", {
+        model: chosenModel,
+        category: decision.category,
+        complexity: decision.complexity,
+        mode: decision.mode,
+        source: decision.source,
+        reason: decision.reason,
+        routing_latency_ms: decision.routing_latency_ms,
+        uncertain: decision.uncertain ?? false,
+      });
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const aimlOpts: any = {
+        model: chosenModel,
+        messages: aiMessages,
+        max_tokens: decision.max_tokens,
+      };
+      // reasoning_effort — поддерживается gpt-5*. На других моделях AIMLAPI
+      // обычно игнорирует неизвестные поля, но не передаём лишнего.
+      if (decision.reasoning_effort && chosenModel.startsWith("gpt-5")) {
+        aimlOpts.reasoning_effort = decision.reasoning_effort;
+      }
+
+      const t0 = Date.now();
       let acc = "";
       const usageRef: { current: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null } =
         { current: null };
 
       try {
-        await chatStream(
-          {
-            model,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            messages: aiMessages as any,
-            max_tokens: model.startsWith("gpt-5") ? 4000 : 2000,
+        await chatStream(aimlOpts, {
+          onDelta: (text) => {
+            acc += text;
+            send("delta", { text });
           },
-          {
-            onDelta: (text) => {
-              acc += text;
-              send("delta", { text });
-            },
-            onUsage: (u) => {
-              usageRef.current = u;
-            },
+          onUsage: (u) => {
+            usageRef.current = u;
           },
-        );
+        });
       } catch (err) {
         let message = "AI request failed";
         let status: number | undefined;
@@ -222,7 +279,8 @@ export async function POST(req: Request, ctx: Ctx) {
         }
         const error_id = await logServerError(err, "/api/chat/sessions/[id]/messages", {
           session_id: id,
-          model,
+          model: chosenModel,
+          mode: currentMode,
           status,
         });
         send("error", { message, error_id });
@@ -230,31 +288,51 @@ export async function POST(req: Request, ctx: Ctx) {
         return;
       }
 
+      const durationMs = Date.now() - t0;
+
       if (!acc.trim()) {
         const error_id = await logServerError(
           new Error("empty response from model"),
           "/api/chat/sessions/[id]/messages",
-          { session_id: id, model },
+          { session_id: id, model: chosenModel, mode: currentMode },
         );
         send("error", { message: "Модель вернула пустой ответ.", error_id });
         controller.close();
         return;
       }
 
+      const routeMeta: RouteMeta = {
+        category: decision.category,
+        complexity: decision.complexity,
+        mode: decision.mode,
+        source: decision.source,
+        reason: decision.reason,
+        reasoning_effort: decision.reasoning_effort,
+        uncertain: decision.uncertain ?? false,
+        routing_latency_ms: decision.routing_latency_ms,
+      };
+
       const assistantMsg = await appendMessage(id, "assistant", acc, {
-        model,
+        model: chosenModel,
         tokensPrompt: usageRef.current?.prompt_tokens ?? null,
         tokensCompletion: usageRef.current?.completion_tokens ?? null,
+        durationMs,
+        routeMeta,
       }).catch(async (err) => {
         await logServerError(err, "/api/chat/sessions/[id]/messages save assistant", { session_id: id });
         return null;
       });
 
+      // Обновляем «последнюю модель» в сессии — для дисплея в сайдбаре.
+      await setSessionLastModel(id, uid, chosenModel).catch(() => {});
+
       send("done", {
         id: assistantMsg?.id ?? null,
         created_at: assistantMsg?.created_at ?? new Date().toISOString(),
-        model,
+        model: chosenModel,
         usage: usageRef.current,
+        duration_ms: durationMs,
+        route: routeMeta,
       });
       controller.close();
     },
