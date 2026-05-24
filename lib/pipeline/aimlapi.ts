@@ -111,6 +111,11 @@ function findTranslationsArray(parsed: unknown): Array<{ idx: unknown; text?: un
   if (Array.isArray(parsed)) return parsed as Array<{ idx: unknown; text?: unknown }>;
   if (!parsed || typeof parsed !== "object") return null;
   const obj = parsed as Record<string, unknown>;
+  // Если объект сам похож на одну translation-строку — на батче из 1 сегмента
+  // gpt-4o возвращает {"idx": 0, "text": "..."} вместо массива.
+  if ("idx" in obj && ("text" in obj || "translated_text" in obj || "translation" in obj)) {
+    return [obj as { idx: unknown; text?: unknown }];
+  }
   const knownKeys = ["items", "translations", "segments", "data", "result", "results", "output"];
   for (const k of knownKeys) {
     const v = obj[k];
