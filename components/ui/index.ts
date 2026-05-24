@@ -14,3 +14,5 @@ export {
   useToast,
   type ToastOptions,
 } from "./Toast";
+export { Sidebar } from "./Sidebar";
+export { AppShell } from "./AppShell";
