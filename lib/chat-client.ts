@@ -86,25 +86,8 @@ export const MODEL_OPTIONS: ModelOption[] = [
     reasoning: false,
     description: "Быстрый Gemini для коротких задач.",
   },
-  // xAI
-  {
-    id: MODELS.GROK_4,
-    label: "Grok 4.1 Fast Reasoning",
-    vendor: "xAI",
-    multimodal: true,
-    tier: "balanced",
-    reasoning: true,
-    description: "Reasoning-модель xAI 4.1. Быстрая, сильна в математике и логике.",
-  },
-  {
-    id: MODELS.GROK_3,
-    label: "Grok 3",
-    vendor: "xAI",
-    multimodal: false,
-    tier: "balanced",
-    reasoning: false,
-    description: "Предыдущее поколение xAI.",
-  },
+  // xAI: временно отключены — AIMLAPI возвращает 500 на все варианты Grok.
+  // Вернуть, когда найдём корректный формат запроса.
   // DeepSeek
   {
     id: MODELS.DEEPSEEK_R1,
