@@ -1,61 +1,15 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { Button, Card, Input } from "@/components/ui";
 import type { AdapterSourceRow } from "@/lib/adapters/types";
 
-const card: React.CSSProperties = {
-  background: "#12161c",
-  border: "1px solid #232a33",
-  borderRadius: 10,
-  padding: 16,
-  marginBottom: 20,
-};
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: "6px 10px",
-  borderBottom: "1px solid #232a33",
-  fontSize: 13,
-  opacity: 0.7,
-  whiteSpace: "nowrap",
-};
-const td: React.CSSProperties = {
-  padding: "6px 10px",
-  borderBottom: "1px solid #1a1e24",
-  fontSize: 13,
-  verticalAlign: "top",
-};
 const code: React.CSSProperties = {
-  background: "#1a1e24",
-  padding: "1px 5px",
+  background: "var(--bg-subtle)",
+  padding: "1px 6px",
   borderRadius: 4,
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-};
-const btn: React.CSSProperties = {
-  padding: "4px 10px",
-  background: "#1a1e24",
-  border: "1px solid #2c333d",
-  borderRadius: 6,
-  color: "#e6e8eb",
-  cursor: "pointer",
-  fontSize: 12,
-};
-const btnPrimary: React.CSSProperties = {
-  ...btn,
-  background: "#2b6cb0",
-  borderColor: "#2b6cb0",
-  color: "#fff",
-};
-const btnDanger: React.CSSProperties = {
-  ...btn,
-  borderColor: "#7a2b2b",
-};
-const input: React.CSSProperties = {
-  padding: "6px 8px",
-  background: "#0b0d10",
-  border: "1px solid #232a33",
-  borderRadius: 6,
-  color: "#e6e8eb",
-  fontSize: 13,
+  fontFamily: "var(--font-mono)",
+  fontSize: "0.9em",
 };
 
 type Kind = "gmail" | "gcal" | "notion" | "slack" | "telegram";
@@ -66,13 +20,9 @@ interface Integration {
   description: string;
   defaultId: string;
   defaultInterval: number;
-  // Способ подключения:
-  //   'google_oauth' — редирект на /api/oauth/google/start
-  //   'token' — компактная форма ввода токена
-  //   'soon' — заглушка пока нет адаптера
   connect: "google_oauth" | "token" | "soon";
-  tokenLabel?: string; // для connect='token'
-  tokenField?: string; // ключ в credentials JSON
+  tokenLabel?: string;
+  tokenField?: string;
   tokenPlaceholder?: string;
   notes?: string;
 }
@@ -112,7 +62,8 @@ const INTEGRATIONS: Integration[] = [
   {
     kind: "notion",
     title: "Notion",
-    description: "Страницы workspace. Internal Integration Token из настроек Notion.",
+    description:
+      "Страницы workspace. Internal Integration Token из настроек Notion.",
     defaultId: "notion",
     defaultInterval: 1800,
     connect: "token",
@@ -143,6 +94,55 @@ interface RunRow {
   fetched_count: number;
   status: string;
   error_message: string | null;
+}
+
+type Status = "idle" | "syncing" | "error" | "disabled";
+
+function StatusBadge({
+  status,
+}: {
+  status: Status | "not-connected" | "soon";
+}) {
+  const map: Record<string, { label: string; color: string; bg: string }> = {
+    idle: {
+      label: "подключён",
+      color: "var(--success)",
+      bg: "var(--success-bg)",
+    },
+    syncing: {
+      label: "синкается",
+      color: "var(--warning)",
+      bg: "var(--warning-bg)",
+    },
+    error: { label: "ошибка", color: "var(--danger)", bg: "var(--danger-bg)" },
+    disabled: {
+      label: "выкл",
+      color: "var(--text-muted)",
+      bg: "var(--bg-subtle)",
+    },
+    "not-connected": {
+      label: "не подключён",
+      color: "var(--text-muted)",
+      bg: "var(--bg-subtle)",
+    },
+    soon: { label: "скоро", color: "var(--text-muted)", bg: "var(--bg-subtle)" },
+  };
+  const m = map[status];
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        fontWeight: 500,
+        padding: "2px 8px",
+        borderRadius: 999,
+        color: m.color,
+        background: m.bg,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {m.label}
+    </span>
+  );
 }
 
 export default function AdaptersClient({
@@ -182,7 +182,9 @@ export default function AdaptersClient({
     }
     if (!res.ok) {
       const err =
-        (json && typeof json === "object" && "error" in (json as Record<string, unknown>)
+        (json &&
+        typeof json === "object" &&
+        "error" in (json as Record<string, unknown>)
           ? String((json as Record<string, unknown>).error)
           : text) || `${res.status}`;
       throw new Error(err);
@@ -196,7 +198,10 @@ export default function AdaptersClient({
     });
   }
 
-  async function action(id: string, op: "enable" | "disable" | "sync_now" | "reset_cursor") {
+  async function action(
+    id: string,
+    op: "enable" | "disable" | "sync_now" | "reset_cursor",
+  ) {
     setBusy(id + ":" + op);
     setMsg(null);
     try {
@@ -219,10 +224,14 @@ export default function AdaptersClient({
     }
     setBusy(id + ":delete");
     try {
-      await request(`/api/admin/adapters/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await request(`/api/admin/adapters/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
       reload();
     } catch (err) {
-      setMsg(`${id} delete: ${err instanceof Error ? err.message : String(err)}`);
+      setMsg(
+        `${id} delete: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       setBusy(null);
     }
@@ -247,11 +256,13 @@ export default function AdaptersClient({
           credentials: { [integ.tokenField ?? "token"]: value },
         }),
       });
-      // Сразу запускаем первый sync.
-      await request(`/api/admin/adapters/${encodeURIComponent(integ.defaultId)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ action: "sync_now" }),
-      });
+      await request(
+        `/api/admin/adapters/${encodeURIComponent(integ.defaultId)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ action: "sync_now" }),
+        },
+      );
       setTokenInputs((prev) => ({ ...prev, [integ.kind]: "" }));
       setMsg(`${integ.title}: подключён, первый sync запущен`);
       reload();
@@ -262,28 +273,39 @@ export default function AdaptersClient({
     }
   }
 
+  const isError = msg && /ошиб|error|fail/i.test(msg);
+
   return (
     <>
       {msg && (
-        <div
+        <Card
+          padded
           style={{
-            ...card,
-            borderColor: /ошиб|error|fail|ok|подключ|sync/.test(msg)
-              ? msg.includes("error") || msg.includes("ошиб") || msg.includes("fail")
-                ? "#7a2b2b"
-                : "#2b6cb0"
-              : "#2b6cb0",
+            marginBottom: 20,
+            borderColor: isError ? "var(--danger)" : "var(--success)",
+            background: isError ? "var(--danger-bg)" : "var(--success-bg)",
+            color: isError ? "var(--danger)" : "var(--success)",
           }}
         >
           {msg}
-        </div>
+        </Card>
       )}
 
-      <section style={card}>
-        <h2 style={{ marginTop: 0, fontSize: 18 }}>Интеграции</h2>
-        <p style={{ opacity: 0.6, fontSize: 13, marginTop: 0 }}>
-          Подключи сервис — система начнёт читать оттуда контекст и сохранять в БД.
-          Cron <span style={code}>* * * * *</span> синкает каждый источник по его расписанию.
+      <Card padded style={{ marginBottom: 20 }}>
+        <h2 style={{ marginTop: 0, marginBottom: 4, fontSize: 18 }}>
+          Интеграции
+        </h2>
+        <p
+          style={{
+            color: "var(--text-secondary)",
+            fontSize: 13,
+            marginTop: 0,
+            marginBottom: 16,
+          }}
+        >
+          Подключи сервис — система начнёт читать оттуда контекст и сохранять в
+          БД. Cron <span style={code}>* * * * *</span> синкает каждый источник
+          по его расписанию.
         </p>
         <div
           style={{
@@ -295,58 +317,61 @@ export default function AdaptersClient({
           {INTEGRATIONS.map((integ) => {
             const existing = sourcesByKind[integ.kind];
             const connected = !!existing && !!existing.credentials;
+            const status: Status | "not-connected" | "soon" = connected
+              ? (existing!.status as Status)
+              : integ.connect === "soon"
+                ? "soon"
+                : "not-connected";
             return (
               <div
                 key={integ.kind}
                 style={{
-                  background: "#0b0d10",
-                  border: "1px solid #232a33",
-                  borderRadius: 8,
-                  padding: 14,
+                  background: "var(--bg)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-lg)",
+                  padding: 16,
                   display: "flex",
                   flexDirection: "column",
                   gap: 10,
                 }}
               >
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                  <h3 style={{ margin: 0, fontSize: 15 }}>{integ.title}</h3>
-                  {connected ? (
-                    existing!.status === "error" ? (
-                      <span style={{ fontSize: 11, color: "#ff7b72" }}>● ошибка</span>
-                    ) : existing!.status === "syncing" ? (
-                      <span style={{ fontSize: 11, color: "#e3b341" }}>● синкается</span>
-                    ) : existing!.status === "disabled" ? (
-                      <span style={{ fontSize: 11, color: "#999" }}>● выкл</span>
-                    ) : (
-                      <span style={{ fontSize: 11, color: "#7ee787" }}>● подключён</span>
-                    )
-                  ) : integ.connect === "soon" ? (
-                    <span style={{ fontSize: 11, opacity: 0.5 }}>скоро</span>
-                  ) : (
-                    <span style={{ fontSize: 11, opacity: 0.5 }}>не подключён</span>
-                  )}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>
+                    {integ.title}
+                  </h3>
+                  <StatusBadge status={status} />
                 </div>
-                <div style={{ fontSize: 13, opacity: 0.75, lineHeight: 1.4 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: "var(--text-secondary)",
+                    lineHeight: 1.5,
+                  }}
+                >
                   {integ.description}
                 </div>
 
                 {connected && existing && (
-                  <div style={{ fontSize: 12, opacity: 0.6 }}>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
                     последний sync: {fmtTs(existing.last_run_at)}
                     {existing.next_run_at && (
-                      <>
-                        {" "}· следующий: {fmtTs(existing.next_run_at)}
-                      </>
+                      <> · следующий: {fmtTs(existing.next_run_at)}</>
                     )}
                     {existing.last_error && (
-                      <div style={{ color: "#ff7b72", marginTop: 4 }}>
+                      <div style={{ color: "var(--danger)", marginTop: 4 }}>
                         {existing.last_error.slice(0, 160)}
                       </div>
                     )}
                   </div>
                 )}
 
-                {/* Действия */}
                 {!connected && integ.connect === "google_oauth" && (
                   <a
                     href={`/api/oauth/google/start?source_id=${encodeURIComponent(
@@ -354,15 +379,30 @@ export default function AdaptersClient({
                     )}&kind=${encodeURIComponent(
                       integ.kind,
                     )}&token=${encodeURIComponent(token)}`}
-                    style={{ ...btnPrimary, textAlign: "center", textDecoration: "none" }}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "var(--space-2)",
+                      height: 32,
+                      padding: "0 var(--space-4)",
+                      fontSize: "var(--text-base)",
+                      fontWeight: 500,
+                      borderRadius: "var(--radius)",
+                      background: "var(--accent)",
+                      color: "var(--text-on-accent)",
+                      border: "1px solid var(--accent)",
+                      textDecoration: "none",
+                      width: "100%",
+                    }}
                   >
                     Подключить через Google
                   </a>
                 )}
 
                 {!connected && integ.connect === "token" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    <input
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <Input
                       type="password"
                       placeholder={integ.tokenPlaceholder}
                       value={tokenInputs[integ.kind] ?? ""}
@@ -372,33 +412,34 @@ export default function AdaptersClient({
                           [integ.kind]: e.target.value,
                         }))
                       }
-                      style={{ ...input, width: "100%" }}
                     />
-                    <button
-                      style={btnPrimary}
-                      disabled={busy === integ.kind + ":save"}
+                    <Button
+                      variant="primary"
+                      size="md"
+                      loading={busy === integ.kind + ":save"}
                       onClick={() => saveToken(integ)}
                     >
-                      {busy === integ.kind + ":save" ? "..." : `Подключить`}
-                    </button>
+                      Подключить
+                    </Button>
                   </div>
                 )}
 
                 {!connected && integ.connect === "soon" && (
-                  <button disabled style={{ ...btn, opacity: 0.5, cursor: "not-allowed" }}>
-                    скоро
-                  </button>
+                  <Button variant="secondary" size="md" disabled>
+                    Скоро
+                  </Button>
                 )}
 
                 {connected && existing && (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <button
-                      style={btnPrimary}
-                      disabled={busy === existing.id + ":sync_now"}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      loading={busy === existing.id + ":sync_now"}
                       onClick={() => action(existing.id, "sync_now")}
                     >
-                      синкнуть сейчас
-                    </button>
+                      Синкнуть сейчас
+                    </Button>
                     {integ.connect === "google_oauth" && (
                       <a
                         href={`/api/oauth/google/start?source_id=${encodeURIComponent(
@@ -406,47 +447,66 @@ export default function AdaptersClient({
                         )}&kind=${encodeURIComponent(
                           existing.kind,
                         )}&token=${encodeURIComponent(token)}`}
-                        style={{ ...btn, textDecoration: "none" }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          height: 28,
+                          padding: "0 var(--space-3)",
+                          fontSize: "var(--text-sm)",
+                          fontWeight: 500,
+                          borderRadius: "var(--radius)",
+                          background: "var(--bg)",
+                          color: "var(--text)",
+                          border: "1px solid var(--border-strong)",
+                          textDecoration: "none",
+                        }}
                       >
-                        переподключить
+                        Переподключить
                       </a>
                     )}
                     {existing.status === "disabled" ? (
-                      <button
-                        style={btn}
-                        disabled={busy === existing.id + ":enable"}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={busy === existing.id + ":enable"}
                         onClick={() => action(existing.id, "enable")}
                       >
-                        включить
-                      </button>
+                        Включить
+                      </Button>
                     ) : (
-                      <button
-                        style={btn}
-                        disabled={busy === existing.id + ":disable"}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        loading={busy === existing.id + ":disable"}
                         onClick={() => action(existing.id, "disable")}
                       >
-                        выкл
-                      </button>
+                        Выкл
+                      </Button>
                     )}
-                    <button
-                      style={btnDanger}
-                      disabled={busy === existing.id + ":delete"}
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      loading={busy === existing.id + ":delete"}
                       onClick={() => removeSource(existing.id)}
                     >
-                      отключить
-                    </button>
+                      Отключить
+                    </Button>
                   </div>
                 )}
               </div>
             );
           })}
         </div>
-      </section>
+      </Card>
 
-      <section style={card}>
-        <h2 style={{ marginTop: 0, fontSize: 18 }}>Журнал sync'ов</h2>
+      <Card padded>
+        <h2 style={{ marginTop: 0, marginBottom: 12, fontSize: 18 }}>
+          Журнал sync&apos;ов
+        </h2>
         {recentRuns.length === 0 ? (
-          <p style={{ opacity: 0.6 }}>Пока пусто — подключи источник.</p>
+          <p style={{ color: "var(--text-muted)", margin: 0 }}>
+            Пока пусто — подключи источник.
+          </p>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse", width: "100%" }}>
@@ -469,12 +529,30 @@ export default function AdaptersClient({
                       <span style={code}>{r.source_id}</span>
                     </td>
                     <td style={td}>{r.kind}</td>
-                    <td style={{ ...td, color: r.status === "error" ? "#ff7b72" : "#7ee787" }}>
+                    <td
+                      style={{
+                        ...td,
+                        color:
+                          r.status === "error"
+                            ? "var(--danger)"
+                            : "var(--success)",
+                        fontWeight: 500,
+                      }}
+                    >
                       {r.status}
                     </td>
                     <td style={td}>{r.fetched_count}</td>
-                    <td style={td}>{r.duration_ms != null ? r.duration_ms + "ms" : "—"}</td>
-                    <td style={{ ...td, color: "#ff7b72", maxWidth: 320, fontSize: 12 }}>
+                    <td style={td}>
+                      {r.duration_ms != null ? r.duration_ms + "ms" : "—"}
+                    </td>
+                    <td
+                      style={{
+                        ...td,
+                        color: "var(--danger)",
+                        maxWidth: 320,
+                        fontSize: 12,
+                      }}
+                    >
                       {r.error_message
                         ? r.error_message.length > 160
                           ? r.error_message.slice(0, 160) + "…"
@@ -487,10 +565,26 @@ export default function AdaptersClient({
             </table>
           </div>
         )}
-      </section>
+      </Card>
     </>
   );
 }
+
+const th: React.CSSProperties = {
+  textAlign: "left",
+  padding: "8px 12px",
+  borderBottom: "1px solid var(--border)",
+  fontSize: 12,
+  color: "var(--text-muted)",
+  fontWeight: 500,
+  whiteSpace: "nowrap",
+};
+const td: React.CSSProperties = {
+  padding: "8px 12px",
+  borderBottom: "1px solid var(--border)",
+  fontSize: 13,
+  verticalAlign: "top",
+};
 
 function fmtTs(s: string | null | undefined): string {
   if (!s) return "—";
