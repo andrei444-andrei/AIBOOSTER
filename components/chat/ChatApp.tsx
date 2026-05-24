@@ -575,6 +575,27 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       setMessages((arr) =>
         arr.map((m) => (m.id === assistantLocalId ? { ...m, content: m.content + p.text } : m)),
       );
+    } else if (event === "image") {
+      const p = payload as { base64: string; mime: string };
+      setMessages((arr) =>
+        arr.map((m) =>
+          m.id === assistantLocalId
+            ? {
+                ...m,
+                attachments: [
+                  ...(m.attachments ?? []),
+                  {
+                    filename: `image-${(m.attachments?.length ?? 0) + 1}.png`,
+                    mime_type: p.mime,
+                    size: Math.floor((p.base64.length * 3) / 4),
+                    kind: "image",
+                    content_base64: p.base64,
+                  },
+                ],
+              }
+            : m,
+        ),
+      );
     } else if (event === "done") {
       const p = payload as {
         id: string | null;
@@ -810,8 +831,20 @@ function MessageBlock({ message }: { message: Message }) {
 
   // assistant
   const live = message.liveRoute;
-  const isThinking = message.streaming && !message.content;
-  const hintText = live ? routeLabel(live, message.model) : "Маршрутизирую запрос";
+  const hasAttachments = (message.attachments?.length ?? 0) > 0;
+  const isImageCategory = message.route_meta?.category === "image" || live?.category === "image";
+  // Пока стримим:
+  // - текстовая категория: показываем "thinking" пока нет content
+  // - image-категория: показываем "Рисую…" пока нет attachments
+  const isThinking =
+    message.streaming &&
+    !message.content &&
+    !hasAttachments;
+  const hintText = isImageCategory
+    ? `Рисую · ${message.model ? getModelOption(message.model).label : "image-модель"}`
+    : live
+      ? routeLabel(live, message.model)
+      : "Маршрутизирую запрос";
 
   return (
     <div className={styles.msgAssistant} data-msg-id={message.id}>
@@ -828,15 +861,23 @@ function MessageBlock({ message }: { message: Message }) {
           </div>
         ) : null}
 
-        {message.content && <Markdown source={message.content} />}
-        {message.streaming && message.content && (
+        {hasAttachments && (
+          <div className={styles.assistantImages}>
+            {message.attachments!.map((a, i) => (
+              <AttachmentChip key={a.id ?? i} attachment={a} />
+            ))}
+          </div>
+        )}
+
+        {message.content && !isImageCategory && <Markdown source={message.content} />}
+        {message.streaming && message.content && !isImageCategory && (
           <span className={styles.streamCursor} aria-hidden>▍</span>
         )}
         {message.error && (
           <div className={styles.msgError}>Ошибка: {message.error}</div>
         )}
 
-        {!message.streaming && !message.error && message.content && (
+        {!message.streaming && !message.error && (message.content || hasAttachments) && (
           <MessageMeta message={message} />
         )}
       </div>

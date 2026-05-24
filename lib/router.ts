@@ -53,6 +53,9 @@ const SYSTEM_ADDONS: Record<TaskCategory, string> = {
     "Это задача анализа. Раздели ответ на: что в данных → ключевые выводы → риски → следующие шаги. Будь конкретен, опирайся только на предоставленные данные.",
   strategy:
     "Это стратегическая задача. Дай 2–3 варианта с pro/con каждого, заверши явной рекомендацией и причинами. Не уклоняйся от выбора.",
+  // image-категория не использует system addon — текст пользователя идёт
+  // напрямую в image-gen API как prompt.
+  image: "",
 };
 
 // ─── Авто-классификация через Gemini Flash ──────────────────────────
@@ -64,7 +67,7 @@ interface ClassifierOutput {
 }
 
 const CLASSIFIER_SYSTEM = `Ты — классификатор задач для AI-чата. Получаешь последнее сообщение пользователя и краткий контекст. Возвращаешь СТРОГО JSON:
-{"category": "<quick|research|code|analyze|strategy>", "complexity": "<low|medium|high>", "reason": "<до 80 символов на русском>"}
+{"category": "<quick|research|code|analyze|strategy|image>", "complexity": "<low|medium|high>", "reason": "<до 80 символов на русском>"}
 
 Категории:
 - quick: короткий фактический вопрос, уточнение, перевод, определение
@@ -72,6 +75,7 @@ const CLASSIFIER_SYSTEM = `Ты — классификатор задач для
 - code: написать/починить/объяснить код, debug, рефакторинг, ревью
 - analyze: разобрать данные, документ, логи, дать выводы по предоставленному
 - strategy: продумать варианты, принять решение, план, креатив, бизнес-выбор
+- image: «нарисуй», «сгенерируй картинку», «изображение / фотография / иллюстрация / арт / постер X», просьба создать визуал
 
 Complexity:
 - low: можно ответить за 1–2 абзаца без глубокой работы
@@ -151,7 +155,14 @@ async function classify(
 }
 
 function isCategory(v: unknown): v is TaskCategory {
-  return v === "quick" || v === "research" || v === "code" || v === "analyze" || v === "strategy";
+  return (
+    v === "quick" ||
+    v === "research" ||
+    v === "code" ||
+    v === "analyze" ||
+    v === "strategy" ||
+    v === "image"
+  );
 }
 function isComplexity(v: unknown): v is Complexity {
   return v === "low" || v === "medium" || v === "high";
@@ -161,6 +172,10 @@ function isComplexity(v: unknown): v is Complexity {
 
 function heuristicClassify(userText: string): ClassifierOutput {
   const t = userText.toLowerCase();
+  // Image-генерация: глагол создания + объект. Image-проверка идёт первой,
+  // потому что «нарисуй стратегию выхода» — это про картинку, не про strategy.
+  const looksImage = /(нарисуй|нарисует|сгенерируй картинк|сгенерируй изображени|сделай картинк|создай картинк|изображени[ея] |фотографи[ея] |иллюстрац|постер|обложк|логотип|арт|wallpaper)/i.test(t)
+    || /\b(draw|generate (an?|the) image|picture of|image of|photo of|illustration of|render of|poster of)\b/i.test(t);
   const hasCode = /(код|ошибк|исключени)/i.test(t)
     || /\b(code|function|class|bug|exception|stack ?trace|typescript|javascript|python|sql|api|endpoint)\b/i.test(t)
     || /```/.test(userText)
@@ -173,7 +188,8 @@ function heuristicClassify(userText: string): ClassifierOutput {
     || /\b(strategy|plan|recommend|tradeoff|trade-off)\b/i.test(t);
 
   let category: TaskCategory = "quick";
-  if (hasCode) category = "code";
+  if (looksImage) category = "image";
+  else if (hasCode) category = "code";
   else if (looksStrategy) category = "strategy";
   else if (looksResearch) category = "research";
   else if (looksAnalyze) category = "analyze";

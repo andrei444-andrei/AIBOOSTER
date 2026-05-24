@@ -15,7 +15,7 @@ import {
   type RouteMeta,
   type CreateAttachmentInput,
 } from "@/lib/chat";
-import { chatStream, AIError } from "@/lib/ai";
+import { chatStream, generateImage, AIError } from "@/lib/ai";
 import { compactRecentHistory, routeRequest } from "@/lib/router";
 import { logServerError } from "@/lib/logger";
 
@@ -258,6 +258,87 @@ export async function POST(req: Request, ctx: Ctx) {
         uncertain: decision.uncertain ?? false,
       });
 
+      // ── Ветка image: вызываем images/generations, сохраняем картинку как attachment
+      if (decision.category === "image") {
+        const t0 = Date.now();
+        try {
+          const images = await generateImage({
+            model: chosenModel,
+            prompt: content,
+            n: 1,
+          });
+          const durationMs = Date.now() - t0;
+          const caption = `Готово · ${getModelLabel(chosenModel)}`;
+          const attachmentsToSave = images.map((img, idx) => ({
+            filename: `generated-${Date.now()}-${idx + 1}.png`,
+            mime_type: img.mime,
+            size: Math.floor((img.base64.length * 3) / 4),
+            kind: "image" as const,
+            content_base64: img.base64,
+          }));
+
+          const assistantMsg = await appendMessage(id, "assistant", caption, {
+            model: chosenModel,
+            durationMs,
+            routeMeta: {
+              category: decision.category,
+              complexity: decision.complexity,
+              source: decision.source,
+              reason: decision.reason,
+              reasoning_effort: decision.reasoning_effort,
+              uncertain: decision.uncertain ?? false,
+              routing_latency_ms: decision.routing_latency_ms,
+            },
+            attachments: attachmentsToSave,
+          }).catch(async (err) => {
+            await logServerError(err, "/api/chat/sessions/[id]/messages save image", { session_id: id });
+            return null;
+          });
+
+          // Стримим изображения клиенту в SSE.
+          for (const img of images) {
+            send("image", { base64: img.base64, mime: img.mime });
+          }
+          // И финальное событие done — клиент закрывает stream.
+          send("done", {
+            id: assistantMsg?.id ?? null,
+            created_at: assistantMsg?.created_at ?? new Date().toISOString(),
+            model: chosenModel,
+            usage: null,
+            duration_ms: durationMs,
+            route: {
+              category: decision.category,
+              complexity: decision.complexity,
+              source: decision.source,
+              reason: decision.reason,
+              reasoning_effort: decision.reasoning_effort,
+              uncertain: decision.uncertain ?? false,
+              routing_latency_ms: decision.routing_latency_ms,
+            },
+            content: caption,
+          });
+          await setSessionLastModel(id, uid, chosenModel).catch(() => {});
+        } catch (err) {
+          let message = "AI image-gen failed";
+          let status: number | undefined;
+          if (err instanceof AIError) {
+            message = err.message;
+            status = err.status;
+          } else if (err instanceof Error) {
+            message = err.message;
+          }
+          const error_id = await logServerError(err, "/api/chat/sessions/[id]/messages image", {
+            session_id: id,
+            model: chosenModel,
+            status,
+          });
+          send("error", { message, error_id });
+        }
+        controller.close();
+        return;
+      }
+
+      // ── Ветка текстовая (chatStream)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const aimlOpts: any = {
         model: chosenModel,
@@ -371,4 +452,11 @@ function isReasoningCapable(modelId: string): boolean {
     modelId.includes("deepseek-reasoner") ||
     modelId.includes("deepseek-thinking")
   );
+}
+
+function getModelLabel(modelId: string): string {
+  // Хорошо бы тянуть из MODEL_OPTIONS, но из server-route это создаст
+  // зависимость; здесь достаточно lookup по последнему сегменту.
+  const last = modelId.split("/").pop() ?? modelId;
+  return last;
 }

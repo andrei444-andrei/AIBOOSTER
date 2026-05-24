@@ -42,6 +42,11 @@ export const MODELS = {
   // DeepSeek V3.1 серии (стабильные, не -exp)
   DEEPSEEK_V3: "deepseek/deepseek-chat-v3.1",
   DEEPSEEK_R1: "deepseek/deepseek-reasoner-v3.1",
+  // Image generation — через /v1/images/generations endpoint
+  IMAGEN_4: "google/imagen-4.0-generate-001",
+  IMAGEN_4_FAST: "google/imagen-4.0-fast-generate-001",
+  FLUX_PRO: "flux-pro/v1.1",
+  DALL_E_3: "dall-e-3",
 } as const;
 
 /** Дефолтная модель для общих задач, когда не выбрана явная. */
@@ -251,4 +256,101 @@ export async function chatText(opts: ChatTextOptions, init?: { signal?: AbortSig
     );
   }
   return text;
+}
+
+// ─── Генерация изображений ──────────────────────────────────────────
+//
+// AIMLAPI поддерживает /v1/images/generations с моделями imagen-4, flux-pro,
+// dall-e-3 и др. Формат ответа близок к OpenAI: { data: [{ url } | { b64_json }] }.
+// Некоторые модели возвращают url (временный, ~1 час), некоторые base64.
+// Нормализуем оба варианта в один — Buffer + mime.
+
+export interface ImageGenOptions {
+  model: string;
+  prompt: string;
+  /** Размер: 1024x1024 (default), 1792x1024, 1024x1792, 512x512. Не все модели поддерживают все размеры. */
+  size?: string;
+  /** Сколько вариантов сгенерировать (default 1). */
+  n?: number;
+}
+
+export interface GeneratedImage {
+  /** base64 без data: префикса. */
+  base64: string;
+  /** MIME-тип (по умолчанию image/png). */
+  mime: string;
+}
+
+interface ImageGenResponse {
+  data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
+  /** Некоторые модели (Imagen) возвращают images вместо data. */
+  images?: Array<{ url?: string; b64_json?: string }>;
+}
+
+/** Скачивает URL и возвращает base64 + MIME. */
+async function fetchImageAsBase64(url: string): Promise<GeneratedImage> {
+  const r = await fetch(url);
+  if (!r.ok) {
+    throw new AIError(`failed to fetch generated image: ${r.status}`, r.status);
+  }
+  const mime = r.headers.get("content-type") ?? "image/png";
+  const buf = Buffer.from(await r.arrayBuffer());
+  return { base64: buf.toString("base64"), mime };
+}
+
+export async function generateImage(
+  opts: ImageGenOptions,
+  init?: { signal?: AbortSignal },
+): Promise<GeneratedImage[]> {
+  const key = getKeyOrThrow();
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    prompt: opts.prompt,
+    n: opts.n ?? 1,
+  };
+  if (opts.size) body.size = opts.size;
+
+  const resp = await fetch(`${BASE_URL}/images/generations`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify(body),
+    signal: init?.signal,
+  });
+
+  if (!resp.ok) {
+    const errBody = await resp.text().catch(() => "");
+    throw new AIError(
+      `AIMLAPI image-gen ${resp.status} ${resp.statusText}`,
+      resp.status,
+      errBody || undefined,
+    );
+  }
+
+  const payload = (await resp.json()) as ImageGenResponse;
+  const items = payload.data ?? payload.images ?? [];
+  if (items.length === 0) {
+    throw new AIError("AIMLAPI image-gen returned empty data array", 502, JSON.stringify(payload));
+  }
+
+  const out: GeneratedImage[] = [];
+  for (const it of items) {
+    if (it.b64_json) {
+      out.push({ base64: it.b64_json, mime: "image/png" });
+    } else if (it.url) {
+      try {
+        out.push(await fetchImageAsBase64(it.url));
+      } catch (err) {
+        // Если одна картинка не скачалась — пропускаем, остальные могут быть валидны.
+        // eslint-disable-next-line no-console
+        console.warn("[image-gen] failed to fetch image:", err);
+      }
+    }
+  }
+  if (out.length === 0) {
+    throw new AIError("AIMLAPI image-gen: none of returned images could be decoded", 502, JSON.stringify(payload));
+  }
+  return out;
 }

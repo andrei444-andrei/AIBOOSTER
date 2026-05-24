@@ -117,7 +117,56 @@ export const MODEL_OPTIONS: ModelOption[] = [
     reasoning: false,
     description: "С поиском по интернету. Используется при ресёрч-задачах.",
   },
+  // Image generation
+  {
+    id: MODELS.IMAGEN_4,
+    label: "Imagen 4",
+    vendor: "Google",
+    multimodal: false,
+    tier: "balanced",
+    reasoning: false,
+    description: "Генерация изображений. Хорошо работает с текстом внутри картинки.",
+  },
+  {
+    id: MODELS.IMAGEN_4_FAST,
+    label: "Imagen 4 Fast",
+    vendor: "Google",
+    multimodal: false,
+    tier: "fast",
+    reasoning: false,
+    description: "Быстрая версия Imagen 4. Меньше времени, чуть проще картинка.",
+  },
+  {
+    id: MODELS.FLUX_PRO,
+    label: "Flux Pro 1.1",
+    vendor: "BlackForestLabs",
+    multimodal: false,
+    tier: "balanced",
+    reasoning: false,
+    description: "Реалистичные сцены, лица, типографика. Эталон 2025.",
+  },
+  {
+    id: MODELS.DALL_E_3,
+    label: "DALL-E 3",
+    vendor: "OpenAI",
+    multimodal: false,
+    tier: "balanced",
+    reasoning: false,
+    description: "Сильна в композиции. Слабее в реализме.",
+  },
 ];
+
+/** Модели, которые работают через /v1/images/generations (а не chat/completions). */
+const IMAGE_MODEL_IDS = new Set<string>([
+  MODELS.IMAGEN_4,
+  MODELS.IMAGEN_4_FAST,
+  MODELS.FLUX_PRO,
+  MODELS.DALL_E_3,
+]);
+
+export function isImageModel(id: string): boolean {
+  return IMAGE_MODEL_IDS.has(id);
+}
 
 export function getModelOption(id: string): ModelOption {
   return MODEL_OPTIONS.find((m) => m.id === id) ?? MODEL_OPTIONS[0];
@@ -133,9 +182,16 @@ export function isKnownModel(id: string): boolean {
 // За каждой категорией закреплены: модель, reasoning_effort, max_tokens —
 // настраивается в /admin/chat (таблица chat_category_routing).
 
-export type TaskCategory = "quick" | "research" | "code" | "analyze" | "strategy";
+export type TaskCategory = "quick" | "research" | "code" | "analyze" | "strategy" | "image";
 
-export const TASK_CATEGORIES: TaskCategory[] = ["quick", "research", "code", "analyze", "strategy"];
+export const TASK_CATEGORIES: TaskCategory[] = [
+  "quick",
+  "research",
+  "code",
+  "analyze",
+  "strategy",
+  "image",
+];
 
 export interface CategoryMeta {
   id: TaskCategory;
@@ -150,10 +206,18 @@ export const CATEGORY_META: Record<TaskCategory, CategoryMeta> = {
   code: { id: "code", label: "Код", icon: "💻", hint: "Написать, починить, объяснить код." },
   analyze: { id: "analyze", label: "Анализ", icon: "📊", hint: "Разобрать данные, документ, логи." },
   strategy: { id: "strategy", label: "Стратегия", icon: "🎯", hint: "Продумать варианты и решения." },
+  image: { id: "image", label: "Картинка", icon: "🎨", hint: "Сгенерировать изображение по описанию." },
 };
 
 export function isTaskCategory(v: unknown): v is TaskCategory {
-  return v === "quick" || v === "research" || v === "code" || v === "analyze" || v === "strategy";
+  return (
+    v === "quick" ||
+    v === "research" ||
+    v === "code" ||
+    v === "analyze" ||
+    v === "strategy" ||
+    v === "image"
+  );
 }
 
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
@@ -176,6 +240,7 @@ export const DEFAULT_CATEGORY_ROUTES: CategoryRoute[] = [
   { category: "code",     model: MODELS.CLAUDE_OPUS,    reasoning_effort: null,   max_tokens: 8000 },
   { category: "analyze",  model: MODELS.GEMINI_PRO,     reasoning_effort: null,   max_tokens: 8000 },
   { category: "strategy", model: MODELS.GPT_5,          reasoning_effort: "high", max_tokens: 8000 },
+  { category: "image",    model: MODELS.IMAGEN_4,       reasoning_effort: null,   max_tokens: 0 },
 ];
 
 // ─── Markdown-блоки ──────────────────────────────────────────────────

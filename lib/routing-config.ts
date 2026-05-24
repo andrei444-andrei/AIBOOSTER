@@ -36,22 +36,25 @@ function rowToRoute(r: RoutingRow): CategoryRoute | null {
 
 let _seeded = false;
 
-/** Заполнить таблицу дефолтами, если она пустая. Идемпотентно. */
+/** Дозаполнить таблицу дефолтами для категорий, которых ещё нет в БД.
+ *  Идемпотентно. Работает и для свежей БД, и для миграции (например,
+ *  добавление новой категории image после релиза с 5 категориями). */
 async function seedRoutesIfEmpty(): Promise<void> {
   if (_seeded) return;
   await ensureSchema();
   const db = getDb();
-  const cnt = await db.execute(`SELECT COUNT(*) as c FROM chat_category_routing`);
-  const c = Number((cnt.rows[0] as unknown as { c: number | string }).c);
-  if (c === 0) {
-    const now = new Date().toISOString();
-    for (const r of DEFAULT_CATEGORY_ROUTES) {
-      await db.execute({
-        sql: `INSERT INTO chat_category_routing (category, model, reasoning_effort, max_tokens, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?)`,
-        args: [r.category, r.model, r.reasoning_effort, r.max_tokens, now, now],
-      });
-    }
+  const existing = await db.execute(`SELECT category FROM chat_category_routing`);
+  const have = new Set<string>(
+    (existing.rows as unknown as Array<{ category: string }>).map((r) => r.category),
+  );
+  const now = new Date().toISOString();
+  for (const r of DEFAULT_CATEGORY_ROUTES) {
+    if (have.has(r.category)) continue;
+    await db.execute({
+      sql: `INSERT INTO chat_category_routing (category, model, reasoning_effort, max_tokens, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [r.category, r.model, r.reasoning_effort, r.max_tokens, now, now],
+    });
   }
   _seeded = true;
 }
