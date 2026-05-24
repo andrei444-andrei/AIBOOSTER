@@ -152,6 +152,39 @@ Complexity:
 
 Только JSON, никакого текста вокруг.`;
 
+/** Вытащить первый JSON-объект из произвольной строки. Модели любят добавлять
+ *  префикс ("Конечно, вот JSON:") или обернуть в ```json ... ``` — режем всё это. */
+function extractJsonObject(s: string): string | null {
+  // приоритет: первый блок ```json ... ``` (если есть)
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence && fence[1]) {
+    const inner = fence[1].trim();
+    if (inner.startsWith("{")) return inner;
+  }
+  // фолбэк: первая `{` до последней `}` со сбалансированными скобками
+  const start = s.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 async function classify(
   userText: string,
   recentHistory: string,
@@ -165,15 +198,21 @@ async function classify(
         model: MODELS.GEMINI_FLASH,
         system: CLASSIFIER_SYSTEM,
         user: prompt,
-        max_tokens: 200,
+        // Gemini Flash тратит часть бюджета на скрытые reasoning-токены —
+        // ставим достаточно, чтобы хватило и на них, и на короткий JSON.
+        max_tokens: 1200,
         temperature: 0,
       },
       // короткий таймаут — если роутер тупит, идём на эвристику
       { signal: AbortSignal.timeout(8000) },
     );
-    // некоторые модели возвращают код-блок ```json ... ```
-    const cleaned = raw.trim().replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
-    const parsed = JSON.parse(cleaned) as ClassifierOutput;
+    const jsonStr = extractJsonObject(raw);
+    if (!jsonStr) {
+      // eslint-disable-next-line no-console
+      console.warn("[router] classifier returned non-JSON:", raw.slice(0, 200));
+      return null;
+    }
+    const parsed = JSON.parse(jsonStr) as ClassifierOutput;
     if (!isCategory(parsed.category) || !isComplexity(parsed.complexity)) return null;
     return {
       category: parsed.category,
@@ -181,9 +220,8 @@ async function classify(
       reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 120) : "",
     };
   } catch (err) {
-    if (err instanceof AIError) {
-      // молча — упадём на эвристический фолбэк
-    }
+    // eslint-disable-next-line no-console
+    console.warn("[router] classifier failed:", err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -199,18 +237,26 @@ function isComplexity(v: unknown): v is Complexity {
 
 function heuristicClassify(userText: string): ClassifierOutput {
   const t = userText.toLowerCase();
-  const hasCode = /\b(code|код|function|class|bug|ошибк|exception|stack ?trace|typescript|javascript|python|sql)\b/i.test(userText)
+  // JS \b некорректно работает с кириллицей, поэтому для русских корней
+  // не ставим \b — ищем подстроки. Для латинских ключевых слов оставляем \b.
+  const hasCode = /(код|ошибк|исключени)/i.test(t)
+    || /\b(code|function|class|bug|exception|stack ?trace|typescript|javascript|python|sql|api|endpoint)\b/i.test(t)
     || /```/.test(userText)
     || /^\s*(import|from|const|let|var|function|def|class)\b/m.test(userText);
-  const looksResearch = /\b(найди|поиск|сравни|источник|recent|latest|новости|news|статьи|article|кто такой|что такое)\b/i.test(userText);
-  const looksAnalyze = /\b(проанализир|разбери|оцен|разобрать|analyze|analyse|metrics|логи?\b)/i.test(userText);
-  const looksStrategy = /\b(стратеги|план|варианты|решени|выбер|должен ли|стоит ли|recommend|план)\b/i.test(userText);
+  const looksResearch = /(найди|найти|поиск|сравни|источник|новост|статьи?|кто такой|что такое)/i.test(t)
+    || /\b(recent|latest|news|article|google|search)\b/i.test(t);
+  const looksAnalyze = /(проанализир|разбери|разобрат|оцени|сделай разбор|метрик|логи?)/i.test(t)
+    || /\b(analyze|analyse|metrics|breakdown)\b/i.test(t);
+  // Корни: выбр (выбрать/выбор), вариант, стратеги, план, решени, рекоменд,
+  // плюс «что лучше» и «стоит ли».
+  const looksStrategy = /(стратеги|план|вариант|решени|выбр|выбор|рекоменд|что лучше|стоит ли|должен ли|посовет)/i.test(t)
+    || /\b(strategy|plan|recommend|tradeoff|trade-off)\b/i.test(t);
 
   let category: TaskCategory = "quick";
   if (hasCode) category = "code";
+  else if (looksStrategy) category = "strategy";
   else if (looksResearch) category = "research";
   else if (looksAnalyze) category = "analyze";
-  else if (looksStrategy) category = "strategy";
   else if (t.length > 280) category = "analyze";
 
   const complexity: Complexity = t.length < 80 ? "low" : t.length < 400 ? "medium" : "high";
