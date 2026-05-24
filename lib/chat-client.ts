@@ -89,12 +89,12 @@ export const MODEL_OPTIONS: ModelOption[] = [
   // xAI
   {
     id: MODELS.GROK_4,
-    label: "Grok 4",
+    label: "Grok 4 Fast Reasoning",
     vendor: "xAI",
     multimodal: true,
-    tier: "deep",
+    tier: "balanced",
     reasoning: true,
-    description: "Думающая модель xAI. Сильна в математике и логике.",
+    description: "Reasoning-модель xAI. Быстрая, сильна в математике и логике.",
   },
   {
     id: MODELS.GROK_3,

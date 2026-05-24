@@ -367,7 +367,7 @@ export async function POST(req: Request, ctx: Ctx) {
 function isReasoningCapable(modelId: string): boolean {
   return (
     modelId.startsWith("gpt-5") ||
-    modelId.startsWith("x-ai/grok-4") ||
+    modelId.includes("grok-4") ||
     modelId.includes("deepseek-reasoner") ||
     modelId.includes("deepseek-thinking")
   );
