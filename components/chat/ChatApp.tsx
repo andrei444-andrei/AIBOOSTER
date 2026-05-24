@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./Markdown";
+import { WebImagesMosaic, type WebImageItem } from "./WebImagesMosaic";
 import {
   MODEL_OPTIONS,
   CATEGORY_META,
@@ -892,13 +893,24 @@ function MessageBlock({ message }: { message: Message }) {
           </div>
         ) : null}
 
-        {hasAttachments && (
-          <div className={isImageCategory ? styles.assistantImages : styles.assistantWebImages}>
-            {message.attachments!.map((a, i) => (
-              <AttachmentChip key={a.id ?? i} attachment={a} />
-            ))}
+        {/* Сгенерированные картинки (image-категория) — крупно, как есть */}
+        {hasAttachments && isImageCategory && (
+          <div className={styles.assistantImages}>
+            {message.attachments!
+              .filter((a) => a.kind === "image" || a.kind === "image_url")
+              .map((a, i) => (
+                <AttachmentChip key={a.id ?? i} attachment={a} />
+              ))}
           </div>
         )}
+        {/* Веб-картинки от research (Perplexity) — адаптивная мозаика + лайтбокс */}
+        {hasAttachments && !isImageCategory && (() => {
+          const webItems: WebImageItem[] = message
+            .attachments!.filter((a) => a.kind === "image_url" && a.content_text)
+            .map((a) => ({ src: a.content_text as string, title: a.filename }));
+          if (webItems.length === 0) return null;
+          return <WebImagesMosaic images={webItems} />;
+        })()}
 
         {message.content && !isImageCategory && <Markdown source={message.content} />}
         {message.streaming && message.content && !isImageCategory && (
