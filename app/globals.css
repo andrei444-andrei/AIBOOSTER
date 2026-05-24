@@ -1,53 +1,55 @@
 :root {
-  /* Surfaces */
-  --bg: #ffffff;
-  --bg-subtle: #f7f7f5;
-  --bg-muted: #efefed;
-  --bg-hover: #f1f1ef;
+  /* Surfaces — warm cream palette (Notion + Cron) */
+  --bg: #FAF9F5;
+  --bg-subtle: #F1EFE8;
+  --bg-muted: #EAE7DC;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --surface: #FFFFFF;
 
   /* Text */
-  --text: #1f1f1f;
-  --text-secondary: #555555;
-  --text-muted: #8c8c8c;
-  --text-placeholder: #a8a8a4;
-  --text-on-accent: #ffffff;
+  --text: #1F1F1E;
+  --text-secondary: #5F5E5A;
+  --text-muted: #888780;
+  --text-placeholder: #B0AFA8;
+  --text-on-accent: #FAF9F5;
 
-  /* Borders */
-  --border: #ebebe9;
-  --border-strong: #d6d6d2;
-  --border-focus: #1f1f1f;
+  /* Borders — hairlines like personal-pl */
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.15);
+  --border-focus: #1F1F1E;
+  --hairline-w: 0.5px;
 
-  /* Accent (graphite) */
-  --accent: #1f1f1f;
+  /* Accent */
+  --accent: #1F1F1E;
   --accent-hover: #000000;
-  --accent-active: #2a2a2a;
+  --accent-active: #2A2A2A;
 
-  /* Status */
-  --success: #2f8a59;
-  --success-bg: #ebf6ef;
-  --warning: #b07a00;
-  --warning-bg: #fbf3e1;
-  --danger: #c0392b;
-  --danger-bg: #fbeae6;
-  --info: #2a6cae;
-  --info-bg: #e8f1fb;
+  /* Status — приглушённые природные тона */
+  --success: #3B6D11;
+  --success-bg: #EAF1DD;
+  --warning: #854F0B;
+  --warning-bg: #F6EAD3;
+  --danger: #A32D2D;
+  --danger-bg: #F5DCDC;
+  --info: #185FA5;
+  --info-bg: #DDE9F5;
 
   /* Typography */
   --font-sans: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 14px;
-  --text-md: 15px;
-  --text-lg: 18px;
-  --text-xl: 24px;
-  --text-2xl: 32px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-md: 16px;
+  --text-lg: 19px;
+  --text-xl: 26px;
+  --text-2xl: 34px;
 
   --leading-tight: 1.2;
   --leading-snug: 1.35;
   --leading-normal: 1.5;
-  --leading-relaxed: 1.6;
+  --leading-relaxed: 1.65;
 
   /* Spacing */
   --space-1: 4px;
@@ -61,20 +63,22 @@
   --space-12: 48px;
   --space-16: 64px;
 
-  /* Radius */
+  /* Radius — softer, premium */
   --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 12px;
+  --radius: 10px;
+  --radius-lg: 14px;
   --radius-full: 999px;
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow: 0 4px 12px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04);
+  /* Shadows — soft, warm */
+  --shadow-sm: 0 1px 2px rgba(20, 20, 0, 0.04);
+  --shadow: 0 4px 12px rgba(20, 20, 0, 0.06), 0 1px 2px rgba(20, 20, 0, 0.03);
+  --shadow-lg: 0 16px 40px rgba(20, 20, 0, 0.10), 0 2px 6px rgba(20, 20, 0, 0.04);
 
-  /* Motion */
-  --transition: 120ms ease;
-  --transition-slow: 200ms ease;
+  /* Motion — стандартный material ease */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --transition: 150ms var(--ease);
+  --transition-slow: 250ms var(--ease);
 }
 
 * {
@@ -108,15 +112,16 @@ h6 {
   font-weight: 600;
   line-height: var(--leading-snug);
   color: var(--text);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
 }
 
 h1 {
   font-size: var(--text-2xl);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
 }
 h2 {
   font-size: var(--text-xl);
+  letter-spacing: -0.02em;
 }
 h3 {
   font-size: var(--text-lg);
@@ -152,8 +157,24 @@ button {
 }
 
 ::selection {
-  background: #1f1f1f;
-  color: #ffffff;
+  background: var(--text);
+  color: var(--bg);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
 /* Utility: visually hidden */

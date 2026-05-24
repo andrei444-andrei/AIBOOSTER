@@ -45,7 +45,7 @@ export default function UxKitPage() {
   }
 
   return (
-    <main style={{ maxWidth: 980, margin: "0 auto", padding: "48px 24px 96px" }}>
+    <div style={{ maxWidth: 980, margin: "0 auto", padding: "48px 24px 96px" }}>
       <header style={{ marginBottom: 32 }}>
         <p
           style={{
@@ -361,7 +361,7 @@ export const MODULES: ModuleEntry[] = [
       <footer style={{ marginTop: 64, color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
         Документ живой. Новые компоненты добавляются сюда после согласования.
       </footer>
-    </main>
+    </div>
   );
 }
 
