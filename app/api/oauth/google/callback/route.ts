@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { logServerError } from "@/lib/logger";
 import { upsertSource, getSource } from "@/lib/adapters/sources";
+import { enqueueJob } from "@/lib/adapters/sync-jobs";
 import {
   exchangeGoogleCode,
   fetchGoogleUserInfo,
@@ -29,7 +30,7 @@ export async function GET(req: Request) {
     return html(`<h1>OAuth callback: bad request</h1><p>code/state отсутствуют</p>`, 400);
   }
 
-  let state: { source_id?: string; kind?: AdapterKind };
+  let state: { source_id?: string; kind?: AdapterKind; return_token?: string };
   try {
     state = JSON.parse(Buffer.from(stateRaw, "base64url").toString("utf8"));
   } catch {
@@ -90,6 +91,26 @@ export async function GET(req: Request) {
         scope: tokens.scope,
       },
     });
+
+    // Сразу ставим первый sync в очередь — пользователь не должен ждать минуту.
+    try {
+      await enqueueJob({ sourceId, kind, jobKind: "pull" });
+    } catch {
+      // не критично, поднимет следующий tick
+    }
+
+    // Возвращаемся обратно на /admin/adapters с flash-сообщением.
+    if (state.return_token) {
+      const redirectUrl = new URL(req.url);
+      redirectUrl.pathname = "/admin/adapters";
+      redirectUrl.search = "";
+      redirectUrl.searchParams.set("token", state.return_token);
+      redirectUrl.searchParams.set(
+        "flash",
+        `${kind === "gmail" ? "Gmail" : "Google Calendar"} подключён${displayName ? ` (${displayName})` : ""}. Первый sync запущен.`,
+      );
+      return NextResponse.redirect(redirectUrl);
+    }
 
     return html(`
       <h1>Google подключён</h1>

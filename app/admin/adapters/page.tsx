@@ -133,6 +133,7 @@ export default async function AdaptersPage({ searchParams }: { searchParams: Pro
         token={token ?? ""}
         sources={sources}
         recentRuns={recentRuns}
+        flash={pickStr(sp.flash) ?? null}
       />
     </main>
   );

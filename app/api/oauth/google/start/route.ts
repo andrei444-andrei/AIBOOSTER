@@ -48,7 +48,16 @@ export async function GET(req: Request) {
 
   try {
     const nonce = randomBytes(16).toString("hex");
-    const payload = JSON.stringify({ source_id: sourceId, kind, nonce });
+    // Сохраняем admin-токен в state, чтобы callback мог редиректить обратно
+    // на /admin/adapters?token=... — без этого пришлось бы вводить токен заново.
+    // Безопасно, потому что state виден только в URL Google и нашем callback'е.
+    const returnToken = new URL(req.url).searchParams.get("token") ?? "";
+    const payload = JSON.stringify({
+      source_id: sourceId,
+      kind,
+      nonce,
+      return_token: returnToken,
+    });
     const state = Buffer.from(payload).toString("base64url");
 
     const authUrl = buildGoogleAuthUrl({
