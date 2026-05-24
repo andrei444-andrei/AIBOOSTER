@@ -1,0 +1,10 @@
+{
+  "actorSpecification": 1,
+  "name": "aibooster-runner",
+  "title": "AIBOOSTER AI Scraper Runner",
+  "version": "0.1",
+  "buildTag": "latest",
+  "input": "./input_schema.json",
+  "dockerfile": "../Dockerfile",
+  "categories": ["AUTOMATION"]
+}

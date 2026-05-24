@@ -1,0 +1,77 @@
+/**
+ * Документация SDK, которая ВНУТРИ runner-актера доступна пользовательскому коду.
+ *
+ * Эта же строка вставляется в system-prompt для LLM. Так гарантируем,
+ * что LLM пишет код только под те функции, которые реально есть в актере.
+ * Если SDK меняется — правится одно место.
+ *
+ * Не редактируй здесь подпись функций без синхронной правки apify-runner/main.js.
+ */
+
+export const SDK_DOCS = `
+# Доступные функции (Helper SDK)
+
+В твоём коде доступны 6 глобальных async-функций. Никаких import — они уже в области видимости.
+
+## http(options) → string
+HTTP-запрос через Apify-прокси (антибот, ротация IP). Возвращает тело ответа как строку.
+Параметры:
+  url       — string, обязательно
+  method    — "GET" | "POST" | ... (по умолчанию GET)
+  headers   — { [k]: string }
+  body      — string | object (если object — автоматически JSON.stringify)
+  proxy     — "datacenter" | "residential" | "none" (по умолчанию "datacenter")
+  timeoutMs — number, по умолчанию 30000
+
+Пример:
+  const html = await http({ url: "https://hh.ru/search?text=python" });
+
+## parse(html) → cheerio.$
+Парсит HTML, возвращает объект cheerio ($-style API как в jQuery).
+Пример:
+  const $ = parse(html);
+  const titles = $(".vacancy-title").map((i, el) => $(el).text().trim()).get();
+
+## save(item | items[]) → void
+Сохраняет одну запись или массив в результирующий dataset.
+Можно вызывать несколько раз — записи аккумулируются.
+Пример:
+  await save({ title: "...", salary: "..." });
+  await save([{ ... }, { ... }]);
+
+## log(...args) → void
+Пишет в run-log (его видно в UI и в Apify console). Используй для прогресса.
+Пример:
+  log("Страница 3: найдено", items.length);
+
+## llm(prompt, options?) → string
+Вызов LLM через AIMLAPI (для классификации, извлечения сущностей, переписывания).
+Параметры options:
+  model     — "claude-sonnet-4-5" (по умолчанию) | "claude-opus-4-1" | "gpt-4o" | ...
+  maxTokens — number, по умолчанию 1000
+  system    — string (system message)
+Пример:
+  const skills = await llm(\`Из этого описания вакансии вытащи стек технологий списком через запятую:\\n\\n\${desc}\`);
+
+## browse(options) → { html, title }
+Загружает страницу через настоящий браузер (Playwright). Использует, если http() вернул мало данных
+или сайт сильно завязан на JS (SPA, lazy-load). Дороже и медленнее, чем http().
+Параметры:
+  url      — string, обязательно
+  waitFor  — CSS-селектор, который надо дождаться (опц.)
+  proxy    — "datacenter" | "residential" | "none"
+Пример:
+  const { html } = await browse({ url: "https://app.example.com", waitFor: ".product-list" });
+
+# Параметры запуска
+Объект \`params\` содержит произвольные параметры от оркестратора (сейчас всегда пустой объект).
+
+# Жёсткие правила
+1. Сразу возвращай результат через \`return\` или \`save()\`. Без return — данные не дойдут до юзера.
+2. Не используй \`import\`, \`require\`, \`process\` — это не Node.js модуль, а изолированный сэндбокс.
+3. Любые ошибки — поднимай через \`throw new Error("...")\` с понятным сообщением.
+4. Hard-cap по умолчанию: не более 50 страниц за запуск. Если запрашивают больше — обрезай.
+5. Все сетевые запросы — ТОЛЬКО через http() и browse(), не через fetch напрямую (в сэндбоксе нет).
+6. Не пытайся скрейпить страницы за авторизацией, банковские формы, личные данные.
+7. Если получаешь пустой HTML/0 элементов — это норм: верни пустой массив и понятный лог.
+`.trim();
