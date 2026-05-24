@@ -88,20 +88,47 @@ async function translateOneBatch(
   } catch {
     throw new Error(`translator returned invalid JSON: ${text.slice(0, 200)}`);
   }
-  const arr = Array.isArray(parsed)
-    ? (parsed as Array<{ idx: unknown; text: unknown }>)
-    : Array.isArray((parsed as Record<string, unknown>)?.items)
-      ? ((parsed as Record<string, unknown>).items as Array<{ idx: unknown; text: unknown }>)
-      : null;
-  if (!arr) throw new Error("translator JSON has no array");
+  const arr = findTranslationsArray(parsed);
+  if (!arr) {
+    throw new Error(
+      `translator JSON has no array (keys=${Object.keys((parsed as object) ?? {}).join(",")}): ${JSON.stringify(parsed).slice(0, 200)}`,
+    );
+  }
 
   const byIdx = new Map<number, string>(
-    arr.map((r) => [Number(r.idx), String(r.text ?? "")]),
+    arr.map((r) => [Number(r.idx), String(r.text ?? r.translated_text ?? r.translation ?? "")]),
   );
   return segments.map((s) => ({
     ...s,
     translated_text: byIdx.get(s.idx) ?? "",
   }));
+}
+
+// gpt-4o с response_format=json_object отдаёт ВСЕГДА объект, не чистый массив.
+// Поэтому ищем массив переводов в самом объекте, перебирая популярные имена,
+// а если не нашли — берём первый массив объектов с полем idx или text.
+function findTranslationsArray(parsed: unknown): Array<{ idx: unknown; text?: unknown; translated_text?: unknown; translation?: unknown }> | null {
+  if (Array.isArray(parsed)) return parsed as Array<{ idx: unknown; text?: unknown }>;
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  const knownKeys = ["items", "translations", "segments", "data", "result", "results", "output"];
+  for (const k of knownKeys) {
+    const v = obj[k];
+    if (Array.isArray(v)) return v as Array<{ idx: unknown }>;
+  }
+  // Fallback: первый property с массивом объектов, в которых есть idx или text.
+  for (const v of Object.values(obj)) {
+    if (
+      Array.isArray(v) &&
+      v.length > 0 &&
+      typeof v[0] === "object" &&
+      v[0] !== null &&
+      ("idx" in v[0] || "text" in v[0])
+    ) {
+      return v as Array<{ idx: unknown }>;
+    }
+  }
+  return null;
 }
 
 // ElevenLabs TTS через aimlapi proxy. Возвращает mp3 как Buffer.
