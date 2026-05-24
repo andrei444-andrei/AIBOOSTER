@@ -1,5 +1,6 @@
 import { checkAdminTokenValue } from "@/lib/auth";
 import { listSources } from "@/lib/adapters/sources";
+import { getContextStats } from "@/lib/adapters/stats";
 import { getDb, ensureSchema } from "@/lib/db";
 import AdaptersClient from "./AdaptersClient";
 
@@ -105,6 +106,8 @@ export default async function AdaptersPage({
     listError = err instanceof Error ? err.message : String(err);
   }
 
+  const stats = await getContextStats();
+
   let recentRuns: Array<{
     id: string;
     source_id: string;
@@ -159,6 +162,7 @@ export default async function AdaptersPage({
         token={token ?? ""}
         sources={sources}
         recentRuns={recentRuns}
+        stats={stats}
         flash={pickStr(sp.flash) ?? null}
       />
     </main>
