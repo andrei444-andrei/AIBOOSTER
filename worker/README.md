@@ -26,6 +26,11 @@
 - `AIMLAPI_KEY` — ключ aimlapi.com.
 - `R2_*` — доступы и публичный домен Cloudflare R2.
 
+Если воркер стучится на **превью-деплой** Vercel (а не production), нужен ещё
+`VERCEL_AUTOMATION_BYPASS_SECRET` — иначе превью защищено Vercel SSO и воркер
+получает 401 «Authentication Required». Где взять: Vercel → Project → Settings
+→ Deployment Protection → **Protection Bypass for Automation** → Add Bypass.
+
 ## Локально
 
 ```sh

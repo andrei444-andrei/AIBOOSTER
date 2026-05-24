@@ -14,6 +14,10 @@ import { runJob } from "./pipeline.js";
 
 const API_BASE = required("API_BASE"); // e.g. https://aibooster.vercel.app
 const WORKER_SECRET = required("WORKER_SECRET");
+// Опционально: токен для обхода Vercel Deployment Protection на превью.
+// Берётся в Vercel → Settings → Deployment Protection → Protection Bypass for
+// Automation. Когда задан — шлём header x-vercel-protection-bypass.
+const VERCEL_BYPASS = process.env.VERCEL_AUTOMATION_BYPASS_SECRET || "";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "5000", 10);
 const WORKER_ID = `${hostname()}-${process.pid}`;
@@ -27,13 +31,22 @@ function required(name) {
   return v;
 }
 
+function buildHeaders() {
+  const h = {
+    "content-type": "application/json",
+    authorization: `Bearer ${WORKER_SECRET}`,
+  };
+  if (VERCEL_BYPASS) {
+    h["x-vercel-protection-bypass"] = VERCEL_BYPASS;
+    h["x-vercel-set-bypass-cookie"] = "samesitenone";
+  }
+  return h;
+}
+
 async function claim() {
   const res = await fetch(`${API_BASE}/api/worker/claim`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${WORKER_SECRET}`,
-    },
+    headers: buildHeaders(),
     body: JSON.stringify({ worker_id: WORKER_ID }),
   });
   if (!res.ok) {
@@ -47,10 +60,7 @@ async function claim() {
 export async function postUpdate(jobId, payload) {
   const res = await fetch(`${API_BASE}/api/worker/update`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${WORKER_SECRET}`,
-    },
+    headers: buildHeaders(),
     body: JSON.stringify({ job_id: jobId, ...payload }),
   });
   if (!res.ok) {
@@ -60,7 +70,9 @@ export async function postUpdate(jobId, payload) {
 }
 
 async function loop() {
-  console.log(`[worker] starting, id=${WORKER_ID}, api=${API_BASE}`);
+  console.log(
+    `[worker] starting, id=${WORKER_ID}, api=${API_BASE}, bypass=${VERCEL_BYPASS ? "on" : "off"}`,
+  );
   while (true) {
     let job = null;
     try {
