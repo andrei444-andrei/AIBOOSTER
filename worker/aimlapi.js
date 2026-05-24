@@ -1,11 +1,11 @@
-// Обёртки над aimlapi.com — единственным шлюзом к AI-моделям (CONSTITUTION §3).
+// Обёртки над aimlapi.com — шлюз к LLM и TTS (CONSTITUTION §3).
+// STT-этап вынесен в Apify (см. apify.js), потому что у aimlapi
+// Whisper-эндпоинт async и требует публичный URL аудио — для нашего
+// пайплайна с YouTube это излишне, Apify сразу отдаёт готовые субтитры.
 //
 // База API: https://api.aimlapi.com/v1
-// - /audio/transcriptions — Whisper (multipart/form-data, OpenAI-совместимый)
 // - /chat/completions — LLM (GPT-4o / Claude)
 // - /tts (proxy на ElevenLabs) — синтез
-
-import fs from "node:fs";
 
 const BASE = process.env.AIMLAPI_BASE || "https://api.aimlapi.com/v1";
 const KEY = process.env.AIMLAPI_KEY;
@@ -15,35 +15,6 @@ if (!KEY) {
 }
 
 const AUTH = { authorization: `Bearer ${KEY}` };
-
-// ---------- Whisper: ASR с word/segment-level таймкодами ----------
-// Возвращает массив сегментов {start_ms,end_ms,text} и language.
-export async function transcribe(audioPath, { model = "whisper-1", language } = {}) {
-  const form = new FormData();
-  form.append("file", new Blob([fs.readFileSync(audioPath)]), "audio.mp3");
-  form.append("model", model);
-  form.append("response_format", "verbose_json");
-  form.append("timestamp_granularities[]", "segment");
-  if (language) form.append("language", language);
-
-  const res = await fetch(`${BASE}/audio/transcriptions`, {
-    method: "POST",
-    headers: AUTH,
-    body: form,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`whisper failed ${res.status}: ${text.slice(0, 400)}`);
-  }
-  const data = await res.json();
-  const segs = (data.segments ?? []).map((s, i) => ({
-    idx: i,
-    start_ms: Math.round((s.start ?? 0) * 1000),
-    end_ms: Math.round((s.end ?? 0) * 1000),
-    text: String(s.text ?? "").trim(),
-  }));
-  return { language: data.language || null, segments: segs };
-}
 
 // ---------- LLM-перевод сегментов одним запросом (батчем) ----------
 // Берём JSON-список с idx+text и просим вернуть JSON того же формата с
@@ -115,7 +86,9 @@ async function translateOneBatch(segments, { sourceLang, targetLang, model }) {
 // ---------- TTS через ElevenLabs (aimlapi proxy) ----------
 // Принимает текст и язык → mp3 как Buffer.
 // Модель eleven_multilingual_v2 — production-ready мультиязычный синтез.
-export async function ttsSynth(text, { lang, voice = "Rachel", model = "eleven_multilingual_v2" } = {}) {
+export async function ttsSynth(text, { voice = "Rachel", model = "elevenlabs/eleven_multilingual_v2" } = {}) {
+  // ElevenLabs eleven_multilingual_v2 определяет язык из текста сам, поле language
+  // в API aimlapi не задокументировано — не шлём, чтобы не получить 400.
   const res = await fetch(`${BASE}/tts`, {
     method: "POST",
     headers: { ...AUTH, "content-type": "application/json" },
@@ -123,7 +96,6 @@ export async function ttsSynth(text, { lang, voice = "Rachel", model = "eleven_m
       model,
       text,
       voice,
-      language: lang,
     }),
   });
   if (!res.ok) {

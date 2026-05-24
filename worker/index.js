@@ -1,7 +1,7 @@
 // Главный цикл воркера.
 //
 // Поллит /api/worker/claim каждые POLL_INTERVAL_MS, при наличии job выполняет
-// пайплайн: yt-dlp → Whisper (aimlapi) → LLM-перевод (aimlapi) → ElevenLabs
+// пайплайн: Apify (транскрипт) → LLM-перевод (aimlapi) → ElevenLabs TTS
 // (aimlapi) → склейка ffmpeg → загрузка mp3 в Cloudflare R2 → /api/worker/update.
 //
 // Конституция:
@@ -15,8 +15,8 @@ import { runJob } from "./pipeline.js";
 const API_BASE = required("API_BASE"); // e.g. https://aibooster.vercel.app
 const WORKER_SECRET = required("WORKER_SECRET");
 // Опционально: токен для обхода Vercel Deployment Protection на превью.
-// Берётся в Vercel → Settings → Deployment Protection → Protection Bypass for
-// Automation. Когда задан — шлём header x-vercel-protection-bypass.
+// Когда защита снята (production-домен или Vercel Authentication отключён) —
+// оставить пустым.
 const VERCEL_BYPASS = process.env.VERCEL_AUTOMATION_BYPASS_SECRET || "";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "5000", 10);
