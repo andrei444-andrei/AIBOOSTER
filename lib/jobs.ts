@@ -95,6 +95,33 @@ export async function getJob(id: string): Promise<JobRow | null> {
   return (res.rows[0] as unknown as JobRow) ?? null;
 }
 
+// Список недавних job'ов для боковой панели истории. Возвращаем только
+// поля, нужные для рендера карточки — без сегментов и без больших полей.
+export interface JobSummary {
+  id: string;
+  yt_video_id: string;
+  yt_title: string | null;
+  target_lang: string;
+  status: JobStatus;
+  stage: JobStage | null;
+  progress: number;
+  audio_url: string | null;
+  created_at: string;
+}
+
+export async function listRecentJobs(limit = 30): Promise<JobSummary[]> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute({
+    sql: `SELECT id, yt_video_id, yt_title, target_lang, status, stage, progress, audio_url, created_at
+          FROM video_translation_jobs
+          ORDER BY created_at DESC
+          LIMIT ?`,
+    args: [Math.max(1, Math.min(100, limit))],
+  });
+  return res.rows as unknown as JobSummary[];
+}
+
 export async function getSegments(jobId: string): Promise<SegmentRow[]> {
   await ensureSchema();
   const db = getDb();
