@@ -11,7 +11,7 @@
 export const SDK_DOCS = `
 # Доступные функции (Helper SDK)
 
-В твоём коде доступны 6 глобальных async-функций. Никаких import — они уже в области видимости.
+В твоём коде доступны 7 глобальных async-функций. Никаких import — они уже в области видимости.
 
 ## http(options) → string
 HTTP-запрос через Apify-прокси (антибот, ротация IP). Возвращает тело ответа как строку.
@@ -62,6 +62,17 @@ HTTP-запрос через Apify-прокси (антибот, ротация 
   proxy    — "datacenter" | "residential" | "none"
 Пример:
   const { html } = await browse({ url: "https://app.example.com", waitFor: ".product-list" });
+
+## search(query, options?) → [{ position, title, url, snippet }]
+Поиск в интернете через DuckDuckGo (Google активно блокирует автоматические запросы — НЕ используй
+Google напрямую через http(), будет 0 результатов или CAPTCHA). DDG отдаёт стабильную HTML-выдачу.
+Параметры options:
+  limit   — number (1..30), по умолчанию 10
+  region  — string, по умолчанию "wt-wt" (без региона). Для русской выдачи: "ru-ru".
+  proxy   — "datacenter" | "residential" | "none"
+Пример (топ-10 сайтов про недвижимость):
+  const top = await search("сайты недвижимости рейтинг", { limit: 10, region: "ru-ru" });
+  // top[0] = { position: 1, title: "...", url: "https://...", snippet: "..." }
 
 # Параметры запуска
 Объект \`params\` содержит произвольные параметры от оркестратора (сейчас всегда пустой объект).

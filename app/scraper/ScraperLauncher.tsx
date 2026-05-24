@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Textarea, useToast } from "@/components/ui";
 
@@ -10,11 +10,34 @@ const EXAMPLES = [
   "Парсинг последних 20 статей с habr.com по тегу «react», заголовок, автор, рейтинг, ссылка",
 ];
 
+/**
+ * Лаунчер скрейпера. Подписывается на событие `scraper:prefill` (диспатчит
+ * CatalogPicker, когда юзер кликает по карточке/примеру) — так компоненты
+ * не нужно жёстко связывать пропсами через дерево.
+ */
 export function ScraperLauncher() {
   const [prompt, setPrompt] = useState("");
   const [pending, startTransition] = useTransition();
   const toast = useToast();
   const router = useRouter();
+
+  // Подписка на «pre-fill» события от CatalogPicker.
+  useEffect(() => {
+    function onPrefill(e: Event) {
+      const ce = e as CustomEvent<{ prompt: string }>;
+      if (ce.detail?.prompt) {
+        setPrompt(ce.detail.prompt);
+        // Прокрутим к форме и фокус — приятный UX после клика по карточке.
+        const ta = document.getElementById("scraper-prompt-input");
+        if (ta) {
+          ta.scrollIntoView({ behavior: "smooth", block: "center" });
+          (ta as HTMLTextAreaElement).focus();
+        }
+      }
+    }
+    window.addEventListener("scraper:prefill", onPrefill);
+    return () => window.removeEventListener("scraper:prefill", onPrefill);
+  }, []);
 
   async function submit() {
     const text = prompt.trim();
@@ -58,6 +81,7 @@ export function ScraperLauncher() {
   return (
     <div>
       <Textarea
+        id="scraper-prompt-input"
         label="Что собрать?"
         helperText="Опиши задачу обычным языком. Чем конкретнее источник и нужные поля — тем точнее результат."
         placeholder="Например: найди вакансии Python-разработчиков в Москве на hh.ru с зарплатой от 250к"

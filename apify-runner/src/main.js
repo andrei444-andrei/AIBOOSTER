@@ -148,17 +148,61 @@ try {
         }
     };
 
+    // search(query, opts) — поиск через DuckDuckGo (HTML-версия html.duckduckgo.com).
+    // Google активно блокирует автоматические запросы даже через прокси; DDD —
+    // самый дружелюбный из публичных поисковиков, не требует JS, отдаёт стабильную разметку.
+    // Возвращает массив { position, title, url, snippet }.
+    const search = async (query, opts = {}) => {
+        if (typeof query !== 'string' || !query.trim()) {
+            throw new Error('search(): нужен непустой запрос');
+        }
+        const limit = Math.min(Math.max(opts.limit ?? 10, 1), 30);
+        const region = opts.region ?? 'wt-wt'; // wt-wt = no region, ru-ru = Россия
+        const proxy = opts.proxy ?? 'datacenter';
+
+        const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=${region}`;
+        const html = await http({ url, proxy });
+        const $ = cheerio.load(html);
+        const results = [];
+        $('div.result').each((i, el) => {
+            if (results.length >= limit) return false;
+            const $el = $(el);
+            const $title = $el.find('a.result__a').first();
+            const rawUrl = $title.attr('href') || '';
+            const title = $title.text().trim();
+            const snippet = $el.find('.result__snippet').text().trim();
+            // DDG отдаёт ссылки через свой редиректор: //duckduckgo.com/l/?uddg=ENCODED
+            let cleanUrl = rawUrl;
+            try {
+                const u = new URL(rawUrl.startsWith('//') ? `https:${rawUrl}` : rawUrl);
+                const uddg = u.searchParams.get('uddg');
+                if (uddg) cleanUrl = decodeURIComponent(uddg);
+            } catch {
+                // не вышло распарсить — отдаём как есть
+            }
+            if (title && cleanUrl) {
+                results.push({
+                    position: results.length + 1,
+                    title,
+                    url: cleanUrl,
+                    snippet,
+                });
+            }
+        });
+        return results;
+    };
+
     // --- Eval пользовательского кода ---
 
     apifyLog.info('[runner] Building user function...');
     const userFn = new Function(
-        'http', 'parse', 'save', 'log', 'llm', 'browse', 'params',
+        'http', 'parse', 'save', 'log', 'llm', 'browse', 'search', 'params',
         `return (async () => { ${code}\n })();`,
     );
 
     apifyLog.info('[runner] Executing user code...');
     const t0 = Date.now();
-    const returnValue = await userFn(http, parse, save, log, llm, browse, params);
+    const returnValue = await userFn(http, parse, save, log, llm, browse, search, params);
     const elapsedMs = Date.now() - t0;
 
     apifyLog.info(`[runner] Done in ${elapsedMs}ms`);

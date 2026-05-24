@@ -124,6 +124,47 @@ export const TABLES: TableDef[] = [
       { name: "error", description: "Текст ошибки, если попытка упала." },
     ],
   },
+  {
+    name: "scraper_catalog",
+    description:
+      "Каталог идей: подсмотренные актеры из публичного Apify Store, переведённые и обогащённые. UX-помощник для модуля /scraper — показывает «что я умею», даёт примеры промптов, по клику пред-заполняет форму. Источник для UI, НЕ для прямых запусков. Заполняется через POST /api/admin/scraper/sync-catalog.",
+    ddl: `CREATE TABLE IF NOT EXISTS scraper_catalog (
+      apify_actor_id TEXT PRIMARY KEY,
+      actor_name TEXT NOT NULL,
+      canonical TEXT NOT NULL,
+      title TEXT NOT NULL,
+      title_ru TEXT,
+      description TEXT,
+      description_ru TEXT,
+      category TEXT,
+      category_ru TEXT,
+      target_sites TEXT,
+      example_prompts TEXT,
+      apify_url TEXT,
+      stats_users INTEGER,
+      stats_total_runs INTEGER,
+      last_synced_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "apify_actor_id", description: "Короткий ID актера в Apify (random string). Уникален." },
+      { name: "actor_name", description: "Имя актера (slug-часть URL)." },
+      { name: "canonical", description: "Канонический ID в форме 'username~name', удобен для API-вызовов." },
+      { name: "title", description: "Оригинальный заголовок (как в Store)." },
+      { name: "title_ru", description: "Короткое русское название (1-5 слов), сгенерировано LLM." },
+      { name: "description", description: "Оригинальное описание из Apify." },
+      { name: "description_ru", description: "Перевод/пересказ на русском в 1-2 предложениях. От LLM." },
+      { name: "category", description: "Категория Apify (ECOMMERCE, SOCIAL_MEDIA, ...)." },
+      { name: "category_ru", description: "Категория на русском (Маркетплейсы, Соцсети, ...)." },
+      { name: "target_sites", description: "JSON-массив строк: какие сайты умеет (hh.ru, ozon.ru, ...). Извлекает LLM из описания." },
+      { name: "example_prompts", description: "JSON-массив объектов {label, prompt} — 1-3 примеров запросов на русском, которые пользователь может скопировать. От LLM." },
+      { name: "apify_url", description: "Прямая ссылка на актер в Apify Console (для любопытных)." },
+      { name: "stats_users", description: "Сколько пользователей запускало этот актер (фильтр мусора)." },
+      { name: "stats_total_runs", description: "Сколько раз запускали (показатель популярности)." },
+      { name: "last_synced_at", description: "Когда наш sync обновлял эту запись." },
+      { name: "created_at", description: "Когда запись впервые появилась в БД." },
+    ],
+  },
 ];
 
 // Индексы для быстрого чтения.
@@ -131,4 +172,6 @@ export const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_app_errors_ts ON app_errors (ts DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_scraper_runs_created ON scraper_runs (created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_scraper_attempts_run ON scraper_attempts (run_id, n)`,
+  `CREATE INDEX IF NOT EXISTS idx_scraper_catalog_category ON scraper_catalog (category_ru, stats_users DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_scraper_catalog_users ON scraper_catalog (stats_users DESC)`,
 ];

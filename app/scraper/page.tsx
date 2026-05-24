@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ScraperLauncher } from "./ScraperLauncher";
+import { CatalogPicker } from "./CatalogPicker";
 import { listRecentRuns } from "@/lib/scraper/orchestrator";
 import { Card, CardHeader, CardBody } from "@/components/ui";
 
@@ -44,6 +45,10 @@ export default async function ScraperHomePage() {
       </p>
 
       <ScraperLauncher />
+
+      <div style={{ marginTop: 48 }}>
+        <CatalogPicker />
+      </div>
 
       <section style={{ marginTop: 48 }}>
         <h2
