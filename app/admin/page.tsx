@@ -47,7 +47,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
   if (!auth.ok) {
     return (
-      <main style={wrap}>
+      <div style={wrap}>
         <h1>AIBOOSTER · /admin</h1>
         <div style={card}>
           <p style={{ marginTop: 0 }}>
@@ -96,7 +96,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             </form>
           )}
         </div>
-      </main>
+      </div>
     );
   }
 
@@ -129,7 +129,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   };
 
   return (
-    <main style={wrap}>
+    <div style={wrap}>
       <h1 style={{ marginBottom: 4 }}>AIBOOSTER · /admin</h1>
       <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
         Структура и данные БД (read-only). Логи — таблица <span style={code}>app_errors</span>,
@@ -248,7 +248,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           ) : null}
         </section>
       )}
-    </main>
+    </div>
   );
 }
 

@@ -1,55 +1,43 @@
-/* ─── Каркас ───────────────────────────────────────────────────────── */
+/* ─── Боковая панель с сессиями (внутри AppShell как secondaryPanel) ──── */
 
-.app {
-  display: grid;
-  grid-template-columns: 280px 1fr;
-  height: 100vh;
-  background: var(--bg);
-  color: var(--text);
-}
-
-.sidebar {
-  border-right: var(--hairline-w) solid var(--border);
-  background: var(--bg);
+.sessionsPanel {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  transition: margin-left 220ms var(--ease);
-}
-.sidebarClosed {
-  margin-left: -280px;
+  min-height: 0;
+  flex: 1;
 }
 
-.sidebarHeader {
-  padding: 14px 12px;
-  border-bottom: var(--hairline-w) solid var(--border);
+.sessionsPanelHeader {
+  padding: 12px 12px 10px;
 }
 
 .newBtn {
   width: 100%;
-  height: 38px;
-  background: var(--accent);
-  color: var(--text-on-accent);
-  border: 1px solid var(--accent);
+  height: 36px;
+  background: var(--surface);
+  color: var(--text);
+  border: var(--hairline-w) solid var(--border-strong);
   border-radius: var(--radius);
   cursor: pointer;
   font-family: inherit;
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: 500;
-  letter-spacing: -0.01em;
-  transition: transform 100ms var(--ease), background var(--transition);
+  letter-spacing: -0.005em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 120ms var(--ease), border-color 120ms var(--ease);
 }
 .newBtn:hover {
-  background: var(--accent-hover);
-}
-.newBtn:active {
-  transform: translateY(1px);
+  background: var(--bg-subtle);
+  border-color: var(--text);
 }
 
 .sessions {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  padding: 4px 8px 12px;
 }
 
 .empty {
@@ -63,20 +51,23 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 9px 12px;
-  border-radius: var(--radius);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  margin-bottom: 2px;
-  font-size: var(--text-base);
+  margin-bottom: 1px;
+  font-size: var(--text-sm);
   position: relative;
   transition: background 120ms var(--ease);
+  color: var(--text-secondary);
 }
 .sessionItem:hover {
   background: var(--bg-hover);
+  color: var(--text);
 }
 .sessionItem.active {
   background: var(--bg-subtle);
   font-weight: 500;
+  color: var(--text);
 }
 
 .sessionTitle {
@@ -111,7 +102,9 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  height: 100vh;
   overflow: hidden;
+  background: var(--bg);
 }
 
 /* ─── Шапка ──────────────────────────────────────────────────────── */
@@ -120,24 +113,9 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 14px 24px;
+  padding: 14px 32px;
   border-bottom: var(--hairline-w) solid var(--border);
   min-height: 56px;
-}
-
-.toggleSidebar {
-  background: transparent;
-  border: var(--hairline-w) solid var(--border-strong);
-  border-radius: var(--radius);
-  width: 34px;
-  height: 34px;
-  cursor: pointer;
-  font-size: 16px;
-  color: var(--text);
-  transition: background 120ms var(--ease);
-}
-.toggleSidebar:hover {
-  background: var(--bg-hover);
 }
 
 .headerTitle {
@@ -220,11 +198,16 @@
 
 .msgUser {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
   animation: msgIn 250ms var(--ease-out) both;
 }
 .userBubble {
-  max-width: 80%;
+  /* fit-content: пузырь сжимается под текст и не схлопывается
+     до посимвольной ширины */
+  width: fit-content;
+  max-width: min(80%, 560px);
   background: var(--bg-subtle);
   border: var(--hairline-w) solid var(--border);
   border-radius: 18px 18px 4px 18px;
@@ -234,7 +217,7 @@
   letter-spacing: -0.005em;
   color: var(--text);
   white-space: pre-wrap;
-  word-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* ─── Assistant-сообщение: статья по всей ширине, без аватара ─ */
@@ -643,18 +626,6 @@
 /* ─── Mobile ─────────────────────────────────────────────────── */
 
 @media (max-width: 720px) {
-  .app {
-    grid-template-columns: 1fr;
-  }
-  .sidebar {
-    position: absolute;
-    z-index: 10;
-    width: 280px;
-    height: 100%;
-  }
-  .sidebarClosed {
-    margin-left: -280px;
-  }
   .messages {
     padding-left: 16px;
     padding-right: 16px;

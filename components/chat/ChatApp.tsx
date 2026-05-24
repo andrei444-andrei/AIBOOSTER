@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./Markdown";
+import { AppShell } from "@/components/shell/AppShell";
 import {
   MODEL_OPTIONS,
   CATEGORY_META,
@@ -181,7 +182,6 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -623,54 +623,52 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     [send],
   );
 
-  return (
-    <div className={styles.app}>
-      <aside className={`${styles.sidebar} ${sidebarOpen ? "" : styles.sidebarClosed}`}>
-        <div className={styles.sidebarHeader}>
-          <button className={styles.newBtn} onClick={newChat}>
-            + Новый чат
-          </button>
-        </div>
-        <div className={styles.sessions}>
-          {sessions.length === 0 ? (
-            <div className={styles.empty}>Нет чатов</div>
-          ) : (
-            sessions.map((s) => (
-              <div
-                key={s.id}
-                className={`${styles.sessionItem} ${activeId === s.id ? styles.active : ""}`}
-                onClick={() => setActiveId(s.id)}
-              >
-                <div className={styles.sessionTitle} title={s.title}>
-                  {s.title || "Без названия"}
-                </div>
-                <button
-                  className={styles.delBtn}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteChat(s.id);
-                  }}
-                  aria-label="Удалить"
-                  title="Удалить"
-                >
-                  ×
-                </button>
+  const sessionsPanel = (
+    <div className={styles.sessionsPanel}>
+      <div className={styles.sessionsPanelHeader}>
+        <button className={styles.newBtn} onClick={newChat}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M12 5v14" />
+            <path d="M5 12h14" />
+          </svg>
+          <span>Новый чат</span>
+        </button>
+      </div>
+      <div className={styles.sessions}>
+        {sessions.length === 0 ? (
+          <div className={styles.empty}>Нет чатов</div>
+        ) : (
+          sessions.map((s) => (
+            <div
+              key={s.id}
+              className={`${styles.sessionItem} ${activeId === s.id ? styles.active : ""}`}
+              onClick={() => setActiveId(s.id)}
+            >
+              <div className={styles.sessionTitle} title={s.title}>
+                {s.title || "Без названия"}
               </div>
-            ))
-          )}
-        </div>
-      </aside>
+              <button
+                className={styles.delBtn}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteChat(s.id);
+                }}
+                aria-label="Удалить"
+                title="Удалить"
+              >
+                ×
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
 
-      <main className={styles.main}>
+  return (
+    <AppShell fullBleed secondaryPanel={sessionsPanel}>
+      <div className={styles.main}>
         <header className={styles.header}>
-          <button
-            className={styles.toggleSidebar}
-            onClick={() => setSidebarOpen((v) => !v)}
-            aria-label="Свернуть сайдбар"
-            title="Свернуть сайдбар"
-          >
-            ☰
-          </button>
           <div className={styles.headerTitle}>
             {currentSession?.title || "AI Chat"}
           </div>
@@ -680,10 +678,10 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           <div className={styles.messages}>
             {messages.length === 0 && !loadingMessages && (
               <div className={styles.welcome}>
-                <h2 style={{ marginBottom: 8 }}>AI Chat</h2>
-                <p style={{ color: "var(--text-secondary)" }}>
-                  В Auto роутер сам подбирает модель под задачу. Или выберите категорию-пресет
-                  (Быстрый/Ресёрч/Код/Анализ/Стратегия) — модели для них настраиваются в /admin/chat.
+                <h2>С чего начнём?</h2>
+                <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-md)", maxWidth: 460, margin: "0 auto" }}>
+                  Auto-роутер сам подберёт модель под задачу. Или выберите пресет —
+                  Быстрый/Ресёрч/Код/Анализ/Стратегия — в селекторе ниже.
                 </p>
               </div>
             )}
@@ -714,8 +712,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           selectionValue={encodeSelection(selection)}
           onChangeSelection={(v) => changeSelection(decodeSelection(v))}
         />
-      </main>
-    </div>
+      </div>
+    </AppShell>
   );
 }
 
@@ -787,16 +785,14 @@ function MessageBlock({ message }: { message: Message }) {
   if (message.role === "user") {
     return (
       <div className={styles.msgUser} data-msg-id={message.id}>
-        <div>
-          {message.attachments && message.attachments.length > 0 && (
-            <div className={styles.attachments}>
-              {message.attachments.map((a, i) => (
-                <AttachmentChip key={a.id ?? i} attachment={a} />
-              ))}
-            </div>
-          )}
-          {message.content && <div className={styles.userBubble}>{message.content}</div>}
-        </div>
+        {message.attachments && message.attachments.length > 0 && (
+          <div className={styles.attachments}>
+            {message.attachments.map((a, i) => (
+              <AttachmentChip key={a.id ?? i} attachment={a} />
+            ))}
+          </div>
+        )}
+        {message.content && <div className={styles.userBubble}>{message.content}</div>}
       </div>
     );
   }

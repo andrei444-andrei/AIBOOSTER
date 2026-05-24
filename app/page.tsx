@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function Home() {
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: "96px 24px 64px" }}>
+    <div style={{ maxWidth: 720, margin: "64px auto 32px" }}>
       <p
         style={{
           fontSize: "var(--text-sm)",
@@ -84,6 +84,6 @@ export default function Home() {
           </div>
         </Link>
       </div>
-    </main>
+    </div>
   );
 }

@@ -34,7 +34,7 @@ export default async function AdminChatPage({ searchParams }: { searchParams: Pr
 
   if (!auth.ok) {
     return (
-      <main style={wrap}>
+      <div style={wrap}>
         <h1>AIBOOSTER · /admin/chat</h1>
         <div style={card}>
           <p>Доступ закрыт: <b>{auth.reason}</b>.</p>
@@ -81,14 +81,14 @@ export default async function AdminChatPage({ searchParams }: { searchParams: Pr
             </form>
           )}
         </div>
-      </main>
+      </div>
     );
   }
 
   const [settings, routes] = await Promise.all([getSettings(), listRoutes()]);
 
   return (
-    <main style={wrap}>
+    <div style={wrap}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 4 }}>
         <h1 style={{ margin: 0 }}>AI Chat — настройки</h1>
         <a href={`/admin?token=${encodeURIComponent(token ?? "")}`} style={{ color: "var(--text-muted)", fontSize: 13 }}>
@@ -107,6 +107,6 @@ export default async function AdminChatPage({ searchParams }: { searchParams: Pr
 
       <h2 style={{ fontSize: 18, marginTop: 24, marginBottom: 8 }}>Системный промт и форматирование</h2>
       <ChatSettingsForm initial={settings} token={token ?? ""} />
-    </main>
+    </div>
   );
 }

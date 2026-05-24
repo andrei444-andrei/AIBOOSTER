@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { ToastProvider } from "@/components/ui";
+import { AppShellGate } from "@/components/shell/AppShellGate";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,7 +15,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="ru" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body>
-        <ToastProvider>{children}</ToastProvider>
+        <ToastProvider>
+          <AppShellGate>{children}</AppShellGate>
+        </ToastProvider>
       </body>
     </html>
   );
