@@ -28,9 +28,12 @@ export async function POST(req: Request) {
   const url = new URL(req.url);
   const limit = clampInt(url.searchParams.get("limit"), 1, 500, 50);
   const minUsers = clampInt(url.searchParams.get("minUsers"), 0, 100_000, 100);
+  // offset — для пагинации по Apify Store (топ N..N+limit). Без него
+  // повторные вызовы перезаписывают одни и те же топ-N актеров.
+  const offset = clampInt(url.searchParams.get("offset"), 0, 10_000, 0);
 
   try {
-    const result = await syncCatalog({ limit, minUsers });
+    const result = await syncCatalog({ limit, minUsers, offset });
     return NextResponse.json({ ok: true, ...result });
   } catch (err) {
     const errorId = await logServerError(err, "/api/admin/scraper/sync-catalog");

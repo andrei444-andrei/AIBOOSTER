@@ -78,10 +78,11 @@ export interface CatalogRow {
 }
 
 export async function syncCatalog(
-  opts: { limit?: number; minUsers?: number } = {},
+  opts: { limit?: number; minUsers?: number; offset?: number } = {},
 ): Promise<SyncResult> {
   const limit = Math.min(opts.limit ?? 100, 500);
   const minUsers = opts.minUsers ?? 100;
+  const offset = Math.max(opts.offset ?? 0, 0);
 
   const result: SyncResult = {
     fetched: 0,
@@ -97,9 +98,10 @@ export async function syncCatalog(
   const token = process.env.APIFY_TOKEN;
   if (!token) throw new Error("APIFY_TOKEN не задан");
 
-  // 1. Тянем топ-актеров. У Apify Store API лимит 1000 за раз — берём с запасом.
+  // 1. Тянем топ-актеров. У Apify Store API лимит 1000 за раз — берём с запасом
+  // от offset, чтобы после фильтра осталось >= limit.
   const fetchLimit = Math.min(limit * 3, 1000);
-  const storeUrl = `${APIFY_BASE}/store?limit=${fetchLimit}&sortBy=popularity&token=${token}`;
+  const storeUrl = `${APIFY_BASE}/store?limit=${fetchLimit}&offset=${offset}&sortBy=popularity&token=${token}`;
   const storeResp = await fetch(storeUrl);
   if (!storeResp.ok) {
     const body = await storeResp.text().catch(() => "");
