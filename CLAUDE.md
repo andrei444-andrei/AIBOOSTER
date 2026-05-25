@@ -7,7 +7,7 @@
 ## 0. Стек по умолчанию
 
 - **Хостинг:** Vercel
-- **БД:** Neon (Postgres)
+- **БД:** Turso (libsql), **standalone (не через Vercel integration)**. Vercel-Turso integration при любой перенастройке пересоздаёт БД с нуля → история чатов и весь стейт теряются. Прод-БД (`aibooster-prod`) и бэкап-БД (`aibooster-backup`) создаются вручную в Turso Console, токены подключаются как обычные env-переменные Vercel (`TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`, `BACKUP_DATABASE_URL`/`BACKUP_AUTH_TOKEN`). Ежедневный snapshot критичных таблиц — `/api/admin/backup` (Vercel cron 03:00 UTC); страж подмены БД — `checkPossibleDbSwap()` в `lib/db.ts`, пишет alert уровня `error` с тегом `possible_db_swap` в `app_errors`.
 - **Язык:** TypeScript
 - **AI:** AIMLAPI (раздел 4)
 
