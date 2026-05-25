@@ -157,10 +157,17 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
     Array.from({ length: Math.min(TTS_CONCURRENCY, translated.length) }, () => workerLoop()),
   );
 
-  // 4. Склейка по таймкодам.
+  // 4. Склейка по таймкодам. Финальную длительность считаем как MAX(end_ms)
+  // последнего сегмента: Apify иногда отдаёт мусорный videoDuration (видел
+  // 3600 на 15-минутном видео), а у сегментов таймкоды корректные, поэтому
+  // на них и опираемся. Запас в 1 секунду — чтобы хвост последнего сегмента
+  // точно не обрезался.
   await updateJobProgress({ id: job.id, stage: "mux", progress: 92 });
   const finalMp3 = join(work, "final.mp3");
-  await ffmpegConcatTimed(segmentFiles, finalMp3, tx.duration);
+  const lastEndMs = segmentFiles.reduce((m, s) => Math.max(m, s.end_ms), 0);
+  const lastEndSec = lastEndMs / 1000 + 1;
+  const truncateAt = tx.duration ? Math.min(tx.duration, lastEndSec) : lastEndSec;
+  await ffmpegConcatTimed(segmentFiles, finalMp3, truncateAt);
 
   // 5. Загрузка в R2.
   await updateJobProgress({ id: job.id, stage: "mux", progress: 96 });

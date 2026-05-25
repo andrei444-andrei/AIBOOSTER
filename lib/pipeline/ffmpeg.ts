@@ -64,13 +64,16 @@ export async function ffprobeDuration(file: string): Promise<number> {
 }
 
 export async function ffmpegSilence(outPath: string, durSec: number): Promise<void> {
+  // Параметры должны совпадать с тем, что выдаёт ffmpegFit (TTS-сегменты):
+  // libmp3lame, q:a 4, 44.1kHz mono. Иначе при concat-склейке mp3-frame
+  // headers разных профилей рвут декодирование и длительность.
   await run(FFMPEG, [
     "-y",
     "-f", "lavfi",
     "-i", "anullsrc=r=44100:cl=mono",
     "-t", String(durSec),
-    "-q:a", "9",
     "-acodec", "libmp3lame",
+    "-q:a", "4",
     outPath,
   ]);
 }
@@ -186,12 +189,22 @@ export async function ffmpegConcatTimed(
   });
   await writeFile(listFile, lines.join("\n"));
 
-  // -c copy не работает, если у файлов разные параметры; ffmpegSilence
-  // и TTS-сегменты после ffmpegFit оба дают libmp3lame 44.1kHz mono,
-  // поэтому copy безопасен. Если когда-то параметры разойдутся —
-  // упадёт явной ошибкой кодека, тогда уберём -c copy и добавим
-  // -acodec libmp3lame.
-  const args = ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy"];
+  // Re-encode при concat (не используем -c copy): mp3-frame headers у
+  // silence и TTS-сегментов могут не совпасть бит-в-бит даже при одинаковых
+  // настройках кодека (VBR-блоки разной длительности). -c copy в этом
+  // случае рвёт декодирование после первого блока — играется кусок
+  // первого сегмента, потом «тишина» до конца. Re-encode чуть медленнее
+  // но даёт чистый поток mp3 с корректной длительностью.
+  const args = [
+    "-y",
+    "-f", "concat",
+    "-safe", "0",
+    "-i", listFile,
+    "-acodec", "libmp3lame",
+    "-q:a", "4",
+    "-ar", "44100",
+    "-ac", "1",
+  ];
   if (totalDurSec) args.push("-t", String(totalDurSec));
   args.push(outFile);
   await run(FFMPEG, args);
