@@ -120,6 +120,21 @@ export async function ffmpegFit(
   await run(FFMPEG, args);
 }
 
+// Просто перекодирует input mp3 в наш каноничный формат (44.1kHz mono q:a 4)
+// без изменения длительности. Используется в подкаст-режиме, где TTS играет
+// в натуральном темпе, а нужно только привести все файлы к одинаковым
+// параметрам для concat-склейки.
+export async function ffmpegNormalize(inFile: string, outFile: string): Promise<void> {
+  await run(FFMPEG, [
+    "-y", "-i", inFile,
+    "-acodec", "libmp3lame",
+    "-q:a", "4",
+    "-ar", "44100",
+    "-ac", "1",
+    outFile,
+  ]);
+}
+
 // Собирает финальный mp3 из TTS-сегментов с точным позиционированием
 // по start_ms. Стратегия — concat demuxer + silence-gaps:
 //

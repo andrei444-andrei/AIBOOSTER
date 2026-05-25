@@ -56,9 +56,9 @@ export const MODULES: ModuleEntry[] = [
   },
   {
     slug: "youtube-translate",
-    title: "Перевод YouTube",
+    title: "YouTube → подкаст",
     href: "/tools/youtube-translate",
-    description: "Вставь YouTube-ссылку — получи переведённую озвучку с синхронной расшифровкой.",
+    description: "Вставь YouTube-ссылку — получи переведённую аудио-озвучку как подкаст.",
     pinned: true,
     section: "main",
     icon: "▶",
