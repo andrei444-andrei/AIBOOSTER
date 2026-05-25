@@ -108,20 +108,28 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
     })),
   );
 
-  // 3. TTS по сегментам + подгонка длительности — параллельно (concurrency=6),
-  // иначе на длинных видео сумма HTTP latency aimlapi не влезает в 300с
-  // Vercel-функции. Меньше 6 — медленно, больше — aimlapi начинает 524.
+  // 3. Чанкуем сегменты для TTS: вместо 1 запроса на каждые 2-3 секунды речи
+  // (700+ HTTP-вызовов к ElevenLabs) объединяем подряд идущие сегменты в
+  // куски до 3 минут, ломая на больших паузах. Это:
+  //   • ×~50 меньше HTTP-вызовов → не упираемся в 300с Vercel
+  //   • Речь звучит цельными фразами/абзацами, а не рублёными кусочками
+  //   • atempo-fit делает мягкую коррекцию (~0.9–1.1×) вместо
+  //     экстремальной (0.2×/5× когда фраза не помещается в свой таймкод)
+  // Subtitles в /api/jobs/[id] остаются per-segment — UI рендерит их как
+  // было, click-to-seek работает с точностью до позиции внутри чанка
+  // (несколько секунд дрейфа в худшем случае, для аудио-перевода ок).
+  const chunks = chunkForTts(translated);
   await updateJobProgress({ id: job.id, stage: "tts", progress: 58 });
   const segmentFiles: Array<{ file: string; start_ms: number; end_ms: number }> =
-    new Array(translated.length);
-  const TTS_CONCURRENCY = 6;
+    new Array(chunks.length);
+  const TTS_CONCURRENCY = 4;
   let nextIdx = 0;
   let done = 0;
   let lastReportedAt = 0;
   async function reportProgress() {
     if (Date.now() - lastReportedAt < 1500) return;
     lastReportedAt = Date.now();
-    const p = 58 + Math.round((32 * done) / translated.length);
+    const p = 58 + Math.round((32 * done) / chunks.length);
     await updateJobProgress({
       id: job.id,
       stage: "tts",
@@ -131,30 +139,29 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
   async function workerLoop(): Promise<void> {
     for (;;) {
       const i = nextIdx++;
-      if (i >= translated.length) return;
-      const s = translated[i];
-      const text = (s.translated_text || "").trim();
-      if (!text) {
-        const silence = join(work, `seg-${i}.mp3`);
-        await ffmpegSilence(silence, Math.max(0.1, (s.end_ms - s.start_ms) / 1000));
-        segmentFiles[i] = { file: silence, start_ms: s.start_ms, end_ms: s.end_ms };
+      if (i >= chunks.length) return;
+      const c = chunks[i];
+      const targetSec = Math.max(0.2, (c.end_ms - c.start_ms) / 1000);
+      if (!c.text) {
+        const silence = join(work, `chunk-${i}.mp3`);
+        await ffmpegSilence(silence, targetSec);
+        segmentFiles[i] = { file: silence, start_ms: c.start_ms, end_ms: c.end_ms };
       } else {
-        const raw = await ttsSynth(text);
-        const rawFile = join(work, `seg-${i}-raw.mp3`);
+        const raw = await ttsSynth(c.text);
+        const rawFile = join(work, `chunk-${i}-raw.mp3`);
         await writeFile(rawFile, raw);
 
-        const targetSec = Math.max(0.2, (s.end_ms - s.start_ms) / 1000);
         const rawSec = await ffprobeDuration(rawFile);
-        const segFile = join(work, `seg-${i}.mp3`);
-        await ffmpegFit(rawFile, segFile, rawSec, targetSec);
-        segmentFiles[i] = { file: segFile, start_ms: s.start_ms, end_ms: s.end_ms };
+        const chunkFile = join(work, `chunk-${i}.mp3`);
+        await ffmpegFit(rawFile, chunkFile, rawSec, targetSec);
+        segmentFiles[i] = { file: chunkFile, start_ms: c.start_ms, end_ms: c.end_ms };
       }
       done++;
       await reportProgress();
     }
   }
   await Promise.all(
-    Array.from({ length: Math.min(TTS_CONCURRENCY, translated.length) }, () => workerLoop()),
+    Array.from({ length: Math.min(TTS_CONCURRENCY, chunks.length) }, () => workerLoop()),
   );
 
   // 4. Склейка по таймкодам. Финальную длительность считаем как MAX(end_ms)
@@ -176,4 +183,46 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
   const audioUrl = await uploadMp3(key, data);
 
   await markJobDone({ id: job.id, audioUrl });
+}
+
+// Группирует подряд идущие сегменты в TTS-чанки. Логика:
+//   • Внутри чанка — суммарная длительность < CHUNK_MAX_MS (3 мин)
+//   • Чанк закрывается, если до следующего сегмента gap > BREAK_GAP_MS
+//     (естественная пауза говорящего — хорошая граница)
+//   • Чанк закрывается, если добавление следующего сегмента превысит
+//     CHUNK_MAX_MS
+// Пустые переводы внутри чанка пропускаются как короткие паузы.
+interface TtsChunk {
+  text: string;
+  start_ms: number;
+  end_ms: number;
+}
+
+const CHUNK_MAX_MS = 180_000;
+const BREAK_GAP_MS = 1_000;
+
+function chunkForTts(
+  segments: Array<{ idx: number; start_ms: number; end_ms: number; translated_text: string }>,
+): TtsChunk[] {
+  const chunks: TtsChunk[] = [];
+  let current: TtsChunk | null = null;
+
+  for (const s of segments) {
+    const text = (s.translated_text || "").trim();
+    if (!current) {
+      current = { text, start_ms: s.start_ms, end_ms: s.end_ms };
+      continue;
+    }
+    const gap = s.start_ms - current.end_ms;
+    const wouldBeDuration = s.end_ms - current.start_ms;
+    if (gap > BREAK_GAP_MS || wouldBeDuration > CHUNK_MAX_MS) {
+      chunks.push(current);
+      current = { text, start_ms: s.start_ms, end_ms: s.end_ms };
+    } else {
+      if (text) current.text = current.text ? `${current.text} ${text}` : text;
+      current.end_ms = s.end_ms;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
 }
