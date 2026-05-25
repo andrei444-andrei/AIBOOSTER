@@ -4,6 +4,10 @@
     {
       "path": "/api/adapters/tick",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/admin/backup",
+      "schedule": "0 3 * * *"
     }
   ]
 }

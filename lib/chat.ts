@@ -316,6 +316,18 @@ export async function appendMessage(
   }
 
   await touchSession(sessionId);
+  // Канарейка для checkPossibleDbSwap в lib/db.ts. Если эта метка стоит,
+  // а chat_sessions для OWNER_UID при старте процесса пуст — лог поднимет alert.
+  await db
+    .execute({
+      sql: `INSERT INTO chat_settings (id, last_chat_seen_at, created_at, updated_at)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET last_chat_seen_at = excluded.last_chat_seen_at`,
+      args: [now, now, now],
+    })
+    .catch(() => {
+      // Тихо: метка — диагностика, не блокирующая запись сообщения.
+    });
 
   return {
     id,

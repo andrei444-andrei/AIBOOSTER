@@ -565,6 +565,7 @@ export const TABLES: TableDef[] = [
       id INTEGER PRIMARY KEY CHECK (id = 1),
       system_prompt TEXT NOT NULL DEFAULT '',
       enabled_blocks TEXT NOT NULL DEFAULT '{}',
+      last_chat_seen_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
@@ -572,6 +573,7 @@ export const TABLES: TableDef[] = [
       { name: "id", description: "Всегда 1 — настройки одни на инсталляцию." },
       { name: "system_prompt", description: "Системный промт, который добавляется поверх каждой сессии." },
       { name: "enabled_blocks", description: "JSON: какие типы markdown-блоков разрешены." },
+      { name: "last_chat_seen_at", description: "ISO-время последнего успешного appendMessage. Канарейка для checkPossibleDbSwap: если chat_sessions для OWNER_UID пуст, а эта метка не-NULL и старше часа — likely прод-БД подменили." },
       { name: "created_at", description: "Когда строка появилась." },
       { name: "updated_at", description: "Когда была последняя правка." },
     ],
