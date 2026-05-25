@@ -106,7 +106,17 @@ export async function ffmpegFit(
   const chain = buildAtempoChain(ratio);
   const args = ["-y", "-i", inFile];
   if (chain) args.push("-filter:a", chain);
-  args.push("-acodec", "libmp3lame", "-q:a", "4", outFile);
+  // Жёстко нормализуем формат, чтобы concat demuxer склеивал чисто с
+  // silence-файлами (тот же 44.1kHz mono q:a 4). ElevenLabs возвращает
+  // mp3 разных частот (22/24/44.1kHz), и concat без нормализации
+  // молча обрывался посередине трека.
+  args.push(
+    "-acodec", "libmp3lame",
+    "-q:a", "4",
+    "-ar", "44100",
+    "-ac", "1",
+    outFile,
+  );
   await run(FFMPEG, args);
 }
 
