@@ -30,7 +30,10 @@ export async function translateBatch(
   opts: { sourceLang: string | null; targetLang: string; model?: string },
 ): Promise<TranslatedSegment[]> {
   const model = opts.model ?? "gpt-4o";
-  const CHUNK = 80;
+  // 40 сегментов в батче — компромисс между «один запрос на всё» (модель
+  // может схалтурить) и «по одному» (медленно). При gpt-4o 40 сегментов
+  // ≈ 2000-3000 токенов output, влезает уверенно.
+  const CHUNK = 40;
   const out: TranslatedSegment[] = [];
   for (let i = 0; i < segments.length; i += CHUNK) {
     const chunk = segments.slice(i, i + CHUNK);
@@ -46,15 +49,15 @@ async function translateOneBatch(
 ): Promise<TranslatedSegment[]> {
   const input = segments.map((s) => ({ idx: s.idx, text: s.text }));
   const sys =
-    `Ты — профессиональный переводчик-дубляжист. Переводишь живую речь из видео ` +
+    `Ты — профессиональный переводчик. Переводишь живую речь из видео ` +
     `на язык "${opts.targetLang}". Сохраняй естественность речи, юмор, тон оригинала. ` +
-    `ВАЖНО: длина перевода должна быть близка к длине оригинала по числу слогов — ` +
-    `фразы будут озвучивать поверх видео. Не добавляй пояснений. ` +
-    `Не объединяй и не разделяй сегменты — отвечай ровно по входным idx.`;
+    `Не объединяй и не разделяй сегменты — на каждый входной idx ровно один ` +
+    `перевод. Не добавляй пояснений.`;
   const user =
     `Исходный язык: ${opts.sourceLang || "auto"}. Целевой: ${opts.targetLang}.\n` +
-    `Верни строго валидный JSON массив объектов {"idx":number,"text":string} ` +
-    `БЕЗ префикса, БЕЗ markdown, в том же порядке.\n\n` +
+    `На входе ${input.length} сегментов. Верни ровно ${input.length} переводов в ` +
+    `формате JSON: {"items":[{"idx":number,"text":string}, ...]} в том же порядке.\n` +
+    `Никаких других ключей, никакого markdown, никакого текста снаружи объекта.\n\n` +
     `Вход:\n${JSON.stringify(input)}`;
 
   const res = await fetch(`${BASE}/chat/completions`, {
@@ -66,6 +69,10 @@ async function translateOneBatch(
     body: JSON.stringify({
       model: opts.model,
       temperature: 0.3,
+      // max_tokens должен покрыть translation для всего батча. На 80 сегментов
+      // по ~50 токенов на перевод = 4000+ токенов. Без явного лимита gpt-4o
+      // могла обрезать на 1-м сегменте.
+      max_tokens: 8000,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: sys },
@@ -92,6 +99,15 @@ async function translateOneBatch(
   if (!arr) {
     throw new Error(
       `translator JSON has no array (keys=${Object.keys((parsed as object) ?? {}).join(",")}): ${JSON.stringify(parsed).slice(0, 200)}`,
+    );
+  }
+  // Если модель вернула меньше чем мы просили — это уже не ок, лучше упасть
+  // явно, чем кидать в TTS pустые сегменты.
+  if (arr.length < segments.length * 0.5) {
+    throw new Error(
+      `translator returned only ${arr.length}/${segments.length} items — модель ` +
+        `вернула не все переводы. Это может быть из-за max_tokens или того, что ` +
+        `модель посчитала текст «не требующим перевода». Первый item: ${JSON.stringify(arr[0]).slice(0, 200)}`,
     );
   }
 
