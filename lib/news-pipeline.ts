@@ -46,9 +46,18 @@ import {
 } from "./news-prompt";
 
 const VALIDATOR_MODEL = "claude-sonnet-4-6";
-const VALIDATE_BATCH = 10;
+// Размер батча валидации намеренно небольшой: каждая валидация ~3-8 сек,
+// плюс фаза фетча (~5-15 сек на RSS). За один tick укладываемся в ~30-40 сек,
+// оставляя запас от лимита maxDuration=60. Сидящие pending подберёт
+// следующий тик через 10 минут.
+const VALIDATE_BATCH = 3;
 const MAX_ITEMS_PER_SOURCE = 20;
 const APIFY_RUN_TIMEOUT_MIN = 15;
+// Если до конца maxDuration осталось меньше — не запускаем новую валидацию.
+const VALIDATION_TIME_BUDGET_MS = 50_000;
+// Каждый LLM-вызов сам себя режет — но и в pipeline ставим страховку,
+// чтобы один зависший вызов не уносил остальные.
+const CHAT_TIMEOUT_MS = 25_000;
 
 export interface TickStats {
   seeded_profile: boolean;
@@ -65,6 +74,7 @@ export interface TickStats {
 }
 
 export async function runTick(workerId: string): Promise<TickStats> {
+  const tickStarted = Date.now();
   const stats: TickStats = {
     seeded_profile: false,
     seeded_sources: 0,
@@ -79,15 +89,19 @@ export async function runTick(workerId: string): Promise<TickStats> {
     errors: [],
   };
 
+  console.log(`[news/tick] start worker=${workerId}`);
+
   // Сидим дефолты — после ensureSchema (вызывается внутри news.ts функций).
   try {
     stats.seeded_profile = await seedProfileIfEmpty();
+    console.log(`[news/tick] seed_profile=${stats.seeded_profile} t=${Date.now() - tickStarted}ms`);
   } catch (err) {
     await logServerError(err, "news/cron/tick:seed_profile");
     stats.errors.push(`seed_profile: ${errMsg(err)}`);
   }
   try {
     stats.seeded_sources = await seedSourcesIfEmpty();
+    console.log(`[news/tick] seed_sources=${stats.seeded_sources} t=${Date.now() - tickStarted}ms`);
   } catch (err) {
     await logServerError(err, "news/cron/tick:seed_sources");
     stats.errors.push(`seed_sources: ${errMsg(err)}`);
@@ -97,6 +111,7 @@ export async function runTick(workerId: string): Promise<TickStats> {
   let source: NewsSourceRow | null = null;
   try {
     source = await claimDueSource(workerId);
+    console.log(`[news/tick] claim_source=${source?.name ?? "none"} t=${Date.now() - tickStarted}ms`);
   } catch (err) {
     await logServerError(err, "news/cron/tick:claim_source");
     stats.errors.push(`claim_source: ${errMsg(err)}`);
@@ -115,6 +130,7 @@ export async function runTick(workerId: string): Promise<TickStats> {
         stats.warnings.push(`unknown source kind: ${source.kind}`);
         await releaseSource(source.id);
       }
+      console.log(`[news/tick] process_source action=${stats.source_action} inserted=${stats.items_inserted} t=${Date.now() - tickStarted}ms`);
     } catch (err) {
       await logServerError(err, "news/cron/tick:process_source", {
         source_id: source.id,
@@ -127,10 +143,18 @@ export async function runTick(workerId: string): Promise<TickStats> {
     }
   }
 
-  // Фаза 2: валидация pending-items.
+  // Фаза 2: валидация pending-items. Только если есть time-budget.
+  const elapsed = Date.now() - tickStarted;
+  if (elapsed >= VALIDATION_TIME_BUDGET_MS) {
+    stats.warnings.push(`skip validation phase, elapsed=${elapsed}ms`);
+    console.log(`[news/tick] skip_validation elapsed=${elapsed}ms`);
+    return stats;
+  }
+
   let pending: NewsItemRow[] = [];
   try {
     pending = await getPendingItems(VALIDATE_BATCH);
+    console.log(`[news/tick] pending=${pending.length} t=${Date.now() - tickStarted}ms`);
   } catch (err) {
     await logServerError(err, "news/cron/tick:get_pending");
     stats.errors.push(`get_pending: ${errMsg(err)}`);
@@ -148,10 +172,19 @@ export async function runTick(workerId: string): Promise<TickStats> {
 
     if (!process.env.AIMLAPI_KEY) {
       stats.warnings.push("AIMLAPI_KEY not set — validation skipped");
+      console.log(`[news/tick] no AIMLAPI_KEY`);
       return stats;
     }
 
     for (const item of pending) {
+      // Не запускаем новую валидацию если не хватит времени её закончить.
+      const remaining = VALIDATION_TIME_BUDGET_MS - (Date.now() - tickStarted);
+      if (remaining < CHAT_TIMEOUT_MS) {
+        stats.warnings.push(`skip remaining validations, time_left=${remaining}ms`);
+        console.log(`[news/tick] partial_validation done=${stats.validated} time_left=${remaining}ms`);
+        break;
+      }
+      const itemStarted = Date.now();
       try {
         const result = await validateOne(item, profile);
         if (result === "failed") {
@@ -161,8 +194,10 @@ export async function runTick(workerId: string): Promise<TickStats> {
           if (result === "show") stats.validated_show++;
           else if (result === "skip") stats.validated_skip++;
         }
+        console.log(`[news/tick] validated ${item.id} result=${result} dt=${Date.now() - itemStarted}ms`);
       } catch (err) {
         stats.validation_failed++;
+        console.log(`[news/tick] validation_failed ${item.id} dt=${Date.now() - itemStarted}ms err=${errMsg(err).slice(0, 200)}`);
         await logServerError(err, "news/cron/tick:validate_item", {
           item_id: item.id,
           source_id: item.source_id,
@@ -171,6 +206,13 @@ export async function runTick(workerId: string): Promise<TickStats> {
     }
   }
 
+  console.log(`[news/tick] done total=${Date.now() - tickStarted}ms stats=${JSON.stringify({
+    inserted: stats.items_inserted,
+    validated: stats.validated,
+    show: stats.validated_show,
+    skip: stats.validated_skip,
+    failed: stats.validation_failed,
+  })}`);
   return stats;
 }
 
@@ -289,6 +331,7 @@ async function validateOne(
       system: prompt.system,
       user: prompt.user,
       temperature: 0.2,
+      timeoutMs: CHAT_TIMEOUT_MS,
       requestId: item.id,
     });
     const parsed = validateValidatorOutput(res.parsed);
