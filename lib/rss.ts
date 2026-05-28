@@ -18,6 +18,7 @@ export interface NormalizedRssItem {
 
 const MAX_RSS_BYTES = 2 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
+const RSS_FETCH_TIMEOUT_MS = 15_000;
 
 export async function fetchRss(
   url: string,
@@ -26,17 +27,31 @@ export async function fetchRss(
   assertPublicHttpUrl(url);
 
   // Ручной редирект, чтобы каждый hop пропустить через assertPublicHttpUrl
-  // (защита от 302 на внутренние адреса).
+  // (защита от 302 на внутренние адреса). AbortController на каждый hop
+  // отдельно — общий бюджет ~MAX_REDIRECTS * RSS_FETCH_TIMEOUT_MS.
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const res = await fetch(current, {
-      redirect: "manual",
-      headers: {
-        "user-agent": "AIBOOSTER-news/0.1 (+https://aibooster.app)",
-        accept:
-          "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
-      },
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), RSS_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(current, {
+        redirect: "manual",
+        signal: controller.signal,
+        headers: {
+          "user-agent": "AIBOOSTER-news/0.1 (+https://aibooster.app)",
+          accept:
+            "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5",
+        },
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(`rss fetch timeout after ${RSS_FETCH_TIMEOUT_MS}ms for ${current}`);
+      }
+      throw err;
+    }
+    clearTimeout(timer);
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get("location");
       if (!loc) throw new Error(`rss redirect without Location for ${current}`);
