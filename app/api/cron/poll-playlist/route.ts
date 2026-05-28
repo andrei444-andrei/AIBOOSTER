@@ -12,13 +12,12 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
-  // Vercel Cron шлёт `x-vercel-cron: 1` — пропускаем. Ручной debug —
-  // Bearer ADMIN_TOKEN/CRON_SECRET. См. process-jobs/route.ts.
-  const isVercelCron = req.headers.get("x-vercel-cron") !== null;
-  if (!isVercelCron) {
+  // Auth — см. process-jobs/route.ts. Если CRON_SECRET задан, проверяем
+  // Bearer, иначе пропускаем (Vercel cron без CRON_SECRET шлёт без auth).
+  const expected = process.env.CRON_SECRET;
+  if (expected) {
     const auth = req.headers.get("authorization") || "";
-    const expected = process.env.CRON_SECRET || process.env.ADMIN_TOKEN || "";
-    if (expected && auth !== `Bearer ${expected}`) {
+    if (auth !== `Bearer ${expected}`) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
   }

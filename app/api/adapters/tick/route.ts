@@ -68,20 +68,24 @@ export const GET = handle;
 export const POST = handle;
 
 function isAuthorized(req: Request): boolean {
-  // Vercel Cron path: если CRON_SECRET не задан, Vercel шлёт только
-  // header `x-vercel-cron: 1` — пропускаем по нему. Если CRON_SECRET
-  // задан, Vercel дополнительно шлёт Bearer-токен.
-  if (req.headers.get("x-vercel-cron") !== null) return true;
+  // Если CRON_SECRET задан, Vercel cron шлёт Bearer с ним — проверяем.
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const auth = req.headers.get("authorization");
     const provided =
       auth && auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : null;
     if (provided && constantTimeEqual(provided, cronSecret)) return true;
+    // CRON_SECRET задан, но bearer не подошёл — это либо Vercel cron без
+    // CRON_SECRET (значит env создан позже регистрации крона — редкость),
+    // либо ручной вызов с другим токеном. Не блокируем мгновенно —
+    // ниже даём шанс admin-token'у.
   }
-  // Ручной/админский путь.
+  // Ручной/админский путь (curl/MCP с x-admin-token).
   const adminCheck = checkAdminToken(req);
-  return adminCheck.ok;
+  if (adminCheck.ok) return true;
+  // Если CRON_SECRET НЕ задан — пропускаем (Vercel cron без auth-header'ов).
+  // Внешний вызов не страшен: tick просто прогонит свой обычный цикл.
+  return !cronSecret;
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

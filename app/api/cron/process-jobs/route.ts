@@ -17,17 +17,17 @@ export const maxDuration = 300; // 5 минут (Pro план)
 const WORKER_ID = "vercel-cron";
 
 export async function GET(req: Request) {
-  // Проверка авторизации:
-  // 1. Vercel Cron автоматически добавляет header `x-vercel-cron: 1` —
-  //    пропускаем без bearer-токена. Если CRON_SECRET не задан, Vercel
-  //    больше ничего не шлёт, поэтому именно этот header — единственный
-  //    надёжный признак родного крона.
-  // 2. Ручной запуск из curl/MCP — Bearer ADMIN_TOKEN / CRON_SECRET.
-  const isVercelCron = req.headers.get("x-vercel-cron") !== null;
-  if (!isVercelCron) {
+  // Auth: если CRON_SECRET задан в env — проверяем Bearer, Vercel cron
+  // его автоматически добавит. Если не задан — endpoint открыт, и его
+  // могут дёргать Vercel cron, я сам curl'ом для debug или кто угодно
+  // снаружи. Это персональный проект — внешний вызов = бесплатное
+  // выполнение нашей же работы (process queued job), вреда нет.
+  // Раньше блокировали по ADMIN_TOKEN как fallback — но Vercel cron его
+  // не знает и шлёт без header'а, ловил 401 на каждом тике.
+  const expected = process.env.CRON_SECRET;
+  if (expected) {
     const auth = req.headers.get("authorization") || "";
-    const expected = process.env.CRON_SECRET || process.env.ADMIN_TOKEN || "";
-    if (expected && auth !== `Bearer ${expected}`) {
+    if (auth !== `Bearer ${expected}`) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
   }
