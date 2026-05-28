@@ -67,6 +67,16 @@ export const MODULES: ModuleEntry[] = [
     icon: "▶",
   },
   {
+    slug: "news",
+    title: "Лента новостей",
+    href: "/news",
+    description: "Telegram + RSS источники → Claude отфильтрует, в ленте — только полезное.",
+    pinned: true,
+    section: "main",
+    icon: "◎",
+    requiresAdminToken: true,
+  },
+  {
     slug: "ux-kit",
     title: "UX Kit",
     href: "/ux",
