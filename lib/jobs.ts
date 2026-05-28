@@ -10,6 +10,9 @@ import { canonicalUrl, type Quality } from "./youtube";
 export type JobStatus = "queued" | "running" | "done" | "error" | "cancelled";
 export type JobStage = "download" | "asr" | "translate" | "tts" | "mux";
 
+export type WatchStatus = "to_watch" | "watched";
+export type JobSource = "manual" | "playlist";
+
 export interface JobRow {
   id: string;
   yt_url: string;
@@ -27,6 +30,10 @@ export interface JobRow {
   audio_url: string | null;
   claimed_at: string | null;
   claimed_by: string | null;
+  watch_status: WatchStatus;
+  last_position_sec: number;
+  watched_at: string | null;
+  source: JobSource;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -66,23 +73,42 @@ export async function createJob(args: {
   url?: string;
   targetLang: string;
   quality: Quality;
+  source?: JobSource;
 }): Promise<JobRow> {
   await ensureSchema();
   const db = getDb();
   const id = randomUUID();
   const now = new Date().toISOString();
   const url = args.url ?? canonicalUrl(args.videoId);
+  const source = args.source ?? "manual";
 
   await db.execute({
     sql: `INSERT INTO video_translation_jobs
-            (id, yt_url, yt_video_id, target_lang, quality, status, progress, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?)`,
-    args: [id, url, args.videoId, args.targetLang, args.quality, now, now],
+            (id, yt_url, yt_video_id, target_lang, quality, status, progress, source, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
+    args: [id, url, args.videoId, args.targetLang, args.quality, source, now, now],
   });
 
   const row = await getJob(id);
   if (!row) throw new Error("job not found after insert");
   return row;
+}
+
+// Есть ли уже какая-нибудь job для (video_id, target_lang)? Используется
+// плейлист-поллером, чтобы не плодить дубли при каждом тике cron.
+export async function hasJobForVideo(
+  videoId: string,
+  targetLang: string,
+): Promise<boolean> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute({
+    sql: `SELECT 1 FROM video_translation_jobs
+          WHERE yt_video_id = ? AND target_lang = ?
+          LIMIT 1`,
+    args: [videoId, targetLang],
+  });
+  return res.rows.length > 0;
 }
 
 export async function getJob(id: string): Promise<JobRow | null> {
@@ -95,31 +121,87 @@ export async function getJob(id: string): Promise<JobRow | null> {
   return (res.rows[0] as unknown as JobRow) ?? null;
 }
 
-// Список недавних job'ов для боковой панели истории. Возвращаем только
-// поля, нужные для рендера карточки — без сегментов и без больших полей.
+// Список недавних job'ов для боковой панели истории и страницы-библиотеки.
+// Возвращаем только поля, нужные для рендера карточки.
 export interface JobSummary {
   id: string;
   yt_video_id: string;
   yt_title: string | null;
+  yt_duration_sec: number | null;
   target_lang: string;
   status: JobStatus;
   stage: JobStage | null;
   progress: number;
   audio_url: string | null;
+  watch_status: WatchStatus;
+  last_position_sec: number;
+  source: JobSource;
   created_at: string;
 }
 
-export async function listRecentJobs(limit = 30): Promise<JobSummary[]> {
+export async function listRecentJobs(args: {
+  limit?: number;
+  watchStatus?: WatchStatus | "all";
+} = {}): Promise<JobSummary[]> {
   await ensureSchema();
   const db = getDb();
+  const limit = Math.max(1, Math.min(200, args.limit ?? 60));
+  const wantWatch = args.watchStatus ?? "all";
+
+  const where: string[] = [];
+  const params: (string | number)[] = [];
+  if (wantWatch !== "all") {
+    where.push("watch_status = ?");
+    params.push(wantWatch);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  params.push(limit);
+
   const res = await db.execute({
-    sql: `SELECT id, yt_video_id, yt_title, target_lang, status, stage, progress, audio_url, created_at
+    sql: `SELECT id, yt_video_id, yt_title, yt_duration_sec, target_lang,
+                 status, stage, progress, audio_url,
+                 watch_status, last_position_sec, source, created_at
           FROM video_translation_jobs
+          ${whereSql}
           ORDER BY created_at DESC
           LIMIT ?`,
-    args: [Math.max(1, Math.min(100, limit))],
+    args: params,
   });
   return res.rows as unknown as JobSummary[];
+}
+
+// Обновляет позицию воспроизведения. Принимает позицию в секундах. Опционально
+// помечает как «watched» — клиент шлёт это на onEnded или ручным кликом.
+export async function updateJobPlayback(args: {
+  id: string;
+  positionSec?: number;
+  watchStatus?: WatchStatus;
+}): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const sets: string[] = ["updated_at = ?"];
+  const params: (string | number | null)[] = [new Date().toISOString()];
+
+  if (args.positionSec !== undefined) {
+    sets.push("last_position_sec = ?");
+    params.push(Math.max(0, args.positionSec));
+  }
+  if (args.watchStatus !== undefined) {
+    sets.push("watch_status = ?");
+    params.push(args.watchStatus);
+    if (args.watchStatus === "watched") {
+      sets.push("watched_at = ?");
+      params.push(new Date().toISOString());
+    } else {
+      sets.push("watched_at = NULL");
+    }
+  }
+
+  params.push(args.id);
+  await db.execute({
+    sql: `UPDATE video_translation_jobs SET ${sets.join(", ")} WHERE id = ?`,
+    args: params,
+  });
 }
 
 export async function getSegments(jobId: string): Promise<SegmentRow[]> {

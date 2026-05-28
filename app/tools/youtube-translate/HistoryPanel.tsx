@@ -7,11 +7,15 @@ interface JobSummary {
   id: string;
   yt_video_id: string;
   yt_title: string | null;
+  yt_duration_sec: number | null;
   target_lang: string;
   status: "queued" | "running" | "done" | "error" | "cancelled";
   stage: "download" | "asr" | "translate" | "tts" | "mux" | null;
   progress: number;
   audio_url: string | null;
+  watch_status: "to_watch" | "watched";
+  last_position_sec: number;
+  source: "manual" | "playlist";
   created_at: string;
 }
 
@@ -153,7 +157,8 @@ function JobItem({ job, active }: { job: JobSummary; active: boolean }) {
         <div
           style={{
             fontSize: "var(--text-sm)",
-            color: "var(--text)",
+            color:
+              job.watch_status === "watched" ? "var(--text-muted)" : "var(--text)",
             lineHeight: 1.3,
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -164,6 +169,17 @@ function JobItem({ job, active }: { job: JobSummary; active: boolean }) {
           }}
           title={title}
         >
+          {job.watch_status === "watched" && (
+            <span
+              style={{
+                color: "var(--success)",
+                marginRight: 4,
+              }}
+              aria-label="просмотрено"
+            >
+              ✓
+            </span>
+          )}
           {title}
         </div>
         <StatusBadge job={job} />

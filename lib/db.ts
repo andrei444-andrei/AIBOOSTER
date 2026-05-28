@@ -46,6 +46,11 @@ const COLUMN_MIGRATIONS: ColumnAddition[] = [
   { table: "chat_sessions", column: "category_override", ddl: "category_override TEXT" },
   { table: "chat_messages", column: "duration_ms", ddl: "duration_ms INTEGER" },
   { table: "chat_messages", column: "route_meta", ddl: "route_meta TEXT" },
+  // Подкаст-плеер для YouTube-переводов.
+  { table: "video_translation_jobs", column: "watch_status", ddl: "watch_status TEXT NOT NULL DEFAULT 'to_watch'" },
+  { table: "video_translation_jobs", column: "last_position_sec", ddl: "last_position_sec REAL NOT NULL DEFAULT 0" },
+  { table: "video_translation_jobs", column: "watched_at", ddl: "watched_at TEXT" },
+  { table: "video_translation_jobs", column: "source", ddl: "source TEXT NOT NULL DEFAULT 'manual'" },
 ];
 
 async function hasColumn(table: string, column: string): Promise<boolean> {

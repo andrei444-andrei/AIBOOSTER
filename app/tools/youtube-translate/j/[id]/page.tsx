@@ -34,7 +34,7 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
             borderBottom: "1px solid var(--border)",
           }}
         >
-          ← новый перевод
+          ← к библиотеке
         </Link>
         <JobView jobId={id} />
       </main>

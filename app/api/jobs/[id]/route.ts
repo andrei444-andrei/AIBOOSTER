@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { logServerError } from "@/lib/logger";
-import { getJob, getSegments } from "@/lib/jobs";
+import { getJob, getSegments, updateJobPlayback, type WatchStatus } from "@/lib/jobs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -43,6 +43,9 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
         error_message: job.error_message,
         error_id: job.error_id,
         audio_url: job.audio_url,
+        watch_status: job.watch_status,
+        last_position_sec: job.last_position_sec,
+        source: job.source,
         created_at: job.created_at,
         updated_at: job.updated_at,
         finished_at: job.finished_at,
@@ -59,6 +62,54 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     const error_id = await logServerError(err, `/api/jobs/${id}`);
     return NextResponse.json(
       { error: "не удалось прочитать задачу", error_id },
+      { status: 500 },
+    );
+  }
+}
+
+// PATCH /api/jobs/[id]
+// Обновляет «зрительские» поля: позицию воспроизведения и watch_status.
+// Тело: { last_position_sec?: number, watch_status?: 'to_watch'|'watched' }.
+// Используется аудио-плеером (сохраняет позицию каждые ~5с) и кнопкой
+// «отметить как просмотрено» в библиотеке. Без авторизации — id играет
+// роль capability-токена (как и в GET).
+export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
+
+  let body: { last_position_sec?: unknown; watch_status?: unknown } = {};
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
+  }
+
+  const positionSec =
+    typeof body.last_position_sec === "number" && Number.isFinite(body.last_position_sec)
+      ? body.last_position_sec
+      : undefined;
+  const watchStatusRaw = body.watch_status;
+  const watchStatus: WatchStatus | undefined =
+    watchStatusRaw === "to_watch" || watchStatusRaw === "watched"
+      ? watchStatusRaw
+      : undefined;
+
+  if (positionSec === undefined && watchStatus === undefined) {
+    return NextResponse.json(
+      { error: "nothing to update — пришли last_position_sec и/или watch_status" },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const job = await getJob(id);
+    if (!job) return NextResponse.json({ error: "job not found" }, { status: 404 });
+    await updateJobPlayback({ id, positionSec, watchStatus });
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    const error_id = await logServerError(err, `/api/jobs/${id} PATCH`);
+    return NextResponse.json(
+      { error: "не удалось обновить задачу", error_id },
       { status: 500 },
     );
   }

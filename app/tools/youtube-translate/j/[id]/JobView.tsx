@@ -6,6 +6,7 @@ import { Button, Card } from "@/components/ui";
 
 type Stage = "download" | "asr" | "translate" | "tts" | "mux" | null;
 type Status = "queued" | "running" | "done" | "error" | "cancelled";
+type WatchStatus = "to_watch" | "watched";
 
 interface JobDto {
   id: string;
@@ -22,6 +23,9 @@ interface JobDto {
   error_message: string | null;
   error_id: string | null;
   audio_url: string | null;
+  watch_status: WatchStatus;
+  last_position_sec: number;
+  source: string;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -295,14 +299,90 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [currentMs, setCurrentMs] = useState(0);
   const [showOriginal, setShowOriginal] = useState(false);
+  const [watchStatus, setWatchStatus] = useState<WatchStatus>(job.watch_status);
+  const lastSavedRef = useRef<number>(job.last_position_sec);
 
+  // Прыгаем на сохранённую позицию когда аудио готов читать. Делаем один раз
+  // на маунт. Если уже отметили watched и резюм=0, никуда не прыгаем.
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-    const onTime = () => setCurrentMs(Math.round(a.currentTime * 1000));
+    let seeded = false;
+    const target = job.last_position_sec;
+    function seedPosition() {
+      if (seeded) return;
+      seeded = true;
+      if (a && target > 0.5 && a.duration && target < a.duration - 1) {
+        try {
+          a.currentTime = target;
+        } catch {
+          // ignore — некоторые браузеры не любят currentTime до loadedmetadata
+        }
+      }
+    }
+    a.addEventListener("loadedmetadata", seedPosition);
+    return () => a.removeEventListener("loadedmetadata", seedPosition);
+  }, [job.last_position_sec]);
+
+  // Слушаем timeupdate для подсветки активного сегмента + периодически
+  // сохраняем позицию в БД (раз в 5 сек, чтобы не спамить).
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    const onTime = () => {
+      const ms = Math.round(a.currentTime * 1000);
+      setCurrentMs(ms);
+      const sec = a.currentTime;
+      if (Math.abs(sec - lastSavedRef.current) >= 5) {
+        lastSavedRef.current = sec;
+        void savePlayback(job.id, { last_position_sec: sec });
+      }
+    };
+    const onPause = () => {
+      lastSavedRef.current = a.currentTime;
+      void savePlayback(job.id, { last_position_sec: a.currentTime });
+    };
+    const onEnded = () => {
+      lastSavedRef.current = 0;
+      setWatchStatus("watched");
+      void savePlayback(job.id, {
+        last_position_sec: 0,
+        watch_status: "watched",
+      });
+    };
     a.addEventListener("timeupdate", onTime);
-    return () => a.removeEventListener("timeupdate", onTime);
-  }, []);
+    a.addEventListener("pause", onPause);
+    a.addEventListener("ended", onEnded);
+    return () => {
+      a.removeEventListener("timeupdate", onTime);
+      a.removeEventListener("pause", onPause);
+      a.removeEventListener("ended", onEnded);
+    };
+  }, [job.id]);
+
+  // На beforeunload сохраняем позицию через sendBeacon (обычный fetch не
+  // успевает завершиться при закрытии вкладки).
+  useEffect(() => {
+    function flush() {
+      const a = audioRef.current;
+      if (!a) return;
+      // fetch с keepalive — браузер довезёт запрос даже если страница уже
+      // закрывается. sendBeacon не умеет PATCH-методы, поэтому остаёмся на
+      // fetch с указанным флагом — он специально для этого сценария.
+      try {
+        void fetch(`/api/jobs/${job.id}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ last_position_sec: a.currentTime }),
+          keepalive: true,
+        });
+      } catch {
+        // ignore
+      }
+    }
+    window.addEventListener("beforeunload", flush);
+    return () => window.removeEventListener("beforeunload", flush);
+  }, [job.id]);
 
   const activeIdx = segments.findIndex(
     (s) => currentMs >= s.start_ms && currentMs < s.end_ms,
@@ -313,6 +393,12 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
     if (!a) return;
     a.currentTime = ms / 1000;
     a.play().catch(() => {});
+  }
+
+  async function toggleWatched() {
+    const next: WatchStatus = watchStatus === "watched" ? "to_watch" : "watched";
+    setWatchStatus(next);
+    await savePlayback(job.id, { watch_status: next });
   }
 
   return (
@@ -326,6 +412,28 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
           style={{ width: "100%" }}
         />
         <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={toggleWatched}
+            style={{
+              padding: "6px 12px",
+              background:
+                watchStatus === "watched" ? "var(--success-bg)" : "var(--bg-subtle)",
+              border: `1px solid ${
+                watchStatus === "watched" ? "var(--success)" : "var(--border)"
+              }`,
+              borderRadius: "var(--radius-sm)",
+              color:
+                watchStatus === "watched" ? "var(--success)" : "var(--text)",
+              fontSize: "var(--text-sm)",
+              fontFamily: "inherit",
+              cursor: "pointer",
+            }}
+          >
+            {watchStatus === "watched"
+              ? "✓ Просмотрено"
+              : "Отметить как просмотрено"}
+          </button>
           <a
             href={job.audio_url ?? "#"}
             download
@@ -473,4 +581,20 @@ function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+async function savePlayback(
+  jobId: string,
+  body: { last_position_sec?: number; watch_status?: WatchStatus },
+): Promise<void> {
+  try {
+    await fetch(`/api/jobs/${jobId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      keepalive: true,
+    });
+  } catch {
+    // не критично — позиция сохранится на следующем тике/событии
+  }
 }
