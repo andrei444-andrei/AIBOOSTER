@@ -19,8 +19,6 @@ import {
   claimDueSource,
   releaseSource,
   setSourceFetched,
-  setApifyRun,
-  updateApifyStatus,
   insertRawItem,
   getPendingItems,
   applyValidation,
@@ -30,11 +28,7 @@ import {
   type NewsSourceRow,
   type NewsItemRow,
 } from "./news";
-import {
-  startTelegramRun,
-  getRunStatus,
-  fetchRunDataset,
-} from "./apify-tg";
+import { fetchTelegramChannel } from "./telegram-scrape";
 import { fetchRss, stripHtml } from "./rss";
 import { chatJson } from "./aimlapi";
 import {
@@ -47,12 +41,11 @@ import {
 
 const VALIDATOR_MODEL = "claude-sonnet-4-6";
 // Размер батча валидации намеренно небольшой: каждая валидация ~3-8 сек,
-// плюс фаза фетча (~5-15 сек на RSS). За один tick укладываемся в ~30-40 сек,
+// плюс фаза фетча (~5-15 сек). За один tick укладываемся в ~30-40 сек,
 // оставляя запас от лимита maxDuration=60. Сидящие pending подберёт
 // следующий тик через 10 минут.
 const VALIDATE_BATCH = 3;
 const MAX_ITEMS_PER_SOURCE = 20;
-const APIFY_RUN_TIMEOUT_MIN = 15;
 // Если до конца maxDuration осталось меньше — не запускаем новую валидацию.
 const VALIDATION_TIME_BUDGET_MS = 50_000;
 // Каждый LLM-вызов сам себя режет — но и в pipeline ставим страховку,
@@ -219,77 +212,32 @@ export async function runTick(workerId: string): Promise<TickStats> {
   return stats;
 }
 
+// Telegram-источник теперь читается напрямую через t.me/s/CHANNEL
+// (публичный web-preview, не требует Apify/MTProto/токена). За один tick:
+// fetch → parse → insert. Это покрывает 95% MVP-кейса (публичные новостные
+// каналы). Для приватных/чатов потребовался бы MTProto — пока вне scope.
 async function processTelegramSource(
   source: NewsSourceRow,
   stats: TickStats,
 ): Promise<string> {
-  if (!process.env.APIFY_TOKEN) {
-    stats.warnings.push("APIFY_TOKEN not set — telegram source skipped");
-    await releaseSource(source.id);
-    return "skipped_no_token";
+  const posts = await fetchTelegramChannel(source.url);
+  const limited = posts.slice(0, MAX_ITEMS_PER_SOURCE);
+  let inserted = 0;
+  for (const p of limited) {
+    const id = await insertRawItem({
+      source_id: source.id,
+      external_id: p.external_id,
+      url: p.url || null,
+      title: p.title,
+      body: p.body,
+      published_at: p.published_at,
+      raw_meta: p.raw_meta,
+    });
+    if (id) inserted++;
   }
-
-  // Есть активный run — проверяем его статус.
-  if (source.apify_run_id) {
-    const startedAt = source.apify_run_started_at
-      ? Date.parse(source.apify_run_started_at)
-      : 0;
-    const ageMin = (Date.now() - startedAt) / 60_000;
-    if (ageMin > APIFY_RUN_TIMEOUT_MIN) {
-      // Зависший run — сбрасываем и стартанём новый на следующем tick'е.
-      stats.warnings.push(
-        `apify run ${source.apify_run_id} timed out (${Math.round(ageMin)}min) — resetting`,
-      );
-      await setApifyRun(source.id, null, "ABANDONED");
-      await releaseSource(source.id);
-      return "reset_stale_run";
-    }
-
-    const info = await getRunStatus(source.apify_run_id);
-    await updateApifyStatus(source.id, info.status);
-    if (info.status === "SUCCEEDED" && info.datasetId) {
-      // Сначала чистим run_id и помечаем источник как fetched. Если потом
-      // что-то рухнет на вставке — у нас не будет залипшего run_id, который
-      // на следующем tick'е попробует повторно тянуть тот же dataset.
-      // Дедуп по (source_id, external_id) защищает от потери данных при
-      // повторной выборке dataset'а если что-то прерывалось.
-      await setApifyRun(source.id, null, info.status);
-      await setSourceFetched(source.id);
-
-      const posts = await fetchRunDataset(info.datasetId);
-      const limited = posts.slice(0, MAX_ITEMS_PER_SOURCE);
-      let inserted = 0;
-      for (const p of limited) {
-        const id = await insertRawItem({
-          source_id: source.id,
-          external_id: p.external_id,
-          url: p.url || null,
-          title: p.title,
-          body: p.body,
-          published_at: p.published_at,
-          raw_meta: p.raw_meta,
-        });
-        if (id) inserted++;
-      }
-      stats.items_inserted += inserted;
-      return `harvested_${inserted}_of_${posts.length}`;
-    }
-    if (info.status === "FAILED" || info.status === "ABORTED" || info.status === "TIMED-OUT") {
-      stats.warnings.push(`apify run ${source.apify_run_id} ended: ${info.status}`);
-      await setApifyRun(source.id, null, info.status);
-      await releaseSource(source.id);
-      return `apify_${info.status.toLowerCase()}`;
-    }
-    // RUNNING / READY — отпускаем лок, ждём следующий tick.
-    await releaseSource(source.id);
-    return `apify_${info.status.toLowerCase()}`;
-  }
-
-  // Нет активного run — стартуем.
-  const run = await startTelegramRun(source.url);
-  await setApifyRun(source.id, run.id, run.status);
-  await releaseSource(source.id);
-  return `started_run_${run.id}`;
+  stats.items_inserted += inserted;
+  await setSourceFetched(source.id);
+  return `tg_${inserted}_of_${posts.length}`;
 }
 
 async function processRssSource(
