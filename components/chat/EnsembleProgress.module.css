@@ -1,0 +1,150 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: var(--space-3);
+  animation: fadeIn 240ms ease-out;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  transition: all 200ms ease;
+}
+
+.chip[data-state="done"] {
+  background: var(--success-bg);
+  color: var(--success);
+  border-color: transparent;
+}
+
+.chip[data-state="failed"] {
+  background: var(--bg-muted);
+  color: var(--text-muted);
+  border-color: transparent;
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.chip[data-state="pending"] .dot {
+  background: var(--text-muted);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.chip[data-state="done"] .dot {
+  background: var(--success);
+}
+
+.chip[data-state="failed"] .dot {
+  background: var(--text-muted);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.chipLabel {
+  white-space: nowrap;
+}
+
+.arrow {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  margin: 0 2px;
+}
+
+.judgeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  transition: all 200ms ease;
+}
+
+.judgeChip[data-state="active"] {
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  box-shadow: 0 0 0 3px rgba(31, 31, 30, 0.06);
+}
+
+.judgeChip[data-state="active"] .judgeIcon {
+  animation: tilt 1.6s ease-in-out infinite;
+}
+
+.judgeIcon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
+@keyframes tilt {
+  0%,
+  100% {
+    transform: rotate(-12deg);
+  }
+  50% {
+    transform: rotate(12deg);
+  }
+}
