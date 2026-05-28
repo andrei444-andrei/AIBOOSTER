@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
+import { checkAdminToken } from "@/lib/auth";
 import { logServerError } from "@/lib/logger";
 import { runTick } from "@/lib/news-pipeline";
 
@@ -10,34 +11,19 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 // POST/GET /api/news/cron/tick
-// Триггер Vercel Cron каждые 10 минут. Защищён CRON_SECRET (Vercel шлёт его
-// заголовком `Authorization: Bearer ${CRON_SECRET}`).
 //
-// Возвращает JSON-статистику: что засеяно, какой источник обработан, сколько
-// постов добавлено и провалидировано. Это нужно, чтобы можно было curl'ом
-// проверить, что cron живой, и видеть burn-rate Apify/aimlapi.
+// Триггер Vercel Cron каждые 10 минут.
+//
+// Авторизация — повторяет проектную конвенцию (см. app/api/adapters/tick):
+//   1) Если CRON_SECRET задан в env — Vercel шлёт Bearer с ним, принимаем.
+//   2) Ручной вызов с ADMIN_TOKEN — тоже принимаем (для curl/MCP-debug).
+//   3) Если CRON_SECRET НЕ задан — endpoint открыт. Vercel cron шлёт без
+//      auth-header'ов, и мы его пропускаем. Это намеренно: single-user
+//      проект, никаких данных наружу не отдаётся, внешний вызов в худшем
+//      случае стоит нам лишних функция-минут (как и любой другой cron).
 async function handle(req: Request) {
-  const expected = process.env.CRON_SECRET;
-  if (!expected) {
-    return NextResponse.json(
-      { error: "CRON_SECRET is not configured" },
-      { status: 503 },
-    );
-  }
-
-  const auth = req.headers.get("authorization") || "";
-  const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
-  if (!constantTimeEqual(token, expected)) {
+  if (!isAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-
-  // CRON_SECRET и ADMIN_TOKEN должны отличаться — иначе leaks одного открывает
-  // оба. Мягкая проверка: warn в логи, но не отказ.
-  if (process.env.ADMIN_TOKEN && process.env.ADMIN_TOKEN === expected) {
-    await logServerError(
-      new Error("CRON_SECRET == ADMIN_TOKEN — use distinct values"),
-      "news/cron/tick",
-    );
   }
 
   const workerId = `cron-${Date.now()}`;
@@ -53,18 +39,26 @@ async function handle(req: Request) {
   }
 }
 
-export async function POST(req: Request) {
-  return handle(req);
-}
+export const GET = handle;
+export const POST = handle;
 
-// Vercel Cron делает GET — поддерживаем оба метода.
-export async function GET(req: Request) {
-  return handle(req);
+function isAuthorized(req: Request): boolean {
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret) {
+    const auth = req.headers.get("authorization") || "";
+    const provided = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+    if (provided && constantTimeEqual(provided, cronSecret)) return true;
+    // Bearer не подошёл — идём ниже, дадим шанс ADMIN_TOKEN.
+  }
+  const adminCheck = checkAdminToken(req);
+  if (adminCheck.ok) return true;
+  // CRON_SECRET НЕ задан → пропускаем без auth (Vercel cron-конвенция проекта).
+  return !cronSecret;
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
-  if (ab.length === 0 || ab.length !== bb.length) return false;
+  if (ab.length !== bb.length) return false;
   return timingSafeEqual(ab, bb);
 }
