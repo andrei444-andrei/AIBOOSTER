@@ -11,6 +11,7 @@
 
 import { ensureSchema, getDb } from "./db";
 import { createJob, hasJobForVideo } from "./jobs";
+import { fetchYoutubeTitle } from "./youtube";
 
 const DEFAULT_TARGET_LANG = "ru";
 const DEFAULT_QUALITY = "best";
@@ -45,18 +46,36 @@ export async function setPlaylistId(playlistId: string | null): Promise<void> {
   });
 }
 
-// Парсим videoId'ы из RSS-фида. Атом-формат YouTube кладёт ID в тег
-// <yt:videoId>...</yt:videoId>. Не тянем библиотеку XML-парсера — фид
-// плоский, regex надёжно справляется.
-function extractVideoIds(xml: string): string[] {
-  const ids: string[] = [];
-  const re = /<yt:videoId>([^<]+)<\/yt:videoId>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml)) !== null) {
-    const id = m[1].trim();
-    if (id && !ids.includes(id)) ids.push(id);
+// Парсим videoId + title из RSS-фида плейлиста. Атом-формат YouTube кладёт
+// каждое видео в <entry>, внутри есть <yt:videoId> и <title>. Без XML-
+// парсера: фид плоский, regex по entry-блокам справляется надёжно.
+function extractEntries(xml: string): Array<{ videoId: string; title: string | null }> {
+  const out: Array<{ videoId: string; title: string | null }> = [];
+  const seen = new Set<string>();
+  const entries = xml.match(/<entry\b[\s\S]*?<\/entry>/g) ?? [];
+  for (const entry of entries) {
+    const idMatch = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+    if (!idMatch) continue;
+    const videoId = idMatch[1].trim();
+    if (!videoId || seen.has(videoId)) continue;
+    const titleMatch = entry.match(/<title>([\s\S]*?)<\/title>/);
+    const title = titleMatch ? decodeXmlText(titleMatch[1].trim()) : null;
+    out.push({ videoId, title });
+    seen.add(videoId);
   }
-  return ids;
+  return out;
+}
+
+// Минимальный decoder XML-entities — RSS приходит без CDATA, но с &amp;
+// &quot; &lt; &gt; в названиях. Полную либу тащить не нужно.
+function decodeXmlText(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)));
 }
 
 export interface PollResult {
@@ -93,33 +112,39 @@ export async function pollPlaylist(): Promise<PollResult> {
     );
   }
   const xml = await res.text();
-  const videoIds = extractVideoIds(xml);
+  const entries = extractEntries(xml);
 
   const result: PollResult = {
     playlistId,
-    totalInFeed: videoIds.length,
+    totalInFeed: entries.length,
     alreadyHave: 0,
     queued: [],
     skipped: [],
   };
 
-  for (const videoId of videoIds) {
-    const exists = await hasJobForVideo(videoId, DEFAULT_TARGET_LANG);
+  for (const entry of entries) {
+    const exists = await hasJobForVideo(entry.videoId, DEFAULT_TARGET_LANG);
     if (exists) {
       result.alreadyHave++;
       continue;
     }
     try {
+      // RSS уже дал название — используем его. Если по какой-то причине
+      // пусто (старый видео-формат, кириллица в кодировке), фолбэчимся
+      // на oEmbed. Если и oEmbed не дал — пайплайн всё равно подтянет
+      // через Apify позже (updateJobProgress({ title })).
+      const title = entry.title || (await fetchYoutubeTitle(entry.videoId));
       const job = await createJob({
-        videoId,
+        videoId: entry.videoId,
         targetLang: DEFAULT_TARGET_LANG,
         quality: DEFAULT_QUALITY,
         source: "playlist",
+        title,
       });
-      result.queued.push({ videoId, jobId: job.id });
+      result.queued.push({ videoId: entry.videoId, jobId: job.id });
     } catch (err) {
       result.skipped.push({
-        videoId,
+        videoId: entry.videoId,
         reason: err instanceof Error ? err.message : String(err),
       });
     }

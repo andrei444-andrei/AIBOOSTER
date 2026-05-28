@@ -115,7 +115,10 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
   }
   await updateJobProgress({
     id: job.id,
-    title: tx.title,
+    // title пишем только если Apify реально что-то вернул — иначе можем
+    // затереть значение, которое мы заранее подтянули через oEmbed при
+    // создании джоба.
+    title: tx.title ?? undefined,
     durationSec: tx.duration,
     sourceLang: tx.language,
     stage: "download",

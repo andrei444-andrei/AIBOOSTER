@@ -76,6 +76,7 @@ export async function createJob(args: {
   targetLang: string;
   quality: Quality;
   source?: JobSource;
+  title?: string | null;
 }): Promise<JobRow> {
   await ensureSchema();
   const db = getDb();
@@ -83,12 +84,13 @@ export async function createJob(args: {
   const now = new Date().toISOString();
   const url = args.url ?? canonicalUrl(args.videoId);
   const source = args.source ?? "manual";
+  const title = args.title ?? null;
 
   await db.execute({
     sql: `INSERT INTO video_translation_jobs
-            (id, yt_url, yt_video_id, target_lang, quality, status, progress, source, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
-    args: [id, url, args.videoId, args.targetLang, args.quality, source, now, now],
+            (id, yt_url, yt_video_id, yt_title, target_lang, quality, status, progress, source, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
+    args: [id, url, args.videoId, title, args.targetLang, args.quality, source, now, now],
   });
 
   const row = await getJob(id);

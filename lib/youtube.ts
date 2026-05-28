@@ -55,6 +55,33 @@ export function canonicalUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
+// Тянет название ролика через YouTube oEmbed — бесплатно, без API-ключа.
+// Возвращает null если видео приватное/удалённое или сетевая ошибка.
+// Используется при создании job'а, чтобы карточка сразу показала
+// человекочитаемый заголовок, а не yt_video_id.
+export async function fetchYoutubeTitle(videoId: string): Promise<string | null> {
+  const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(
+    canonicalUrl(videoId),
+  )}&format=json`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (compatible; AIBoosterMetaFetcher/1.0; +https://aibooster.dev)",
+      },
+      // oEmbed редко меняется — ставим короткий cache, чтобы повторные
+      // запросы для одного видео ходили в Vercel-кеш.
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as Record<string, unknown>;
+    const title = data.title;
+    return typeof title === "string" && title.trim() ? title.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 // Список целевых языков, который показываем в селекте.
 // Ключ — ISO-639-1, значение — название на русском.
 // Ограничен языками, которые хорошо поддерживает ElevenLabs multilingual v2.

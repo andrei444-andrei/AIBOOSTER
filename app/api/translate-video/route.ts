@@ -4,6 +4,7 @@ import { logServerError } from "@/lib/logger";
 import { createJob, findCachedJob } from "@/lib/jobs";
 import {
   extractVideoId,
+  fetchYoutubeTitle,
   isSupportedLang,
   isSupportedQuality,
   type Quality,
@@ -53,7 +54,10 @@ export async function POST(req: Request) {
     if (cached) {
       return NextResponse.json({ job_id: cached.id, cached: true });
     }
-    const job = await createJob({ videoId, url, targetLang, quality });
+    // oEmbed подтянет название в фоне (быстрый запрос ~100мс). Если упадёт
+    // или вернёт null — карточка пока без заголовка, потом пайплайн заменит.
+    const title = await fetchYoutubeTitle(videoId);
+    const job = await createJob({ videoId, url, targetLang, quality, title });
     waitUntil(triggerProcessing(req));
     return NextResponse.json({ job_id: job.id, cached: false });
   } catch (err) {

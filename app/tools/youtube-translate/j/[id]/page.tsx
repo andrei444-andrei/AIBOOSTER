@@ -11,9 +11,11 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
       style={{
         display: "flex",
         gap: 32,
-        maxWidth: 1200,
-        margin: "0 auto",
-        padding: "0 32px",
+        // Без maxWidth — иначе на широких экранах остаётся «пустая полоса»
+        // справа. AppShell снаружи уже даёт левый сайдбар, дальше HistoryPanel
+        // + main растягиваются по фактической ширине окна. Транскрипт-текст
+        // внутри ограничивается ниже, чтобы не вытягиваться в простыню.
+        padding: "0 32px 64px",
       }}
     >
       <HistoryPanel activeId={id} />
@@ -21,8 +23,8 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
         style={{
           flex: 1,
           minWidth: 0,
-          maxWidth: 860,
-          padding: "32px 0 64px",
+          padding: "32px 0 0 0",
+          maxWidth: 1100,
         }}
       >
         <Link
