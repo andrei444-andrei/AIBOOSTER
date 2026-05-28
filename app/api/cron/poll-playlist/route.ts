@@ -12,10 +12,15 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
-  const auth = req.headers.get("authorization") || "";
-  const expected = process.env.CRON_SECRET || process.env.ADMIN_TOKEN || "";
-  if (expected && auth !== `Bearer ${expected}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // Vercel Cron шлёт `x-vercel-cron: 1` — пропускаем. Ручной debug —
+  // Bearer ADMIN_TOKEN/CRON_SECRET. См. process-jobs/route.ts.
+  const isVercelCron = req.headers.get("x-vercel-cron") !== null;
+  if (!isVercelCron) {
+    const auth = req.headers.get("authorization") || "";
+    const expected = process.env.CRON_SECRET || process.env.ADMIN_TOKEN || "";
+    if (expected && auth !== `Bearer ${expected}`) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
   }
   // Плейлист не задан — это не ошибка, а «фича выключена». Не шумим
   // в app_errors каждую минуту.

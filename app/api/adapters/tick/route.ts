@@ -68,7 +68,10 @@ export const GET = handle;
 export const POST = handle;
 
 function isAuthorized(req: Request): boolean {
-  // Vercel Cron path: проверяем CRON_SECRET, если он задан.
+  // Vercel Cron path: если CRON_SECRET не задан, Vercel шлёт только
+  // header `x-vercel-cron: 1` — пропускаем по нему. Если CRON_SECRET
+  // задан, Vercel дополнительно шлёт Bearer-токен.
+  if (req.headers.get("x-vercel-cron") !== null) return true;
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const auth = req.headers.get("authorization");

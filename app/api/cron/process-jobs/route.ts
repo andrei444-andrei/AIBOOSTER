@@ -17,12 +17,19 @@ export const maxDuration = 300; // 5 минут (Pro план)
 const WORKER_ID = "vercel-cron";
 
 export async function GET(req: Request) {
-  // Проверка авторизации: либо Vercel Cron (header set автоматически),
-  // либо ручной запуск с ADMIN_TOKEN/CRON_SECRET — для отладки.
-  const auth = req.headers.get("authorization") || "";
-  const expected = process.env.CRON_SECRET || process.env.ADMIN_TOKEN || "";
-  if (expected && auth !== `Bearer ${expected}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // Проверка авторизации:
+  // 1. Vercel Cron автоматически добавляет header `x-vercel-cron: 1` —
+  //    пропускаем без bearer-токена. Если CRON_SECRET не задан, Vercel
+  //    больше ничего не шлёт, поэтому именно этот header — единственный
+  //    надёжный признак родного крона.
+  // 2. Ручной запуск из curl/MCP — Bearer ADMIN_TOKEN / CRON_SECRET.
+  const isVercelCron = req.headers.get("x-vercel-cron") !== null;
+  if (!isVercelCron) {
+    const auth = req.headers.get("authorization") || "";
+    const expected = process.env.CRON_SECRET || process.env.ADMIN_TOKEN || "";
+    if (expected && auth !== `Bearer ${expected}`) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
   }
 
   let job;
