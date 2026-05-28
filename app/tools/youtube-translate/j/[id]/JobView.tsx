@@ -1,0 +1,476 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { Button, Card } from "@/components/ui";
+
+type Stage = "download" | "asr" | "translate" | "tts" | "mux" | null;
+type Status = "queued" | "running" | "done" | "error" | "cancelled";
+
+interface JobDto {
+  id: string;
+  url: string;
+  video_id: string;
+  title: string | null;
+  duration_sec: number | null;
+  source_lang: string | null;
+  target_lang: string;
+  quality: string;
+  status: Status;
+  stage: Stage;
+  progress: number;
+  error_message: string | null;
+  error_id: string | null;
+  audio_url: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+interface SegmentDto {
+  idx: number;
+  start_ms: number;
+  end_ms: number;
+  source_text: string | null;
+  translated_text: string | null;
+}
+
+interface ApiResponse {
+  job: JobDto;
+  segments: SegmentDto[];
+}
+
+const STAGE_LABEL: Record<Exclude<Stage, null>, string> = {
+  download: "Тянем транскрипт с YouTube",
+  asr: "Распознаём речь",
+  translate: "Переводим текст",
+  tts: "Озвучиваем",
+  mux: "Собираем итоговый трек",
+};
+const STAGE_ORDER: Exclude<Stage, null>[] = ["download", "asr", "translate", "tts", "mux"];
+
+export default function JobView({ jobId }: { jobId: string }) {
+  const [data, setData] = useState<ApiResponse | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  // Поллинг: каждые 2 сек, пока статус queued/running.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    async function tick() {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`, { cache: "no-store" });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          if (!cancelled) setFetchError(body.error || `ошибка ${res.status}`);
+          return;
+        }
+        const json = (await res.json()) as ApiResponse;
+        if (cancelled) return;
+        setData(json);
+        setFetchError(null);
+        if (json.job.status === "queued" || json.job.status === "running") {
+          timer = setTimeout(tick, 2000);
+        }
+      } catch (err) {
+        if (!cancelled) setFetchError(err instanceof Error ? err.message : String(err));
+        timer = setTimeout(tick, 4000);
+      }
+    }
+    tick();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [jobId]);
+
+  if (!data && !fetchError) {
+    return (
+      <Card padded style={{ marginTop: 24 }}>
+        <span style={{ color: "var(--text-secondary)" }}>Загружаем задачу…</span>
+      </Card>
+    );
+  }
+  if (fetchError && !data) {
+    return (
+      <Card
+        padded
+        style={{
+          marginTop: 24,
+          borderColor: "var(--danger)",
+          background: "var(--danger-bg)",
+        }}
+      >
+        <span style={{ color: "var(--danger)" }}>
+          Не удалось загрузить задачу: {fetchError}
+        </span>
+      </Card>
+    );
+  }
+  if (!data) return null;
+
+  const { job, segments } = data;
+
+  return (
+    <div>
+      <h1
+        style={{
+          fontSize: 26,
+          letterSpacing: "-0.01em",
+          marginTop: 20,
+          marginBottom: 6,
+        }}
+      >
+        {job.title || "Перевод видео"}
+      </h1>
+      <div
+        style={{
+          color: "var(--text-muted)",
+          fontSize: "var(--text-sm)",
+          marginBottom: 8,
+        }}
+      >
+        <code
+          style={{
+            fontFamily: "var(--font-mono)",
+            background: "var(--bg-subtle)",
+            padding: "1px 6px",
+            borderRadius: 4,
+          }}
+        >
+          {job.video_id}
+        </code>{" "}
+        · перевод на{" "}
+        <strong style={{ color: "var(--text-secondary)" }}>{job.target_lang}</strong>
+        {job.duration_sec ? ` · ${formatDuration(job.duration_sec)}` : ""}
+        {" · "}
+        <a
+          href={`https://youtu.be/${job.video_id}`}
+          target="_blank"
+          rel="noopener"
+          style={{
+            color: "var(--text-secondary)",
+            textDecoration: "none",
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          оригинал ↗
+        </a>
+      </div>
+
+      {(job.status === "queued" || job.status === "running") && (
+        <ProgressCard job={job} />
+      )}
+
+      {job.status === "error" && (
+        <Card
+          padded
+          style={{
+            marginTop: 20,
+            borderColor: "var(--danger)",
+            background: "var(--danger-bg)",
+          }}
+        >
+          <div
+            style={{
+              color: "var(--danger)",
+              fontWeight: 600,
+              marginBottom: 6,
+            }}
+          >
+            Что-то пошло не так
+          </div>
+          <div style={{ fontSize: "var(--text-base)", color: "var(--text)" }}>
+            {job.error_message || "неизвестная ошибка"}
+          </div>
+          {job.error_id && (
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 12,
+                color: "var(--text-muted)",
+              }}
+            >
+              error_id:{" "}
+              <code style={{ fontFamily: "var(--font-mono)" }}>{job.error_id}</code>
+            </div>
+          )}
+          <Link href="/tools/youtube-translate" style={{ display: "inline-block", marginTop: 14 }}>
+            <Button variant="primary">Попробовать снова</Button>
+          </Link>
+        </Card>
+      )}
+
+      {job.status === "done" && job.audio_url && (
+        <ResultCard job={job} segments={segments} />
+      )}
+    </div>
+  );
+}
+
+function ProgressCard({ job }: { job: JobDto }) {
+  const currentIdx = job.stage ? STAGE_ORDER.indexOf(job.stage) : -1;
+  return (
+    <Card padded style={{ marginTop: 20 }}>
+      <div
+        style={{
+          marginBottom: 12,
+          fontSize: "var(--text-base)",
+          color: "var(--text-secondary)",
+        }}
+      >
+        {job.status === "queued"
+          ? "В очереди — скоро возьмём в работу"
+          : "Обрабатываем"}
+        {" · "}
+        <strong style={{ color: "var(--text)" }}>{job.progress}%</strong>
+      </div>
+      <div
+        style={{
+          height: 6,
+          background: "var(--bg-subtle)",
+          borderRadius: 3,
+          overflow: "hidden",
+          marginBottom: 18,
+        }}
+      >
+        <div
+          style={{
+            width: `${job.progress}%`,
+            height: "100%",
+            background: "var(--accent)",
+            transition: "width 400ms var(--ease)",
+          }}
+        />
+      </div>
+      <div style={{ display: "grid", gap: 8 }}>
+        {STAGE_ORDER.map((s, i) => {
+          const done = currentIdx > i || job.status === "done";
+          const active = currentIdx === i && job.status === "running";
+          const muted = !done && !active;
+          return (
+            <div
+              key={s}
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+                color: muted ? "var(--text-muted)" : "var(--text)",
+              }}
+            >
+              <span
+                style={{
+                  width: 16,
+                  textAlign: "center",
+                  color: done
+                    ? "var(--success)"
+                    : active
+                      ? "var(--info)"
+                      : "var(--text-muted)",
+                }}
+              >
+                {done ? "✓" : active ? "▣" : "·"}
+              </span>
+              <span style={{ fontSize: "var(--text-base)" }}>{STAGE_LABEL[s]}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div
+        style={{
+          marginTop: 18,
+          fontSize: 12,
+          color: "var(--text-muted)",
+        }}
+      >
+        Можно закрыть вкладку — вернись по этой же ссылке, прогресс не потеряется.
+      </div>
+    </Card>
+  );
+}
+
+function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [currentMs, setCurrentMs] = useState(0);
+  const [showOriginal, setShowOriginal] = useState(false);
+
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    const onTime = () => setCurrentMs(Math.round(a.currentTime * 1000));
+    a.addEventListener("timeupdate", onTime);
+    return () => a.removeEventListener("timeupdate", onTime);
+  }, []);
+
+  const activeIdx = segments.findIndex(
+    (s) => currentMs >= s.start_ms && currentMs < s.end_ms,
+  );
+
+  function seekTo(ms: number) {
+    const a = audioRef.current;
+    if (!a) return;
+    a.currentTime = ms / 1000;
+    a.play().catch(() => {});
+  }
+
+  return (
+    <>
+      <Card padded style={{ marginTop: 20 }}>
+        <audio
+          ref={audioRef}
+          src={job.audio_url ?? undefined}
+          controls
+          preload="metadata"
+          style={{ width: "100%" }}
+        />
+        <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+          <a
+            href={job.audio_url ?? "#"}
+            download
+            style={{
+              padding: "6px 12px",
+              background: "var(--bg-subtle)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              color: "var(--text)",
+              textDecoration: "none",
+              fontSize: "var(--text-sm)",
+            }}
+          >
+            ↓ Скачать mp3
+          </a>
+          <a
+            href={`https://youtu.be/${job.video_id}`}
+            target="_blank"
+            rel="noopener"
+            style={{
+              padding: "6px 12px",
+              background: "var(--bg-subtle)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              color: "var(--text)",
+              textDecoration: "none",
+              fontSize: "var(--text-sm)",
+            }}
+          >
+            Оригинал на YouTube ↗
+          </a>
+          {segments.length > 0 && segments.some((s) => s.source_text) && (
+            <label
+              style={{
+                padding: "6px 12px",
+                background: "var(--bg-subtle)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--text)",
+                fontSize: "var(--text-sm)",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={showOriginal}
+                onChange={(e) => setShowOriginal(e.target.checked)}
+                style={{ margin: 0 }}
+              />
+              показывать оригинал
+            </label>
+          )}
+        </div>
+      </Card>
+
+      {segments.length > 0 && (
+        <Card padded style={{ marginTop: 20 }}>
+          <div
+            style={{
+              fontSize: "var(--text-sm)",
+              color: "var(--text-muted)",
+              marginBottom: 10,
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}
+          >
+            Транскрипт ({job.target_lang.toUpperCase()})
+            {showOriginal && job.source_lang
+              ? ` ← ${job.source_lang.toUpperCase()}`
+              : ""}
+          </div>
+          <div style={{ display: "grid", gap: 4 }}>
+            {segments.map((s, i) => {
+              const active = i === activeIdx;
+              return (
+                <button
+                  key={s.idx}
+                  onClick={() => seekTo(s.start_ms)}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "56px 1fr",
+                    gap: 12,
+                    textAlign: "left",
+                    background: active ? "var(--bg-subtle)" : "transparent",
+                    border: `1px solid ${active ? "var(--border-strong)" : "transparent"}`,
+                    borderRadius: "var(--radius-sm)",
+                    padding: "8px 10px",
+                    color: "var(--text)",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    fontSize: "var(--text-base)",
+                    lineHeight: "var(--leading-normal)",
+                    transition: "var(--transition)",
+                  }}
+                >
+                  <span
+                    style={{
+                      color: "var(--text-muted)",
+                      fontVariantNumeric: "tabular-nums",
+                      fontSize: 12,
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    {formatTimecode(s.start_ms)}
+                  </span>
+                  <span>
+                    <div>
+                      {s.translated_text || (
+                        <em style={{ color: "var(--text-muted)" }}>—</em>
+                      )}
+                    </div>
+                    {showOriginal && s.source_text && (
+                      <div
+                        style={{
+                          color: "var(--text-muted)",
+                          fontSize: "var(--text-sm)",
+                          marginTop: 2,
+                        }}
+                      >
+                        {s.source_text}
+                      </div>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+    </>
+  );
+}
+
+function formatTimecode(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+}
+
+function formatDuration(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
