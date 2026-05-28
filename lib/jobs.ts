@@ -34,6 +34,8 @@ export interface JobRow {
   last_position_sec: number;
   watched_at: string | null;
   source: JobSource;
+  summary: string | null;
+  chapters: string | null;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -136,6 +138,7 @@ export interface JobSummary {
   watch_status: WatchStatus;
   last_position_sec: number;
   source: JobSource;
+  summary: string | null;
   created_at: string;
 }
 
@@ -160,7 +163,7 @@ export async function listRecentJobs(args: {
   const res = await db.execute({
     sql: `SELECT id, yt_video_id, yt_title, yt_duration_sec, target_lang,
                  status, stage, progress, audio_url,
-                 watch_status, last_position_sec, source, created_at
+                 watch_status, last_position_sec, source, summary, created_at
           FROM video_translation_jobs
           ${whereSql}
           ORDER BY created_at DESC
@@ -168,6 +171,28 @@ export async function listRecentJobs(args: {
     args: params,
   });
   return res.rows as unknown as JobSummary[];
+}
+
+// Сохраняет summary + chapters после того как LLM сгенерил их в пайплайне.
+// chapters пишутся как JSON-строка — UI распарсит обратно.
+export async function saveJobMeta(args: {
+  id: string;
+  summary: string;
+  chapters: Array<{ start_sec: number; title: string }>;
+}): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE video_translation_jobs
+          SET summary = ?, chapters = ?, updated_at = ?
+          WHERE id = ?`,
+    args: [
+      args.summary || null,
+      args.chapters.length > 0 ? JSON.stringify(args.chapters) : null,
+      new Date().toISOString(),
+      args.id,
+    ],
+  });
 }
 
 // Обновляет позицию воспроизведения. Принимает позицию в секундах. Опционально

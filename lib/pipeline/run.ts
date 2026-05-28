@@ -24,6 +24,7 @@ import {
   markJobDone,
   markJobError,
   replaceSegments,
+  saveJobMeta,
   updateJobProgress,
   type JobRow,
 } from "@/lib/jobs";
@@ -37,6 +38,7 @@ import {
   ffprobeDuration,
 } from "./ffmpeg";
 import { uploadMp3 } from "./storage";
+import { generateVideoMeta } from "./summary";
 
 const MAX_DURATION_SEC = 60 * 60;
 const MAX_SEGMENTS = 1000;
@@ -284,6 +286,37 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
   // Перезаписываем — вместо сотен per-segment EN-строк теперь N строк
   // по числу чанков, у каждой полный текст оригинала и связный перевод.
   await replaceSegments(job.id, chunkSegments);
+
+  // 5b. Summary + автоматические главы по смыслу. Делаем перед склейкой —
+  // если LLM упадёт, всё равно отдадим пользователю аудио (loggable но не
+  // фатально). Берём output-таймкоды чанков, чтобы главы попадали в
+  // реальные секунды финального mp3, а не в оригинальный YouTube-таймлайн.
+  await updateJobProgress({ id: job.id, stage: "mux", progress: 91 });
+  try {
+    const meta = await generateVideoMeta({
+      chunks: chunkSegments.map((c) => ({
+        start_sec: c.start_ms / 1000,
+        text: c.translated_text,
+      })),
+      targetLang: job.target_lang,
+      durationSec: cursorMs / 1000,
+    });
+    await saveJobMeta({
+      id: job.id,
+      summary: meta.summary,
+      chapters: meta.chapters,
+    });
+  } catch (err) {
+    // Не валим всю работу из-за meta — это украшение, не критика.
+    await logError({
+      level: "warn",
+      source: "server",
+      route: "/api/cron/process-jobs",
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack ?? null : null,
+      meta: { job_id: job.id, phase: "generate-meta" },
+    });
+  }
 
   // 6. Склейка mp3 в один трек.
   await updateJobProgress({ id: job.id, stage: "mux", progress: 92 });

@@ -51,6 +51,11 @@ const COLUMN_MIGRATIONS: ColumnAddition[] = [
   { table: "video_translation_jobs", column: "last_position_sec", ddl: "last_position_sec REAL NOT NULL DEFAULT 0" },
   { table: "video_translation_jobs", column: "watched_at", ddl: "watched_at TEXT" },
   { table: "video_translation_jobs", column: "source", ddl: "source TEXT NOT NULL DEFAULT 'manual'" },
+  // Summary + автоматические главы по смыслу — генерируются LLM после
+  // перевода. summary = 2-3 предложения о чём видео. chapters = JSON
+  // массива [{start_sec, title}] для навигации по аудио.
+  { table: "video_translation_jobs", column: "summary", ddl: "summary TEXT" },
+  { table: "video_translation_jobs", column: "chapters", ddl: "chapters TEXT" },
 ];
 
 async function hasColumn(table: string, column: string): Promise<boolean> {

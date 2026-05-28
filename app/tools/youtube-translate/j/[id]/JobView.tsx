@@ -8,6 +8,11 @@ type Stage = "download" | "asr" | "translate" | "tts" | "mux" | null;
 type Status = "queued" | "running" | "done" | "error" | "cancelled";
 type WatchStatus = "to_watch" | "watched";
 
+interface Chapter {
+  start_sec: number;
+  title: string;
+}
+
 interface JobDto {
   id: string;
   url: string;
@@ -26,6 +31,8 @@ interface JobDto {
   watch_status: WatchStatus;
   last_position_sec: number;
   source: string;
+  summary: string | null;
+  chapters: Chapter[];
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -119,50 +126,7 @@ export default function JobView({ jobId }: { jobId: string }) {
 
   return (
     <div>
-      <h1
-        style={{
-          fontSize: 26,
-          letterSpacing: "-0.01em",
-          marginTop: 20,
-          marginBottom: 6,
-        }}
-      >
-        {job.title || "Перевод видео"}
-      </h1>
-      <div
-        style={{
-          color: "var(--text-muted)",
-          fontSize: "var(--text-sm)",
-          marginBottom: 8,
-        }}
-      >
-        <code
-          style={{
-            fontFamily: "var(--font-mono)",
-            background: "var(--bg-subtle)",
-            padding: "1px 6px",
-            borderRadius: 4,
-          }}
-        >
-          {job.video_id}
-        </code>{" "}
-        · перевод на{" "}
-        <strong style={{ color: "var(--text-secondary)" }}>{job.target_lang}</strong>
-        {job.duration_sec ? ` · ${formatDuration(job.duration_sec)}` : ""}
-        {" · "}
-        <a
-          href={`https://youtu.be/${job.video_id}`}
-          target="_blank"
-          rel="noopener"
-          style={{
-            color: "var(--text-secondary)",
-            textDecoration: "none",
-            borderBottom: "1px solid var(--border)",
-          }}
-        >
-          оригинал ↗
-        </a>
-      </div>
+      <Hero job={job} />
 
       {(job.status === "queued" || job.status === "running") && (
         <ProgressCard job={job} />
@@ -211,6 +175,99 @@ export default function JobView({ jobId }: { jobId: string }) {
         <ResultCard job={job} segments={segments} />
       )}
     </div>
+  );
+}
+
+function Hero({ job }: { job: JobDto }) {
+  return (
+    <Card
+      padded
+      style={{
+        marginTop: 20,
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 200px) 1fr",
+        gap: 20,
+      }}
+    >
+      <a
+        href={`https://youtu.be/${job.video_id}`}
+        target="_blank"
+        rel="noopener"
+        style={{
+          display: "block",
+          aspectRatio: "16/9",
+          background: "var(--bg-subtle)",
+          borderRadius: "var(--radius-sm)",
+          overflow: "hidden",
+          textDecoration: "none",
+          alignSelf: "start",
+        }}
+        title="Открыть оригинал на YouTube"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={`https://i.ytimg.com/vi/${job.video_id}/mqdefault.jpg`}
+          alt=""
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+          }}
+        />
+      </a>
+      <div style={{ minWidth: 0 }}>
+        <h1
+          style={{
+            fontSize: 22,
+            lineHeight: 1.25,
+            letterSpacing: "-0.01em",
+            margin: 0,
+            marginBottom: 6,
+          }}
+        >
+          {job.title || "Перевод видео"}
+        </h1>
+        <div
+          style={{
+            color: "var(--text-muted)",
+            fontSize: "var(--text-sm)",
+            marginBottom: job.summary ? 12 : 0,
+          }}
+        >
+          <strong style={{ color: "var(--text-secondary)" }}>
+            {job.target_lang.toUpperCase()}
+          </strong>
+          {job.source_lang ? ` ← ${job.source_lang.toUpperCase()}` : ""}
+          {job.duration_sec ? ` · ${formatDuration(job.duration_sec)}` : ""}
+          {" · "}
+          <a
+            href={`https://youtu.be/${job.video_id}`}
+            target="_blank"
+            rel="noopener"
+            style={{
+              color: "var(--text-secondary)",
+              textDecoration: "none",
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            оригинал ↗
+          </a>
+        </div>
+        {job.summary && (
+          <p
+            style={{
+              margin: 0,
+              fontSize: "var(--text-base)",
+              lineHeight: "var(--leading-relaxed)",
+              color: "var(--text)",
+            }}
+          >
+            {job.summary}
+          </p>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -491,6 +548,65 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
           )}
         </div>
       </Card>
+
+      {job.chapters && job.chapters.length > 0 && (
+        <Card padded style={{ marginTop: 20 }}>
+          <div
+            style={{
+              fontSize: "var(--text-sm)",
+              color: "var(--text-muted)",
+              marginBottom: 10,
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}
+          >
+            Главы
+          </div>
+          <div style={{ display: "grid", gap: 2 }}>
+            {job.chapters.map((ch, i) => {
+              const next = job.chapters[i + 1];
+              const currentSec = currentMs / 1000;
+              const active =
+                currentSec >= ch.start_sec &&
+                (next ? currentSec < next.start_sec : true);
+              return (
+                <button
+                  key={`${ch.start_sec}-${i}`}
+                  onClick={() => seekTo(ch.start_sec * 1000)}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "56px 1fr",
+                    gap: 12,
+                    textAlign: "left",
+                    background: active ? "var(--bg-subtle)" : "transparent",
+                    border: `1px solid ${active ? "var(--border-strong)" : "transparent"}`,
+                    borderRadius: "var(--radius-sm)",
+                    padding: "8px 10px",
+                    color: active ? "var(--text)" : "var(--text)",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    fontSize: "var(--text-base)",
+                    lineHeight: 1.35,
+                    transition: "var(--transition)",
+                  }}
+                >
+                  <span
+                    style={{
+                      color: "var(--text-muted)",
+                      fontVariantNumeric: "tabular-nums",
+                      fontSize: 12,
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    {formatTimecode(ch.start_sec * 1000)}
+                  </span>
+                  <span style={{ fontWeight: active ? 600 : 500 }}>{ch.title}</span>
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
 
       {segments.length > 0 && (
         <Card padded style={{ marginTop: 20 }}>

@@ -46,6 +46,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
         watch_status: job.watch_status,
         last_position_sec: job.last_position_sec,
         source: job.source,
+        summary: job.summary,
+        chapters: parseChapters(job.chapters),
         created_at: job.created_at,
         updated_at: job.updated_at,
         finished_at: job.finished_at,
@@ -73,6 +75,27 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 // Используется аудио-плеером (сохраняет позицию каждые ~5с) и кнопкой
 // «отметить как просмотрено» в библиотеке. Без авторизации — id играет
 // роль capability-токена (как и в GET).
+// Распарсивает chapters из JSON-строки в массив. На любых сбоях
+// (битый JSON, не массив, не те типы внутри) — возвращаем пустой массив.
+function parseChapters(raw: string | null): Array<{ start_sec: number; title: string }> {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: Array<{ start_sec: number; title: string }> = [];
+    for (const c of parsed) {
+      if (!c || typeof c !== "object") continue;
+      const o = c as Record<string, unknown>;
+      if (typeof o.start_sec === "number" && typeof o.title === "string") {
+        out.push({ start_sec: o.start_sec, title: o.title });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });

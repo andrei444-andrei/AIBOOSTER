@@ -16,6 +16,7 @@ interface JobSummary {
   watch_status: "to_watch" | "watched";
   last_position_sec: number;
   source: "manual" | "playlist";
+  summary: string | null;
   created_at: string;
 }
 

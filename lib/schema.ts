@@ -190,6 +190,8 @@ export const TABLES: TableDef[] = [
       last_position_sec REAL NOT NULL DEFAULT 0,
       watched_at TEXT,
       source TEXT NOT NULL DEFAULT 'manual',
+      summary TEXT,
+      chapters TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       finished_at TEXT
@@ -215,6 +217,8 @@ export const TABLES: TableDef[] = [
       { name: "last_position_sec", description: "На какой секунде остановился последний раз. При открытии плеера прыгаем сюда." },
       { name: "watched_at", description: "Когда отметили watched (UTC)." },
       { name: "source", description: "'manual' — пользователь вставил ссылку | 'playlist' — автоочередь из YouTube-плейлиста." },
+      { name: "summary", description: "Краткое описание видео (2-3 предложения на target_lang). Генерирует LLM после перевода." },
+      { name: "chapters", description: "JSON-массив автоматических глав по смыслу: [{start_sec, title}]. Клик в плеере прыгает на нужную секунду." },
       { name: "created_at", description: "Время создания задачи (UTC)." },
       { name: "updated_at", description: "Время последнего апдейта статуса (UTC)." },
       { name: "finished_at", description: "Время финального статуса (done/error/cancelled)." },

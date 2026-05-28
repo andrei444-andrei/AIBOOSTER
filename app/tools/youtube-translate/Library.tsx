@@ -17,6 +17,7 @@ interface JobSummary {
   watch_status: "to_watch" | "watched";
   last_position_sec: number;
   source: "manual" | "playlist";
+  summary: string | null;
   created_at: string;
 }
 
@@ -431,40 +432,57 @@ function JobCard({ job }: { job: JobSummary }) {
           </div>
         )}
       </div>
-      <div style={{ padding: 12 }}>
+      <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
         <div
           style={{
             fontSize: "var(--text-base)",
+            fontWeight: 600,
             lineHeight: 1.3,
-            color: "var(--text)",
+            color: job.watch_status === "watched" ? "var(--text-secondary)" : "var(--text)",
             display: "-webkit-box",
             WebkitLineClamp: 2,
             WebkitBoxOrient: "vertical",
             overflow: "hidden",
-            marginBottom: 8,
-            minHeight: 38,
+            minHeight: 40,
           }}
           title={title}
         >
           {title}
         </div>
-        {isError ? (
-          <StatusBadge label="ошибка" color="var(--danger)" bg="var(--danger-bg)" />
-        ) : isActive ? (
-          <StatusBadge
-            label={`${stageLabel(job.stage)} · ${job.progress}%`}
-            color="var(--info)"
-            bg="var(--info-bg)"
-          />
-        ) : isDone ? (
-          <StatusBadge
-            label={`готово · ${job.target_lang}`}
-            color="var(--success)"
-            bg="var(--success-bg)"
-          />
-        ) : (
-          <StatusBadge label={job.status} color="var(--text-muted)" bg="var(--bg-subtle)" />
+        {job.summary && (
+          <div
+            style={{
+              fontSize: "var(--text-sm)",
+              color: "var(--text-muted)",
+              lineHeight: 1.4,
+              display: "-webkit-box",
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {job.summary}
+          </div>
         )}
+        <div style={{ marginTop: "auto" }}>
+          {isError ? (
+            <StatusBadge label="ошибка" color="var(--danger)" bg="var(--danger-bg)" />
+          ) : isActive ? (
+            <StatusBadge
+              label={`${stageLabel(job.stage)} · ${job.progress}%`}
+              color="var(--info)"
+              bg="var(--info-bg)"
+            />
+          ) : isDone ? (
+            <StatusBadge
+              label={`готово · ${job.target_lang}`}
+              color="var(--success)"
+              bg="var(--success-bg)"
+            />
+          ) : (
+            <StatusBadge label={job.status} color="var(--text-muted)" bg="var(--bg-subtle)" />
+          )}
+        </div>
       </div>
     </Link>
   );
