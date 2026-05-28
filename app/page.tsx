@@ -29,6 +29,14 @@ export default function Home() {
         </div>
       </a>
 
+      <a href="/news" style={toolCard}>
+        <div style={{ fontSize: 18, fontWeight: 600 }}>Персональная лента новостей →</div>
+        <div style={{ opacity: 0.65, fontSize: 14, marginTop: 6 }}>
+          Добавь источники (Telegram, RSS), задай профиль интересов — Claude отфильтрует поток
+          и оставит только то, что реально полезно тебе.
+        </div>
+      </a>
+
       <p style={{ marginTop: 40, opacity: 0.5, fontSize: 13 }}>
         Служебная панель —{" "}
         <code style={{ background: "#1a1e24", padding: "2px 6px", borderRadius: 4 }}>
