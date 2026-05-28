@@ -584,6 +584,23 @@ export const TABLES: TableDef[] = [
       { name: "updated_at", description: "Когда была последняя правка." },
     ],
   },
+  {
+    name: "video_translate_settings",
+    description:
+      "Единственная строка с настройками модуля YouTube-перевода. Хранит ID публичного YouTube-плейлиста для автоочереди (cron поллит RSS этого плейлиста). Редактируется прямо на странице /tools/youtube-translate.",
+    ddl: `CREATE TABLE IF NOT EXISTS video_translate_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      playlist_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "Всегда 1 — настройки одни на инсталляцию." },
+      { name: "playlist_id", description: "ID публичного YouTube-плейлиста (часть URL после list=). NULL = автоочередь выключена." },
+      { name: "created_at", description: "Когда строка появилась." },
+      { name: "updated_at", description: "Когда была последняя правка." },
+    ],
+  },
 ];
 
 // Индексы для быстрого чтения.

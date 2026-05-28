@@ -8,18 +8,19 @@
 // нас лишний раз сходить за RSS и сделать N noop'ов в БД (всё уже в очереди).
 
 import { NextResponse } from "next/server";
-import { pollPlaylist } from "@/lib/playlist";
+import { getPlaylistId, pollPlaylist } from "@/lib/playlist";
 import { logServerError } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST() {
-  if (!process.env.YOUTUBE_PLAYLIST_ID) {
+  const playlistId = await getPlaylistId();
+  if (!playlistId) {
     return NextResponse.json(
       {
         error:
-          "YOUTUBE_PLAYLIST_ID не задан в env Vercel — нечего опрашивать",
+          "Плейлист не задан — впиши его ID в поле сверху на странице и сохрани.",
       },
       { status: 400 },
     );

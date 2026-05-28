@@ -9,10 +9,41 @@
 // Используется в /api/cron/poll-playlist (раз в минуту) и в
 // /api/playlist/refresh (кнопка «обновить» в UI).
 
+import { ensureSchema, getDb } from "./db";
 import { createJob, hasJobForVideo } from "./jobs";
 
 const DEFAULT_TARGET_LANG = "ru";
 const DEFAULT_QUALITY = "best";
+
+// Источник правды для playlist_id: сначала БД (video_translate_settings —
+// пользователь задаёт прямо на странице), потом env (YOUTUBE_PLAYLIST_ID —
+// бэкап для случая если БД ещё пуста). Возвращает null если нигде не задан.
+export async function getPlaylistId(): Promise<string | null> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute(
+    `SELECT playlist_id FROM video_translate_settings WHERE id = 1`,
+  );
+  const fromDb = (res.rows[0] as unknown as { playlist_id: string | null } | undefined)
+    ?.playlist_id;
+  if (fromDb) return fromDb;
+  const fromEnv = process.env.YOUTUBE_PLAYLIST_ID;
+  return fromEnv && fromEnv.trim() ? fromEnv.trim() : null;
+}
+
+export async function setPlaylistId(playlistId: string | null): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const now = new Date().toISOString();
+  const value = playlistId && playlistId.trim() ? playlistId.trim() : null;
+  // UPSERT через INSERT ON CONFLICT — таблица single-row (id=1).
+  await db.execute({
+    sql: `INSERT INTO video_translate_settings (id, playlist_id, created_at, updated_at)
+          VALUES (1, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET playlist_id = excluded.playlist_id, updated_at = excluded.updated_at`,
+    args: [value, now, now],
+  });
+}
 
 // Парсим videoId'ы из RSS-фида. Атом-формат YouTube кладёт ID в тег
 // <yt:videoId>...</yt:videoId>. Не тянем библиотеку XML-парсера — фид
@@ -37,11 +68,11 @@ export interface PollResult {
 }
 
 export async function pollPlaylist(): Promise<PollResult> {
-  const playlistId = process.env.YOUTUBE_PLAYLIST_ID;
+  const playlistId = await getPlaylistId();
   if (!playlistId) {
     throw new Error(
-      "YOUTUBE_PLAYLIST_ID не задан — добавь в env Vercel ID публичного " +
-        "плейлиста (часть после list= в URL).",
+      "Плейлист не задан — открой /tools/youtube-translate и впиши ID " +
+        "публичного плейлиста (часть URL после list=) в поле сверху.",
     );
   }
 

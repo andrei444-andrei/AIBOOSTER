@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui";
+import { useCallback, useEffect, useState } from "react";
+import { Button, Input } from "@/components/ui";
 
 interface JobSummary {
   id: string;
@@ -34,6 +34,30 @@ export default function Library() {
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+  const [playlistInput, setPlaylistInput] = useState("");
+  const [playlistSaved, setPlaylistSaved] = useState<string | null>(null);
+  const [playlistSaving, setPlaylistSaving] = useState(false);
+  const [playlistMsg, setPlaylistMsg] = useState<string | null>(null);
+
+  // Подтягиваем сохранённый playlist_id при первом маунте.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/playlist/config", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.playlist_id) {
+          setPlaylistSaved(data.playlist_id);
+          setPlaylistInput(data.playlist_id);
+        }
+      })
+      .catch(() => {
+        // тихо: фича опциональная, без неё библиотека всё равно работает
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const fetchJobs = useCallback(async (filter: Tab) => {
     const watch = filter === "all" ? "all" : filter;
@@ -67,6 +91,36 @@ export default function Library() {
       if (timer) clearTimeout(timer);
     };
   }, [tab, fetchJobs]);
+
+  async function savePlaylist(e: React.FormEvent) {
+    e.preventDefault();
+    setPlaylistSaving(true);
+    setPlaylistMsg(null);
+    try {
+      const res = await fetch("/api/playlist/config", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ playlist_id: playlistInput || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPlaylistMsg(data.error || `ошибка ${res.status}`);
+      } else {
+        setPlaylistSaved(data.playlist_id);
+        setPlaylistInput(data.playlist_id ?? "");
+        setPlaylistMsg(
+          data.playlist_id
+            ? "сохранено — следующий cron-тик подтянет видео"
+            : "плейлист отключён",
+        );
+        setTimeout(() => setPlaylistMsg(null), 4000);
+      }
+    } catch (e) {
+      setPlaylistMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPlaylistSaving(false);
+    }
+  }
 
   async function refresh() {
     setRefreshing(true);
@@ -102,6 +156,55 @@ export default function Library() {
 
   return (
     <div>
+      <form
+        onSubmit={savePlaylist}
+        style={{
+          marginBottom: 20,
+          padding: 14,
+          background: "var(--bg-subtle)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "var(--text-sm)",
+            color: "var(--text-secondary)",
+            marginBottom: 8,
+          }}
+        >
+          ID или URL публичного YouTube-плейлиста
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+            <Input
+              type="text"
+              placeholder="PLxyz... или https://www.youtube.com/playlist?list=PLxyz..."
+              value={playlistInput}
+              onChange={(e) => setPlaylistInput(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <Button type="submit" variant="primary" loading={playlistSaving}>
+            Сохранить
+          </Button>
+        </div>
+        <div
+          style={{
+            marginTop: 8,
+            fontSize: "var(--text-sm)",
+            color: playlistMsg ? "var(--text)" : "var(--text-muted)",
+          }}
+        >
+          {playlistMsg
+            ? playlistMsg
+            : playlistSaved
+              ? `активен: ${playlistSaved}`
+              : "не задан — автоочередь не работает, можно вставлять ссылки руками"}
+        </div>
+      </form>
+
       <div
         style={{
           display: "flex",
