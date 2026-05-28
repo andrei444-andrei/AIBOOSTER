@@ -6,12 +6,19 @@
 //   1) на первом — POST /runs (мгновенный), запоминаем runId
 //   2) на втором — GET /runs/{id}, если SUCCEEDED → забираем dataset
 //
-// Используем actor apidojo/telegram-channel-scraper: он принимает URL канала,
-// возвращает массив постов с message_id и текстом.
-// Если этот actor станет недоступен — поменяй ACTOR_ID, остальной код не меняется.
+// Actor задаётся env'ом APIFY_TELEGRAM_ACTOR (формат "username~actor-name"
+// или "username/actor-name"). Дефолт — `lukaskrivka~telegram-scraper`
+// (популярный community-actor для публичных каналов).
+// Если не работает — поставь свой в Vercel env и переразверни.
 
-const ACTOR_ID = "apidojo~telegram-channel-scraper";
 const BASE = "https://api.apify.com/v2";
+
+function actorId(): string {
+  return (process.env.APIFY_TELEGRAM_ACTOR || "lukaskrivka~telegram-scraper").replace(
+    "/",
+    "~",
+  );
+}
 
 export interface ApifyRunInfo {
   id: string;
@@ -37,8 +44,9 @@ export async function startTelegramRun(channelUrl: string): Promise<ApifyRunInfo
   const token = process.env.APIFY_TOKEN;
   if (!token) throw new Error("APIFY_TOKEN is not set");
 
+  const id = actorId();
   const res = await fetch(
-    `${BASE}/acts/${ACTOR_ID}/runs?token=${encodeURIComponent(token)}`,
+    `${BASE}/acts/${id}/runs?token=${encodeURIComponent(token)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },

@@ -138,8 +138,11 @@ export async function runTick(workerId: string): Promise<TickStats> {
         kind: source.kind,
       });
       stats.errors.push(`process_source ${source.name}: ${errMsg(err)}`);
-      // отпустим лок чтобы next tick попробовал снова
-      await releaseSource(source.id).catch(() => {});
+      // Помечаем last_fetched_at чтобы не дёргать упавший источник каждый
+      // тик: следующая попытка через fetch_interval_minutes (по дефолту 30 мин).
+      // Без этого один поломанный источник (Apify 404 / RSS gone) забивает
+      // app_errors каждые 10 минут.
+      await setSourceFetched(source.id).catch(() => {});
     }
   }
 
