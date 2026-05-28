@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "./Markdown";
 import { WebImagesMosaic, type WebImageItem } from "./WebImagesMosaic";
+import { EnsembleProgress, type EnsembleLive } from "./EnsembleProgress";
+import {
+  EnsembleCandidates,
+  type EnsembleCandidate,
+  type EnsembleJudge,
+} from "./EnsembleCandidates";
 import {
   MODEL_OPTIONS,
   CATEGORY_META,
@@ -46,6 +52,12 @@ interface RouteMeta {
   reasoning_effort?: string | null;
   uncertain?: boolean;
   routing_latency_ms?: number;
+  // Ensemble + Judge: бэкенд шлёт это в `done`-событии, если категория
+  // прошла через ансамбль. UI разворачивает кандидатов в коллапсибл.
+  ensemble?: boolean;
+  candidates?: EnsembleCandidate[];
+  judge?: EnsembleJudge;
+  total_duration_ms?: number;
 }
 
 interface Message {
@@ -62,6 +74,7 @@ interface Message {
   duration_ms?: number | null;
   route_meta?: RouteMeta | null;
   liveRoute?: RouteMeta | null;
+  liveEnsemble?: EnsembleLive | null;
 }
 
 // ─── Selection: что пользователь выбрал в селекторе ──────────────────
@@ -603,6 +616,59 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     } else if (event === "citations") {
       // Источники — пока просто игнорируем на клиенте, в bigger PR будут чипами.
       return;
+    } else if (event === "ensemble_start") {
+      const p = payload as { models: string[] };
+      setMessages((arr) =>
+        arr.map((m) =>
+          m.id === assistantLocalId
+            ? {
+                ...m,
+                liveEnsemble: {
+                  models: p.models,
+                  done: [],
+                  failed: [],
+                  judgeStarted: false,
+                },
+              }
+            : m,
+        ),
+      );
+    } else if (event === "candidate_done") {
+      const p = payload as { model: string };
+      setMessages((arr) =>
+        arr.map((m) => {
+          if (m.id !== assistantLocalId || !m.liveEnsemble) return m;
+          if (m.liveEnsemble.done.includes(p.model)) return m;
+          return {
+            ...m,
+            liveEnsemble: { ...m.liveEnsemble, done: [...m.liveEnsemble.done, p.model] },
+          };
+        }),
+      );
+    } else if (event === "candidate_error") {
+      const p = payload as { model: string };
+      setMessages((arr) =>
+        arr.map((m) => {
+          if (m.id !== assistantLocalId || !m.liveEnsemble) return m;
+          if (m.liveEnsemble.failed.includes(p.model)) return m;
+          return {
+            ...m,
+            liveEnsemble: { ...m.liveEnsemble, failed: [...m.liveEnsemble.failed, p.model] },
+          };
+        }),
+      );
+    } else if (event === "judge_start") {
+      const p = payload as { model: string };
+      setMessages((arr) =>
+        arr.map((m) =>
+          m.id === assistantLocalId && m.liveEnsemble
+            ? {
+                ...m,
+                liveEnsemble: { ...m.liveEnsemble, judgeStarted: true, judgeModel: p.model },
+              }
+            : m,
+        ),
+      );
     } else if (event === "image") {
       const p = payload as { base64: string; mime: string };
       setMessages((arr) =>
@@ -647,6 +713,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
                 tokens_prompt: p.usage?.prompt_tokens ?? null,
                 tokens_completion: p.usage?.completion_tokens ?? null,
                 liveRoute: null,
+                liveEnsemble: null,
               }
             : m,
         ),
@@ -863,6 +930,7 @@ function MessageBlock({ message }: { message: Message }) {
 
   // assistant
   const live = message.liveRoute;
+  const ensembleLive = message.liveEnsemble;
   const hasAttachments = (message.attachments?.length ?? 0) > 0;
   const isImageCategory = message.route_meta?.category === "image" || live?.category === "image";
   // Пока стримим:
@@ -877,11 +945,17 @@ function MessageBlock({ message }: { message: Message }) {
     : live
       ? routeLabel(live, message.model)
       : "Маршрутизирую запрос";
+  const ensembleMeta = message.route_meta?.ensemble ? message.route_meta : null;
 
   return (
     <div className={styles.msgAssistant} data-msg-id={message.id}>
       <div className={styles.assistantBody}>
-        {isThinking ? (
+        {/* Прогресс ансамбля — показываем пока стримим и есть live-данные */}
+        {message.streaming && ensembleLive ? (
+          <EnsembleProgress live={ensembleLive} />
+        ) : null}
+        {/* Обычный thinking — только если ансамбля нет (одна модель) */}
+        {isThinking && !ensembleLive ? (
           <div className={styles.thinking}>
             <span className={styles.thinkingDot} />
             <span className={styles.thinkingText}>{hintText}</span>
@@ -923,6 +997,18 @@ function MessageBlock({ message }: { message: Message }) {
         {!message.streaming && !message.error && (message.content || hasAttachments) && (
           <MessageMeta message={message} />
         )}
+
+        {/* Коллапсибл «Что ответили модели» — только если был ансамбль */}
+        {!message.streaming &&
+          !message.error &&
+          ensembleMeta?.candidates &&
+          ensembleMeta?.judge && (
+            <EnsembleCandidates
+              candidates={ensembleMeta.candidates}
+              judge={ensembleMeta.judge}
+              totalDurationMs={ensembleMeta.total_duration_ms}
+            />
+          )}
       </div>
     </div>
   );
