@@ -5,14 +5,19 @@ import { usePathname } from "next/navigation";
 import { getPinnedModules, isModuleActive, type ModuleEntry } from "@/lib/modules";
 import styles from "./Sidebar.module.css";
 
-export function Sidebar() {
+export function Sidebar({ mobileOpen = false }: { mobileOpen?: boolean } = {}) {
   const pathname = usePathname() || "/";
   const pinned = getPinnedModules();
   const main = pinned.filter((m) => m.section === "main");
   const service = pinned.filter((m) => m.section === "service");
 
   return (
-    <aside className={styles.sidebar} aria-label="Навигация">
+    <aside
+      className={[styles.sidebar, mobileOpen ? styles.sidebarOpen : ""]
+        .filter(Boolean)
+        .join(" ")}
+      aria-label="Навигация"
+    >
       <Link href="/" className={styles.brand}>
         <span className={styles.brandLogo} aria-hidden>
           A

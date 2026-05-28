@@ -1,18 +1,13 @@
 import Link from "next/link";
 import Library from "./Library";
 import TranslateForm from "./TranslateForm";
+import styles from "./youtube.module.css";
 
 export const dynamic = "force-dynamic";
 
 export default function YoutubeTranslatePage() {
   return (
-    <div
-      style={{
-        maxWidth: 1200,
-        margin: "0 auto",
-        padding: "32px 32px 64px",
-      }}
-    >
+    <div className={styles.libraryPage}>
       <Link
         href="/"
         style={{
@@ -24,26 +19,8 @@ export default function YoutubeTranslatePage() {
       >
         ← на главную
       </Link>
-      <h1
-        style={{
-          fontSize: 32,
-          letterSpacing: "-0.02em",
-          marginTop: 20,
-          marginBottom: 6,
-        }}
-      >
-        YouTube → подкаст на твоём языке
-      </h1>
-      <p
-        style={{
-          fontSize: "var(--text-md)",
-          color: "var(--text-secondary)",
-          lineHeight: "var(--leading-relaxed)",
-          marginTop: 0,
-          marginBottom: 24,
-          maxWidth: 720,
-        }}
-      >
+      <h1 className={styles.libraryTitle}>YouTube → подкаст на твоём языке</h1>
+      <p className={styles.libraryIntro}>
         Привяжи публичный YouTube-плейлист — сервис каждую минуту смотрит
         новые видео и автоматом ставит в очередь на перевод. Или вставь
         ссылку руками — переведём прямо сейчас.
@@ -51,7 +28,7 @@ export default function YoutubeTranslatePage() {
 
       <details
         style={{
-          marginBottom: 24,
+          marginBottom: "var(--space-5)",
           background: "var(--surface)",
           border: "1px solid var(--border)",
           borderRadius: "var(--radius)",
@@ -77,7 +54,7 @@ export default function YoutubeTranslatePage() {
 
       <p
         style={{
-          marginTop: 40,
+          marginTop: "var(--space-10)",
           fontSize: "var(--text-sm)",
           color: "var(--text-muted)",
           lineHeight: "var(--leading-relaxed)",

@@ -74,6 +74,7 @@
   font-size: var(--text-base);
   line-height: 1.2;
   transition: background var(--transition), color var(--transition);
+  min-height: 36px;
 }
 .item:hover {
   background: var(--bg-hover);
@@ -131,9 +132,120 @@
   background: var(--bg);
 }
 
-/* Mobile: hide sidebar, content full-width. Tweak later when we go mobile-first. */
-@media (max-width: 720px) {
+/* === Mobile top-bar + drawer ============================================ */
+
+/* Top-bar и backdrop по умолчанию скрыты (десктоп) */
+.mobileBar {
+  display: none;
+}
+.backdrop {
+  display: none;
+}
+
+.menuButton {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  padding: 0;
+}
+.menuButton:active {
+  background: var(--bg-hover);
+}
+
+.menuIcon {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 18px;
+}
+.menuIcon span {
+  display: block;
+  height: 2px;
+  background: var(--text);
+  border-radius: 1px;
+}
+
+.mobileBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  text-decoration: none;
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-size: var(--text-base);
+}
+.mobileBrand:hover {
+  text-decoration: none;
+}
+
+/* Mobile: drawer + top-bar */
+@media (max-width: 768px) {
+  .layout {
+    display: block;
+  }
+
+  .mobileBar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    position: sticky;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 30;
+    height: 52px;
+    padding: 0 var(--space-3);
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+
   .sidebar {
-    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 50;
+    width: min(82vw, 320px);
+    height: 100dvh;
+    padding-top: var(--space-4);
+    transform: translateX(-100%);
+    transition: transform 220ms cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+  }
+  .sidebar.sidebarOpen {
+    transform: translateX(0);
+  }
+
+  .backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(15, 14, 12, 0.5);
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    backdrop-filter: blur(2px);
+    animation: backdropIn 180ms ease-out;
+  }
+
+  .main {
+    padding-top: 0; /* mobileBar уже занимает место sticky */
+  }
+}
+
+@keyframes backdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }

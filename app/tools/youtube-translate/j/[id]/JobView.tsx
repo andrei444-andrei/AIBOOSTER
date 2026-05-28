@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { Button, Card } from "@/components/ui";
+import ytStyles from "../../youtube.module.css";
 
 type Stage = "download" | "asr" | "translate" | "tts" | "mux" | null;
 type Status = "queued" | "running" | "done" | "error" | "cancelled";
@@ -180,54 +181,19 @@ export default function JobView({ jobId }: { jobId: string }) {
 
 function Hero({ job }: { job: JobDto }) {
   return (
-    <Card
-      padded
-      style={{
-        marginTop: 20,
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 200px) 1fr",
-        gap: 20,
-      }}
-    >
+    <Card padded style={{ marginTop: 20 }} className={ytStyles.hero}>
       <a
         href={`https://youtu.be/${job.video_id}`}
         target="_blank"
         rel="noopener"
-        style={{
-          display: "block",
-          aspectRatio: "16/9",
-          background: "var(--bg-subtle)",
-          borderRadius: "var(--radius-sm)",
-          overflow: "hidden",
-          textDecoration: "none",
-          alignSelf: "start",
-        }}
+        className={ytStyles.heroThumb}
         title="Открыть оригинал на YouTube"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={`https://i.ytimg.com/vi/${job.video_id}/mqdefault.jpg`}
-          alt=""
-          style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            display: "block",
-          }}
-        />
+        <img src={`https://i.ytimg.com/vi/${job.video_id}/mqdefault.jpg`} alt="" />
       </a>
       <div style={{ minWidth: 0 }}>
-        <h1
-          style={{
-            fontSize: 22,
-            lineHeight: 1.25,
-            letterSpacing: "-0.01em",
-            margin: 0,
-            marginBottom: 6,
-          }}
-        >
-          {job.title || "Перевод видео"}
-        </h1>
+        <h1 className={ytStyles.heroTitle}>{job.title || "Перевод видео"}</h1>
         <div
           style={{
             color: "var(--text-muted)",
@@ -468,15 +434,7 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
           preload="metadata"
           style={{ width: "100%", borderRadius: "var(--radius-sm)" }}
         />
-        <div
-          style={{
-            display: "flex",
-            gap: "var(--space-2)",
-            marginTop: "var(--space-4)",
-            flexWrap: "wrap",
-            alignItems: "center",
-          }}
-        >
+        <div className={ytStyles.actionsRow}>
           <Button
             size="sm"
             variant={watchStatus === "watched" ? "secondary" : "primary"}
@@ -498,8 +456,8 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
           </LinkChip>
           {segments.length > 0 && segments.some((s) => s.source_text) && (
             <label
+              className={ytStyles.toggleOriginal}
               style={{
-                marginLeft: "auto",
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "var(--space-2)",

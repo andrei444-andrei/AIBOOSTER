@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Button, Input } from "@/components/ui";
+import styles from "./youtube.module.css";
 
 interface JobSummary {
   id: string;
@@ -157,16 +158,7 @@ export default function Library() {
 
   return (
     <div>
-      <form
-        onSubmit={savePlaylist}
-        style={{
-          marginBottom: 20,
-          padding: 14,
-          background: "var(--bg-subtle)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius)",
-        }}
-      >
+      <form onSubmit={savePlaylist} className={styles.playlistForm}>
         <div
           style={{
             fontSize: "var(--text-sm)",
@@ -176,8 +168,8 @@ export default function Library() {
         >
           ID или URL публичного YouTube-плейлиста
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+        <div className={styles.playlistRow}>
+          <div className={styles.playlistInput}>
             <Input
               type="text"
               placeholder="PLxyz... или https://www.youtube.com/playlist?list=PLxyz..."
@@ -206,17 +198,8 @@ export default function Library() {
         </div>
       </form>
 
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          marginBottom: 12,
-          flexWrap: "wrap",
-        }}
-      >
-        <div style={{ display: "flex", gap: 4 }}>
+      <div className={styles.tabsRow}>
+        <div className={styles.tabs}>
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -312,13 +295,7 @@ export default function Library() {
       )}
 
       {jobs && jobs.length > 0 && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-            gap: 16,
-          }}
-        >
+        <div className={styles.cardGrid}>
           {jobs.map((j) => (
             <JobCard key={j.id} job={j} />
           ))}
