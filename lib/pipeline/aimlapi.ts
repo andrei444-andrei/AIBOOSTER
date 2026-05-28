@@ -19,28 +19,58 @@ export interface SegmentInput {
   text: string;
 }
 
-// Перевод цельного куска речи (≈ абзаца, до ~3 минут). Возвращает один связный
-// перевод, не нарезанный по сегментам — это даёт переводчику свободу менять
-// порядок слов, переформулировать под язык, склеивать обрывочные фразы YouTube-
-// субтитров в нормальную речь. Цена — теряем точную привязку перевода к
-// исходным таймкодам сегментов, но в подкаст-режиме это и не нужно: транскрипт
-// показывает уже чанк-уровень, аудио играет в натуральном темпе TTS.
+// Структурированный результат перевода чанка. Каждая utterance — реплика
+// одного говорящего. Для монолога будет ровно 1 utterance со speaker=null.
+// Для диалога 2+ utterance'ов с метками 'A','B','C',... — мы потом подберём
+// для каждой метки свой голос TTS.
+export interface TranslatedUtterance {
+  speaker: string | null;
+  text: string;
+}
+
+// Перевод цельного куска речи + детекция диалога. Возвращает массив реплик.
+//
+// Цель — слушабельный «подкаст» из обрывков YouTube-субтитров:
+// - выкидываем филлеры, повторы, незаконченные мысли — текст должен быть
+//   полированным, как будто спикер сам потом отредактировал свою запись
+// - меняем порядок слов под язык, переформулируем — никаких переводческих
+//   калек, должно звучать как обычная разговорная речь
+// - распознаём диалог vs монолог; для диалога раздаём метки спикеров —
+//   разные голоса в TTS придают сцене динамику
 export async function translateChunk(
   sourceText: string,
   opts: { sourceLang: string | null; targetLang: string; model?: string },
-): Promise<string> {
+): Promise<TranslatedUtterance[]> {
   const text = sourceText.trim();
-  if (!text) return "";
+  if (!text) return [];
   const model = opts.model ?? "gpt-4o";
   const sys =
-    `Ты — профессиональный переводчик-локализатор. Переводишь живую речь из ` +
-    `видео на язык "${opts.targetLang}". Это связный кусок речи (~3 минуты), ` +
-    `склеенный из YouTube-субтитров. Твоя цель — естественно звучащий ` +
-    `параграф на ${opts.targetLang}, как будто человек свободно говорит на ` +
-    `этом языке. Меняй порядок слов под целевой язык, переформулируй фразы, ` +
-    `склеивай обрывки субтитров в нормальные предложения, сохраняй тон и ` +
-    `юмор оригинала. Никаких переводческих калек. Никаких пояснений, ` +
-    `пометок, markdown, кавычек вокруг ответа — только сам перевод.`;
+    `Ты — переводчик и редактор подкаста. Делаешь из обрывочной речи на ` +
+    `видео полированную аудиозапись на языке "${opts.targetLang}".\n\n` +
+    `ЧТО ДЕЛАЕШЬ:\n` +
+    `1. Переводишь смысл, а не слова — меняй порядок слов, переформулируй ` +
+    `под целевой язык, склеивай обрывки в нормальные предложения. Должно ` +
+    `звучать так, как говорил бы носитель.\n` +
+    `2. ВЫКИДЫВАЙ словесный мусор: заикания, "uh/um", повторы ("ну вот я " ` +
+    `"я хотел"), филлеры ("you know", "like", "значит", "короче", "вот"), ` +
+    `незаконченные мысли, лишние подтверждения ("yeah right, yeah right"). ` +
+    `Цель — чистый текст подкаста, как будто спикер сам потом отредактировал.\n` +
+    `3. ОПРЕДЕЛЯЙ количество говорящих. Большинство YouTube-видео это ` +
+    `монологи (лекция, vlog, обзор) — там один спикер. Интервью, подкасты ` +
+    `и разговоры — это диалог с 2+ спикерами.\n\n` +
+    `ФОРМАТ ОТВЕТА — строго JSON-объект:\n` +
+    `{"utterances":[{"speaker":"A"|"B"|"C"|"D"|null,"text":"..."}, ...]}\n\n` +
+    `ПРАВИЛА speaker:\n` +
+    `- null — если монолог (один говорящий). НЕ дроби монолог искусственно ` +
+    `на A/B — даже если спикер делает паузы или меняет тон.\n` +
+    `- "A", "B", "C", "D" — если разные люди явно реплицируют друг другу. ` +
+    `"A" — первый кто заговорил в этом куске. Метки уникальны в пределах ` +
+    `одного чанка, но «A» в этом куске и «A» в следующем — могут быть ` +
+    `разными людьми (мы не знаем контекста между чанками).\n` +
+    `- Если сомневаешься «один спикер или два» — ставь null. Лучше ровный ` +
+    `голос для слегка дробящегося монолога, чем дёрганые голоса для ` +
+    `придуманного диалога.\n\n` +
+    `Никакого markdown, никаких кавычек снаружи JSON. Только сам объект.`;
   const user =
     `Исходный язык: ${opts.sourceLang || "auto"}. Целевой: ${opts.targetLang}.\n\n` +
     `Текст:\n${text}`;
@@ -53,10 +83,11 @@ export async function translateChunk(
     },
     body: JSON.stringify({
       model,
-      temperature: 0.4,
-      // 3 минуты речи ≈ 400-600 слов исходника. На русском с разворачиванием
-      // запас 4000 токенов покрывает с большим запасом.
+      temperature: 0.5,
+      // 3 минуты речи ≈ 400-600 слов исходника. После выкидывания мусора
+      // итог короче исходника — 4000 токенов с большим запасом.
       max_tokens: 4000,
+      response_format: { type: "json_object" },
       messages: [
         { role: "system", content: sys },
         { role: "user", content: user },
@@ -71,7 +102,61 @@ export async function translateChunk(
   const raw =
     ((data.choices as Array<Record<string, unknown>> | undefined)?.[0]
       ?.message as Record<string, unknown> | undefined)?.content as string | undefined;
-  return (raw ?? "").trim();
+  if (!raw) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Модель проигнорировала JSON-режим и отдала plain-текст —
+    // ладно, считаем монологом.
+    return [{ speaker: null, text: raw.trim() }];
+  }
+  return extractUtterances(parsed);
+}
+
+// Парсит ответ модели в наш формат TranslatedUtterance[]. Терпим к разным
+// формам, в которые gpt-4o может сложить ответ под json_object.
+function extractUtterances(parsed: unknown): TranslatedUtterance[] {
+  if (!parsed || typeof parsed !== "object") return [];
+  const obj = parsed as Record<string, unknown>;
+
+  const candidate = (obj.utterances ?? obj.lines ?? obj.dialog ?? obj.parts) as unknown;
+  if (Array.isArray(candidate)) {
+    const utters = candidate
+      .map((u) => normalizeUtterance(u))
+      .filter((u): u is TranslatedUtterance => u !== null && u.text.length > 0);
+    if (utters.length > 0) return utters;
+  }
+
+  // Fallback: модель отдала plain {text: "..."} или {translation: "..."} —
+  // считаем монологом.
+  const plain =
+    (obj.text as string | undefined) ??
+    (obj.translation as string | undefined) ??
+    (obj.translated_text as string | undefined);
+  if (typeof plain === "string" && plain.trim()) {
+    return [{ speaker: null, text: plain.trim() }];
+  }
+  return [];
+}
+
+function normalizeUtterance(raw: unknown): TranslatedUtterance | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const speakerRaw = o.speaker;
+  const speaker =
+    typeof speakerRaw === "string" && speakerRaw.trim()
+      ? speakerRaw.trim().toUpperCase().slice(0, 4)
+      : null;
+  const text =
+    typeof o.text === "string"
+      ? o.text.trim()
+      : typeof o.line === "string"
+        ? o.line.trim()
+        : "";
+  if (!text) return null;
+  return { speaker: speaker === "NULL" ? null : speaker, text };
 }
 
 // ElevenLabs TTS через aimlapi proxy. Возвращает mp3 как Buffer.

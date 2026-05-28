@@ -29,7 +29,7 @@ import {
 } from "@/lib/jobs";
 import { logError } from "@/lib/logger";
 import { fetchTranscript } from "./apify";
-import { translateChunk, ttsSynth, type SegmentInput } from "./aimlapi";
+import { translateChunk, ttsSynth, type SegmentInput, type TranslatedUtterance } from "./aimlapi";
 import {
   ffmpegConcatTimed,
   ffmpegNormalize,
@@ -40,6 +40,39 @@ import { uploadMp3 } from "./storage";
 
 const MAX_DURATION_SEC = 60 * 60;
 const MAX_SEGMENTS = 1000;
+
+// Голоса ElevenLabs для разных спикеров диалога. A → дефолт (хост / первый
+// говорящий), B → контрастный голос (гость / собеседник), дальше по списку.
+// Для монолога speaker=null → DEFAULT_VOICE.
+const VOICE_MAP: Record<string, string> = {
+  A: "Rachel",
+  B: "Adam",
+  C: "Bella",
+  D: "Antoni",
+  E: "Domi",
+  F: "Josh",
+};
+const DEFAULT_VOICE = "Rachel";
+
+function voiceFor(speaker: string | null): string {
+  if (!speaker) return DEFAULT_VOICE;
+  return VOICE_MAP[speaker] ?? DEFAULT_VOICE;
+}
+
+// Превращает массив реплик в одну строку для транскрипта. Для монолога —
+// просто склейка. Для диалога — с метками [A]: / [B]: чтобы видно кто
+// говорит. Метки в UI остаются как есть — пользователь читает и видит
+// смену реплик.
+function utterancesToText(utts: TranslatedUtterance[]): string {
+  if (utts.length === 0) return "";
+  const hasSpeakers = utts.some((u) => u.speaker !== null);
+  if (!hasSpeakers || utts.length === 1) {
+    return utts.map((u) => u.text).join(" ");
+  }
+  return utts
+    .map((u) => (u.speaker ? `[${u.speaker}] ${u.text}` : u.text))
+    .join("\n");
+}
 
 export async function runJob(job: JobRow): Promise<void> {
   const work = await mkdtemp(join(tmpdir(), `job-${job.id}-`));
@@ -123,10 +156,11 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
       const i = translateNextIdx++;
       if (i >= chunks.length) return;
       const c = chunks[i];
-      c.translated_text = await translateChunk(c.source_text, {
+      c.utterances = await translateChunk(c.source_text, {
         sourceLang: tx.language,
         targetLang: job.target_lang,
       });
+      c.translated_text = utterancesToText(c.utterances);
       translateDone++;
       await reportTranslateProgress();
     }
@@ -163,15 +197,50 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
       if (i >= chunks.length) return;
       const c = chunks[i];
       const outFile = join(work, `chunk-${i}.mp3`);
-      if (!c.translated_text) {
-        // Пустой чанк (например, чанк состоял только из филлеров типа
-        // "[Music]") — короткая тишина вместо TTS.
+      const utts = c.utterances;
+      const hasSpeakers = utts.some((u) => u.speaker !== null);
+      const multiVoice = hasSpeakers && utts.length > 1;
+
+      if (utts.length === 0 || utts.every((u) => !u.text)) {
+        // Пустой чанк (например, состоял только из филлеров) → тишина.
         await ffmpegSilence(outFile, 0.5);
-      } else {
-        const raw = await ttsSynth(c.translated_text);
+      } else if (!multiVoice) {
+        // Монолог: одна TTS-сессия дефолтным голосом — звучит гораздо
+        // ровнее чем стык независимо синтезированных предложений.
+        const joined = utts.map((u) => u.text).join(" ");
+        const raw = await ttsSynth(joined, {
+          voice: voiceFor(utts[0]?.speaker ?? null),
+        });
         const rawFile = join(work, `chunk-${i}-raw.mp3`);
         await writeFile(rawFile, raw);
         await ffmpegNormalize(rawFile, outFile);
+      } else {
+        // Диалог: каждая реплика синтезируется своим голосом, потом
+        // склеиваются подряд. Между репликами никаких пауз — естественный
+        // ритм даёт сама смена голосов.
+        const utterFiles: Array<{ file: string; start_ms: number; end_ms: number }> = [];
+        let cursorMs = 0;
+        for (let j = 0; j < utts.length; j++) {
+          const u = utts[j];
+          const utterOut = join(work, `chunk-${i}-utter-${j}.mp3`);
+          if (!u.text) {
+            await ffmpegSilence(utterOut, 0.3);
+          } else {
+            const raw = await ttsSynth(u.text, { voice: voiceFor(u.speaker) });
+            const rawFile = join(work, `chunk-${i}-utter-${j}-raw.mp3`);
+            await writeFile(rawFile, raw);
+            await ffmpegNormalize(rawFile, utterOut);
+          }
+          const d = await ffprobeDuration(utterOut);
+          const durMs = Math.round(d * 1000);
+          utterFiles.push({
+            file: utterOut,
+            start_ms: cursorMs,
+            end_ms: cursorMs + durMs,
+          });
+          cursorMs += durMs;
+        }
+        await ffmpegConcatTimed(utterFiles, outFile, null);
       }
       const durationSec = await ffprobeDuration(outFile);
       chunkOut[i] = { file: outFile, durationSec };
@@ -237,7 +306,9 @@ interface SourceChunk {
   start_ms: number;
   end_ms: number;
   source_text: string;
-  translated_text: string;
+  // Заполняются после translateChunk:
+  utterances: TranslatedUtterance[];
+  translated_text: string; // склейка utterances для транскрипта в UI
 }
 
 const CHUNK_MAX_MS = 180_000;
@@ -254,6 +325,7 @@ function chunkSourceSegments(segments: SegmentInput[]): SourceChunk[] {
         start_ms: s.start_ms,
         end_ms: s.end_ms,
         source_text: text,
+        utterances: [],
         translated_text: "",
       };
       continue;
@@ -266,6 +338,7 @@ function chunkSourceSegments(segments: SegmentInput[]): SourceChunk[] {
         start_ms: s.start_ms,
         end_ms: s.end_ms,
         source_text: text,
+        utterances: [],
         translated_text: "",
       };
     } else {
