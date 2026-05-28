@@ -2,14 +2,19 @@
 //
 // Подкаст-режим: переведённая речь звучит в натуральном темпе TTS, без
 // принудительной подгонки под исходные таймкоды. Финальный mp3 короче
-// видео (русский плотнее английского), но звучит естественно — слушаешь
-// как подкаст, опционально рядом крутится оригинал.
+// видео (русский плотнее английского), но звучит естественно.
+//
+// Перевод и TTS идут на уровне ЧАНКОВ (~3 минуты речи), а не отдельных
+// YouTube-субтитров. YouTube режет речь на куски по 1-3 секунды, часто
+// посреди предложения — переводить такие куски пословно даёт неестественный
+// результат. Чанк собирается на естественных паузах говорящего и попадает
+// в переводчик как цельный абзац — модель свободно меняет порядок слов
+// и переформулирует под язык. TTS читает связный текст, не отрывки.
 //
 // Этапы (с прогрессом для пользователя):
 //   download (0..30)  — Apify тянет транскрипт с таймкодами + метаданные
-//   translate(30..55) — LLM-перевод сегментов с сохранением их idx
-//   tts      (55..90) — ElevenLabs синтезирует чанки (по ~3 мин речи),
-//                       нормализуем mp3-формат для concat
+//   translate(30..55) — LLM-перевод каждого чанка цельным абзацем
+//   tts      (55..90) — ElevenLabs синтезирует чанки, нормализуем mp3-формат
 //   mux      (90..100)— подряд склеиваем чанки, загружаем в R2
 
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
@@ -24,7 +29,7 @@ import {
 } from "@/lib/jobs";
 import { logError } from "@/lib/logger";
 import { fetchTranscript } from "./apify";
-import { translateBatch, ttsSynth, type TranslatedSegment } from "./aimlapi";
+import { translateChunk, ttsSynth, type SegmentInput } from "./aimlapi";
 import {
   ffmpegConcatTimed,
   ffmpegNormalize,
@@ -82,7 +87,7 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
     progress: 28,
   });
   // Изначально сохраняем сегменты с YouTube-таймкодами — пока перевод не
-  // готов, в UI видны исходные субтитры.
+  // готов, в UI видны исходные субтитры по сегментам.
   await replaceSegments(
     job.id,
     tx.segments.map((s) => ({
@@ -93,17 +98,48 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
     })),
   );
 
-  // 2. Перевод.
+  // 2. Группировка исходных сегментов в чанки (~3 мин на естественных паузах).
   await updateJobProgress({ id: job.id, stage: "translate", progress: 32 });
-  const translated = await translateBatch(tx.segments, {
-    sourceLang: tx.language,
-    targetLang: job.target_lang,
-  });
+  const chunks = chunkSourceSegments(tx.segments);
+
+  // 3. Перевод каждого чанка цельным абзацем — параллельно, чтобы не ждать
+  // 10+ HTTP-запросов последовательно для длинных видео.
+  const TRANSLATE_CONCURRENCY = 4;
+  let translateNextIdx = 0;
+  let translateDone = 0;
+  let lastTranslateReportAt = 0;
+  async function reportTranslateProgress() {
+    if (Date.now() - lastTranslateReportAt < 1500) return;
+    lastTranslateReportAt = Date.now();
+    const p = 32 + Math.round((23 * translateDone) / chunks.length);
+    await updateJobProgress({
+      id: job.id,
+      stage: "translate",
+      progress: Math.min(p, 55),
+    });
+  }
+  async function translateWorker(): Promise<void> {
+    for (;;) {
+      const i = translateNextIdx++;
+      if (i >= chunks.length) return;
+      const c = chunks[i];
+      c.translated_text = await translateChunk(c.source_text, {
+        sourceLang: tx.language,
+        targetLang: job.target_lang,
+      });
+      translateDone++;
+      await reportTranslateProgress();
+    }
+  }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(TRANSLATE_CONCURRENCY, chunks.length) },
+      () => translateWorker(),
+    ),
+  );
   await updateJobProgress({ id: job.id, stage: "translate", progress: 55 });
 
-  // 3. TTS — чанками ~3 мин, никакого atempo (подкаст-режим).
-  // Каждый чанк синтезируется в натуральном темпе.
-  const chunks = chunkForTts(translated);
+  // 4. TTS — каждый чанк синтезируется в натуральном темпе.
   await updateJobProgress({ id: job.id, stage: "tts", progress: 58 });
   const chunkOut: Array<{ file: string; durationSec: number } | null> =
     new Array(chunks.length).fill(null);
@@ -127,13 +163,12 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
       if (i >= chunks.length) return;
       const c = chunks[i];
       const outFile = join(work, `chunk-${i}.mp3`);
-      if (!c.text) {
-        // Чанк без перевода — короткая тишина (полсекунды). Без неё в
-        // подкасте «пропадёт» граница, но 0 длительности тоже не нужно
-        // — concat-демуксер может ругнуться.
+      if (!c.translated_text) {
+        // Пустой чанк (например, чанк состоял только из филлеров типа
+        // "[Music]") — короткая тишина вместо TTS.
         await ffmpegSilence(outFile, 0.5);
       } else {
-        const raw = await ttsSynth(c.text);
+        const raw = await ttsSynth(c.translated_text);
         const rawFile = join(work, `chunk-${i}-raw.mp3`);
         await writeFile(rawFile, raw);
         await ffmpegNormalize(rawFile, outFile);
@@ -148,11 +183,12 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
     Array.from({ length: Math.min(TTS_CONCURRENCY, chunks.length) }, () => workerLoop()),
   );
 
-  // 4. Сборка output-таймлайна. Чанки склеиваются подряд, ремапим исходные
-  // сегменты в новые позиции (пропорционально внутри чанка). Это даёт
-  // транскрипту-плееру в UI правильный click-to-seek по подкасту.
+  // 5. Сборка output-таймлайна. Чанки идут подряд. Транскрипт в UI теперь
+  // тоже на уровне чанков (одна строка = один чанк ≈ 3 мин речи). Точность
+  // click-to-seek падает до «начала чанка», но переводы стали связными —
+  // для подкаст-плеера паттерн «слушаем абзацами» естественнее.
   const podcastChunkFiles: Array<{ file: string; start_ms: number; end_ms: number }> = [];
-  const remappedSegments: Array<{
+  const chunkSegments: Array<{
     idx: number;
     start_ms: number;
     end_ms: number;
@@ -167,35 +203,25 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
     const chunkStartMs = cursorMs;
     const chunkEndMs = cursorMs + Math.round(r.durationSec * 1000);
     podcastChunkFiles.push({ file: r.file, start_ms: chunkStartMs, end_ms: chunkEndMs });
-
-    const inputDur = c.end_ms - c.start_ms;
-    const outputDur = chunkEndMs - chunkStartMs;
-    for (const seg of c.sourceSegments) {
-      // Пропорциональный пересчёт: позиция сегмента внутри чанка в
-      // исходном таймлайне → та же доля в output-чанке.
-      const relStart = inputDur > 0 ? (seg.start_ms - c.start_ms) / inputDur : 0;
-      const relEnd = inputDur > 0 ? (seg.end_ms - c.start_ms) / inputDur : 1;
-      remappedSegments.push({
-        idx: seg.idx,
-        start_ms: Math.round(chunkStartMs + relStart * outputDur),
-        end_ms: Math.round(chunkStartMs + relEnd * outputDur),
-        source_text: seg.text,
-        translated_text: seg.translated_text,
-      });
-    }
+    chunkSegments.push({
+      idx: i,
+      start_ms: chunkStartMs,
+      end_ms: chunkEndMs,
+      source_text: c.source_text,
+      translated_text: c.translated_text,
+    });
     cursorMs = chunkEndMs;
   }
-  // Перезаписываем сегменты с подкаст-таймлайном — теперь они синхронны
-  // с финальным mp3, не с YouTube-видео.
-  await replaceSegments(job.id, remappedSegments);
+  // Перезаписываем — вместо сотен per-segment EN-строк теперь N строк
+  // по числу чанков, у каждой полный текст оригинала и связный перевод.
+  await replaceSegments(job.id, chunkSegments);
 
-  // 5. Склейка mp3 в один трек. Чанки идут подряд (start[i+1] = end[i]),
-  // так что ffmpegConcatTimed не вставит silence-гэпы.
+  // 6. Склейка mp3 в один трек.
   await updateJobProgress({ id: job.id, stage: "mux", progress: 92 });
   const finalMp3 = join(work, "final.mp3");
   await ffmpegConcatTimed(podcastChunkFiles, finalMp3, null);
 
-  // 6. Загрузка в R2.
+  // 7. Загрузка в R2.
   await updateJobProgress({ id: job.id, stage: "mux", progress: 96 });
   const data = await readFile(finalMp3);
   const key = `translations/${job.yt_video_id}/${job.target_lang}/${job.id}.mp3`;
@@ -204,36 +230,31 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
   await markJobDone({ id: job.id, audioUrl });
 }
 
-// Группирует подряд идущие сегменты в TTS-чанки. Логика:
-//   • Внутри чанка — суммарная длительность < CHUNK_MAX_MS (3 мин)
-//   • Чанк закрывается, если до следующего сегмента gap > BREAK_GAP_MS
-//     (естественная пауза говорящего — хорошая граница)
-//   • Чанк закрывается, если добавление следующего сегмента превысит
-//     CHUNK_MAX_MS
-// Сохраняем ссылки на исходные сегменты — нужно для ремаппинга
-// субтитров на output-таймлайн после TTS.
-interface TtsChunk {
-  text: string;
+// Группирует подряд идущие сегменты в чанки для перевода и TTS. Работаем
+// с исходным текстом — перевод придёт поверх готового чанка одной строкой,
+// и тот же чанк станет одной строкой транскрипта в UI.
+interface SourceChunk {
   start_ms: number;
   end_ms: number;
-  sourceSegments: TranslatedSegment[];
+  source_text: string;
+  translated_text: string;
 }
 
 const CHUNK_MAX_MS = 180_000;
 const BREAK_GAP_MS = 1_000;
 
-function chunkForTts(segments: TranslatedSegment[]): TtsChunk[] {
-  const chunks: TtsChunk[] = [];
-  let current: TtsChunk | null = null;
+function chunkSourceSegments(segments: SegmentInput[]): SourceChunk[] {
+  const chunks: SourceChunk[] = [];
+  let current: SourceChunk | null = null;
 
   for (const s of segments) {
-    const text = (s.translated_text || "").trim();
+    const text = (s.text || "").trim();
     if (!current) {
       current = {
-        text,
         start_ms: s.start_ms,
         end_ms: s.end_ms,
-        sourceSegments: [s],
+        source_text: text,
+        translated_text: "",
       };
       continue;
     }
@@ -242,15 +263,18 @@ function chunkForTts(segments: TranslatedSegment[]): TtsChunk[] {
     if (gap > BREAK_GAP_MS || wouldBeDuration > CHUNK_MAX_MS) {
       chunks.push(current);
       current = {
-        text,
         start_ms: s.start_ms,
         end_ms: s.end_ms,
-        sourceSegments: [s],
+        source_text: text,
+        translated_text: "",
       };
     } else {
-      if (text) current.text = current.text ? `${current.text} ${text}` : text;
+      if (text) {
+        current.source_text = current.source_text
+          ? `${current.source_text} ${text}`
+          : text;
+      }
       current.end_ms = s.end_ms;
-      current.sourceSegments.push(s);
     }
   }
   if (current) chunks.push(current);

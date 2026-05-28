@@ -19,46 +19,31 @@ export interface SegmentInput {
   text: string;
 }
 
-export interface TranslatedSegment extends SegmentInput {
-  translated_text: string;
-}
-
-// LLM-перевод сегментов батчем, с сохранением idx. Возвращает массив той же
-// длины, что и вход; для пропавших сегментов translated_text = "".
-export async function translateBatch(
-  segments: SegmentInput[],
+// Перевод цельного куска речи (≈ абзаца, до ~3 минут). Возвращает один связный
+// перевод, не нарезанный по сегментам — это даёт переводчику свободу менять
+// порядок слов, переформулировать под язык, склеивать обрывочные фразы YouTube-
+// субтитров в нормальную речь. Цена — теряем точную привязку перевода к
+// исходным таймкодам сегментов, но в подкаст-режиме это и не нужно: транскрипт
+// показывает уже чанк-уровень, аудио играет в натуральном темпе TTS.
+export async function translateChunk(
+  sourceText: string,
   opts: { sourceLang: string | null; targetLang: string; model?: string },
-): Promise<TranslatedSegment[]> {
+): Promise<string> {
+  const text = sourceText.trim();
+  if (!text) return "";
   const model = opts.model ?? "gpt-4o";
-  // 40 сегментов в батче — компромисс между «один запрос на всё» (модель
-  // может схалтурить) и «по одному» (медленно). При gpt-4o 40 сегментов
-  // ≈ 2000-3000 токенов output, влезает уверенно.
-  const CHUNK = 40;
-  const out: TranslatedSegment[] = [];
-  for (let i = 0; i < segments.length; i += CHUNK) {
-    const chunk = segments.slice(i, i + CHUNK);
-    const part = await translateOneBatch(chunk, { ...opts, model });
-    out.push(...part);
-  }
-  return out;
-}
-
-async function translateOneBatch(
-  segments: SegmentInput[],
-  opts: { sourceLang: string | null; targetLang: string; model: string },
-): Promise<TranslatedSegment[]> {
-  const input = segments.map((s) => ({ idx: s.idx, text: s.text }));
   const sys =
-    `Ты — профессиональный переводчик. Переводишь живую речь из видео ` +
-    `на язык "${opts.targetLang}". Сохраняй естественность речи, юмор, тон оригинала. ` +
-    `Не объединяй и не разделяй сегменты — на каждый входной idx ровно один ` +
-    `перевод. Не добавляй пояснений.`;
+    `Ты — профессиональный переводчик-локализатор. Переводишь живую речь из ` +
+    `видео на язык "${opts.targetLang}". Это связный кусок речи (~3 минуты), ` +
+    `склеенный из YouTube-субтитров. Твоя цель — естественно звучащий ` +
+    `параграф на ${opts.targetLang}, как будто человек свободно говорит на ` +
+    `этом языке. Меняй порядок слов под целевой язык, переформулируй фразы, ` +
+    `склеивай обрывки субтитров в нормальные предложения, сохраняй тон и ` +
+    `юмор оригинала. Никаких переводческих калек. Никаких пояснений, ` +
+    `пометок, markdown, кавычек вокруг ответа — только сам перевод.`;
   const user =
-    `Исходный язык: ${opts.sourceLang || "auto"}. Целевой: ${opts.targetLang}.\n` +
-    `На входе ${input.length} сегментов. Верни ровно ${input.length} переводов в ` +
-    `формате JSON: {"items":[{"idx":number,"text":string}, ...]} в том же порядке.\n` +
-    `Никаких других ключей, никакого markdown, никакого текста снаружи объекта.\n\n` +
-    `Вход:\n${JSON.stringify(input)}`;
+    `Исходный язык: ${opts.sourceLang || "auto"}. Целевой: ${opts.targetLang}.\n\n` +
+    `Текст:\n${text}`;
 
   const res = await fetch(`${BASE}/chat/completions`, {
     method: "POST",
@@ -67,13 +52,11 @@ async function translateOneBatch(
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: opts.model,
-      temperature: 0.3,
-      // max_tokens должен покрыть translation для всего батча. На 80 сегментов
-      // по ~50 токенов на перевод = 4000+ токенов. Без явного лимита gpt-4o
-      // могла обрезать на 1-м сегменте.
-      max_tokens: 8000,
-      response_format: { type: "json_object" },
+      model,
+      temperature: 0.4,
+      // 3 минуты речи ≈ 400-600 слов исходника. На русском с разворачиванием
+      // запас 4000 токенов покрывает с большим запасом.
+      max_tokens: 4000,
       messages: [
         { role: "system", content: sys },
         { role: "user", content: user },
@@ -81,75 +64,14 @@ async function translateOneBatch(
     }),
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`translate failed ${res.status}: ${text.slice(0, 400)}`);
+    const t = await res.text().catch(() => "");
+    throw new Error(`translate failed ${res.status}: ${t.slice(0, 400)}`);
   }
   const data = (await res.json()) as Record<string, unknown>;
   const raw =
     ((data.choices as Array<Record<string, unknown>> | undefined)?.[0]
       ?.message as Record<string, unknown> | undefined)?.content as string | undefined;
-  const text = raw ?? "[]";
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error(`translator returned invalid JSON: ${text.slice(0, 200)}`);
-  }
-  const arr = findTranslationsArray(parsed);
-  if (!arr) {
-    throw new Error(
-      `translator JSON has no array (keys=${Object.keys((parsed as object) ?? {}).join(",")}): ${JSON.stringify(parsed).slice(0, 200)}`,
-    );
-  }
-  // Если модель вернула меньше чем мы просили — это уже не ок, лучше упасть
-  // явно, чем кидать в TTS pустые сегменты.
-  if (arr.length < segments.length * 0.5) {
-    throw new Error(
-      `translator returned only ${arr.length}/${segments.length} items — модель ` +
-        `вернула не все переводы. Это может быть из-за max_tokens или того, что ` +
-        `модель посчитала текст «не требующим перевода». Первый item: ${JSON.stringify(arr[0]).slice(0, 200)}`,
-    );
-  }
-
-  const byIdx = new Map<number, string>(
-    arr.map((r) => [Number(r.idx), String(r.text ?? r.translated_text ?? r.translation ?? "")]),
-  );
-  return segments.map((s) => ({
-    ...s,
-    translated_text: byIdx.get(s.idx) ?? "",
-  }));
-}
-
-// gpt-4o с response_format=json_object отдаёт ВСЕГДА объект, не чистый массив.
-// Поэтому ищем массив переводов в самом объекте, перебирая популярные имена,
-// а если не нашли — берём первый массив объектов с полем idx или text.
-function findTranslationsArray(parsed: unknown): Array<{ idx: unknown; text?: unknown; translated_text?: unknown; translation?: unknown }> | null {
-  if (Array.isArray(parsed)) return parsed as Array<{ idx: unknown; text?: unknown }>;
-  if (!parsed || typeof parsed !== "object") return null;
-  const obj = parsed as Record<string, unknown>;
-  // Если объект сам похож на одну translation-строку — на батче из 1 сегмента
-  // gpt-4o возвращает {"idx": 0, "text": "..."} вместо массива.
-  if ("idx" in obj && ("text" in obj || "translated_text" in obj || "translation" in obj)) {
-    return [obj as { idx: unknown; text?: unknown }];
-  }
-  const knownKeys = ["items", "translations", "segments", "data", "result", "results", "output"];
-  for (const k of knownKeys) {
-    const v = obj[k];
-    if (Array.isArray(v)) return v as Array<{ idx: unknown }>;
-  }
-  // Fallback: первый property с массивом объектов, в которых есть idx или text.
-  for (const v of Object.values(obj)) {
-    if (
-      Array.isArray(v) &&
-      v.length > 0 &&
-      typeof v[0] === "object" &&
-      v[0] !== null &&
-      ("idx" in v[0] || "text" in v[0])
-    ) {
-      return v as Array<{ idx: unknown }>;
-    }
-  }
-  return null;
+  return (raw ?? "").trim();
 }
 
 // ElevenLabs TTS через aimlapi proxy. Возвращает mp3 как Buffer.
