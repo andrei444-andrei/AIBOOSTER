@@ -466,84 +466,61 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
           src={job.audio_url ?? undefined}
           controls
           preload="metadata"
-          style={{ width: "100%" }}
+          style={{ width: "100%", borderRadius: "var(--radius-sm)" }}
         />
-        <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
-          <button
-            type="button"
+        <div
+          style={{
+            display: "flex",
+            gap: "var(--space-2)",
+            marginTop: "var(--space-4)",
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <Button
+            size="sm"
+            variant={watchStatus === "watched" ? "secondary" : "primary"}
             onClick={toggleWatched}
-            style={{
-              padding: "6px 12px",
-              background:
-                watchStatus === "watched" ? "var(--success-bg)" : "var(--bg-subtle)",
-              border: `1px solid ${
-                watchStatus === "watched" ? "var(--success)" : "var(--border)"
-              }`,
-              borderRadius: "var(--radius-sm)",
-              color:
-                watchStatus === "watched" ? "var(--success)" : "var(--text)",
-              fontSize: "var(--text-sm)",
-              fontFamily: "inherit",
-              cursor: "pointer",
-            }}
+            leadingIcon={watchStatus === "watched" ? <span>✓</span> : null}
           >
-            {watchStatus === "watched"
-              ? "✓ Просмотрено"
-              : "Отметить как просмотрено"}
-          </button>
-          <a
-            href={job.audio_url ?? "#"}
-            download
-            style={{
-              padding: "6px 12px",
-              background: "var(--bg-subtle)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              color: "var(--text)",
-              textDecoration: "none",
-              fontSize: "var(--text-sm)",
-            }}
-          >
-            ↓ Скачать mp3
-          </a>
-          <a
+            {watchStatus === "watched" ? "Просмотрено" : "Отметить просмотренным"}
+          </Button>
+          <LinkChip href={job.audio_url ?? "#"} download leading="↓">
+            mp3
+          </LinkChip>
+          <LinkChip
             href={`https://youtu.be/${job.video_id}`}
             target="_blank"
             rel="noopener"
-            style={{
-              padding: "6px 12px",
-              background: "var(--bg-subtle)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              color: "var(--text)",
-              textDecoration: "none",
-              fontSize: "var(--text-sm)",
-            }}
+            trailing="↗"
           >
-            Оригинал на YouTube ↗
-          </a>
+            Оригинал
+          </LinkChip>
           {segments.length > 0 && segments.some((s) => s.source_text) && (
             <label
               style={{
-                padding: "6px 12px",
-                background: "var(--bg-subtle)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--text)",
-                fontSize: "var(--text-sm)",
-                cursor: "pointer",
-                display: "flex",
+                marginLeft: "auto",
+                display: "inline-flex",
                 alignItems: "center",
-                gap: 6,
+                gap: "var(--space-2)",
+                fontSize: "var(--text-sm)",
+                color: "var(--text-secondary)",
+                cursor: "pointer",
+                userSelect: "none",
               }}
             >
               <input
                 type="checkbox"
                 checked={showOriginal}
                 onChange={(e) => setShowOriginal(e.target.checked)}
-                style={{ margin: 0 }}
+                style={{
+                  margin: 0,
+                  accentColor: "var(--accent)",
+                  width: 14,
+                  height: 14,
+                }}
               />
-              показывать оригинал
+              оригинал в транскрипте
             </label>
           )}
         </div>
@@ -551,18 +528,8 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
 
       {job.chapters && job.chapters.length > 0 && (
         <Card padded style={{ marginTop: 20 }}>
-          <div
-            style={{
-              fontSize: "var(--text-sm)",
-              color: "var(--text-muted)",
-              marginBottom: 10,
-              textTransform: "uppercase",
-              letterSpacing: "0.04em",
-            }}
-          >
-            Главы
-          </div>
-          <div style={{ display: "grid", gap: 2 }}>
+          <SectionLabel>Главы</SectionLabel>
+          <NavList>
             {job.chapters.map((ch, i) => {
               const next = job.chapters[i + 1];
               const currentSec = currentMs / 1000;
@@ -570,119 +537,218 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
                 currentSec >= ch.start_sec &&
                 (next ? currentSec < next.start_sec : true);
               return (
-                <button
+                <NavRow
                   key={`${ch.start_sec}-${i}`}
+                  active={active}
                   onClick={() => seekTo(ch.start_sec * 1000)}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "56px 1fr",
-                    gap: 12,
-                    textAlign: "left",
-                    background: active ? "var(--bg-subtle)" : "transparent",
-                    border: `1px solid ${active ? "var(--border-strong)" : "transparent"}`,
-                    borderRadius: "var(--radius-sm)",
-                    padding: "8px 10px",
-                    color: active ? "var(--text)" : "var(--text)",
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    fontSize: "var(--text-base)",
-                    lineHeight: 1.35,
-                    transition: "var(--transition)",
-                  }}
+                  timecode={formatTimecode(ch.start_sec * 1000)}
                 >
-                  <span
-                    style={{
-                      color: "var(--text-muted)",
-                      fontVariantNumeric: "tabular-nums",
-                      fontSize: 12,
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    {formatTimecode(ch.start_sec * 1000)}
-                  </span>
                   <span style={{ fontWeight: active ? 600 : 500 }}>{ch.title}</span>
-                </button>
+                </NavRow>
               );
             })}
-          </div>
+          </NavList>
         </Card>
       )}
 
       {segments.length > 0 && (
         <Card padded style={{ marginTop: 20 }}>
-          <div
-            style={{
-              fontSize: "var(--text-sm)",
-              color: "var(--text-muted)",
-              marginBottom: 10,
-              textTransform: "uppercase",
-              letterSpacing: "0.04em",
-            }}
-          >
+          <SectionLabel>
             Транскрипт ({job.target_lang.toUpperCase()})
             {showOriginal && job.source_lang
               ? ` ← ${job.source_lang.toUpperCase()}`
               : ""}
-          </div>
-          <div style={{ display: "grid", gap: 4 }}>
+          </SectionLabel>
+          <NavList>
             {segments.map((s, i) => {
               const active = i === activeIdx;
               return (
-                <button
+                <NavRow
                   key={s.idx}
+                  active={active}
                   onClick={() => seekTo(s.start_ms)}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "56px 1fr",
-                    gap: 12,
-                    textAlign: "left",
-                    background: active ? "var(--bg-subtle)" : "transparent",
-                    border: `1px solid ${active ? "var(--border-strong)" : "transparent"}`,
-                    borderRadius: "var(--radius-sm)",
-                    padding: "8px 10px",
-                    color: "var(--text)",
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    fontSize: "var(--text-base)",
-                    lineHeight: "var(--leading-normal)",
-                    transition: "var(--transition)",
-                  }}
+                  timecode={formatTimecode(s.start_ms)}
                 >
-                  <span
+                  <div
                     style={{
-                      color: "var(--text-muted)",
-                      fontVariantNumeric: "tabular-nums",
-                      fontSize: 12,
-                      fontFamily: "var(--font-mono)",
+                      lineHeight: "var(--leading-normal)",
+                      whiteSpace: "pre-line",
                     }}
                   >
-                    {formatTimecode(s.start_ms)}
-                  </span>
-                  <span>
-                    <div>
-                      {s.translated_text || (
-                        <em style={{ color: "var(--text-muted)" }}>—</em>
-                      )}
-                    </div>
-                    {showOriginal && s.source_text && (
-                      <div
-                        style={{
-                          color: "var(--text-muted)",
-                          fontSize: "var(--text-sm)",
-                          marginTop: 2,
-                        }}
-                      >
-                        {s.source_text}
-                      </div>
+                    {s.translated_text || (
+                      <em style={{ color: "var(--text-muted)" }}>—</em>
                     )}
-                  </span>
-                </button>
+                  </div>
+                  {showOriginal && s.source_text && (
+                    <div
+                      style={{
+                        color: "var(--text-muted)",
+                        fontSize: "var(--text-sm)",
+                        marginTop: 4,
+                        lineHeight: "var(--leading-normal)",
+                      }}
+                    >
+                      {s.source_text}
+                    </div>
+                  )}
+                </NavRow>
               );
             })}
-          </div>
+          </NavList>
         </Card>
       )}
     </>
+  );
+}
+
+// Ссылка-чип в визуальном стиле ghost-кнопки из UX Kit. Button не
+// поддерживает as="a", поэтому делаем локальный аналог под анкеры
+// (загрузка mp3, открытие YouTube).
+function LinkChip({
+  href,
+  children,
+  leading,
+  trailing,
+  download,
+  target,
+  rel,
+}: {
+  href: string;
+  children: React.ReactNode;
+  leading?: string;
+  trailing?: string;
+  download?: boolean;
+  target?: string;
+  rel?: string;
+}) {
+  return (
+    <a
+      href={href}
+      target={target}
+      rel={rel}
+      {...(download ? { download: "" } : {})}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "var(--space-2)",
+        height: 28,
+        padding: "0 var(--space-3)",
+        background: "transparent",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        color: "var(--text)",
+        textDecoration: "none",
+        fontSize: "var(--text-sm)",
+        fontWeight: 500,
+        transition: "var(--transition)",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "var(--bg-subtle)";
+        e.currentTarget.style.borderColor = "var(--border-strong)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+        e.currentTarget.style.borderColor = "var(--border)";
+      }}
+    >
+      {leading && <span aria-hidden>{leading}</span>}
+      <span>{children}</span>
+      {trailing && <span aria-hidden>{trailing}</span>}
+    </a>
+  );
+}
+
+// Eyebrow-стиль заголовка секции в карточке — мелкий, uppercase,
+// в text-muted цвете. Используется и для «Главы», и для «Транскрипт».
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        fontSize: "var(--text-xs)",
+        color: "var(--text-muted)",
+        marginBottom: "var(--space-3)",
+        textTransform: "uppercase",
+        letterSpacing: "0.08em",
+        fontWeight: 500,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// Контейнер-список с волосяной линией между строками. Без отдельных
+// рамок у каждой строки — гораздо чище визуально, чем grid из bordered
+// прямоугольников.
+function NavList({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// Одна строка списка: timecode слева в моно-шрифте, контент справа.
+// Hover/active подсвечиваем фоном, между строками тонкая разделительная
+// линия (вместо рамок). Полное body кликабельно.
+function NavRow({
+  active,
+  onClick,
+  timecode,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  timecode: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "60px 1fr",
+        gap: "var(--space-3)",
+        textAlign: "left",
+        background: active ? "var(--bg-subtle)" : "transparent",
+        border: "none",
+        borderTop: "var(--hairline-w) solid var(--border)",
+        borderRadius: 0,
+        padding: "var(--space-3) var(--space-3)",
+        color: "var(--text)",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        fontSize: "var(--text-base)",
+        transition: "background var(--transition)",
+        margin: 0,
+      }}
+      onMouseEnter={(e) => {
+        if (!active) e.currentTarget.style.background = "var(--bg-hover)";
+      }}
+      onMouseLeave={(e) => {
+        if (!active) e.currentTarget.style.background = "transparent";
+      }}
+    >
+      <span
+        style={{
+          color: "var(--text-muted)",
+          fontVariantNumeric: "tabular-nums",
+          fontSize: "var(--text-xs)",
+          fontFamily: "var(--font-mono)",
+          alignSelf: "start",
+          paddingTop: 2,
+        }}
+      >
+        {timecode}
+      </span>
+      <span style={{ minWidth: 0 }}>{children}</span>
+    </button>
   );
 }
 
