@@ -60,6 +60,21 @@ export interface RouteMeta {
   uncertain?: boolean;
   /** Сколько мс занял сам роутер (классификатор). */
   routing_latency_ms?: number;
+  // ─── Ensemble + Judge (PR #25 фронт это уже рендерит) ─────────────
+  /** Прошёл ли запрос через ансамбль 2-3 моделей + судью. */
+  ensemble?: boolean;
+  /** Полные ответы кандидатов с метаданными — для коллапсибла «что ответили модели». */
+  candidates?: Array<{
+    model: string;
+    duration_ms: number;
+    tokens?: number;
+    response: string;
+    error?: string | null;
+  }>;
+  /** Кто синтезировал финальный ответ. */
+  judge?: { model: string; duration_ms: number; tokens?: number };
+  /** Сумма от первого fetch'а кандидата до окончания стрима судьи. */
+  total_duration_ms?: number;
 }
 
 export interface ChatMessage {
@@ -535,6 +550,38 @@ export function buildMessagesForModel(
     }
   }
 
+  return normalizeAlternating(out);
+}
+
+/** Гарантируем строгое чередование user/assistant после system-блока.
+ *
+ *  Perplexity Sonar (и не только) кидает 400 «After the (optional) system
+ *  message(s), user or tool message(s) should alternate with assistant
+ *  message(s)», если в истории есть `user user` или `assistant assistant`
+ *  подряд. Такое случается при race-condition фронта (двойной Send), или
+ *  при отменённом запросе (assistant не записался), или при параллельных
+ *  вкладках.
+ *
+ *  Стратегия: если несколько сообщений одной роли идут подряд — оставляем
+ *  ПОСЛЕДНЕЕ. Предыдущие повторы — это либо "то же самое два раза", либо
+ *  потерянный контекст, который уже не вернуть. Меньшее зло, чем 400.
+ *  Системные сообщения наверху не трогаем. */
+function normalizeAlternating(msgs: BuiltMessage[]): BuiltMessage[] {
+  const out: BuiltMessage[] = [];
+  for (const m of msgs) {
+    if (m.role === "system") {
+      out.push(m);
+      continue;
+    }
+    // Если непосредственно предыдущее сообщение в out — той же роли,
+    // заменяем его на текущее. Иначе — добавляем. Так гарантируем
+    // строгое чередование без потери system-сообщений между блоками.
+    if (out.length > 0 && out[out.length - 1].role === m.role) {
+      out[out.length - 1] = m;
+    } else {
+      out.push(m);
+    }
+  }
   return out;
 }
 

@@ -17,12 +17,14 @@ import {
 } from "@/lib/chat";
 import { chatStream, generateImage, AIError, type WebImage, type WebCitation } from "@/lib/ai";
 import { compactRecentHistory, routeRequest } from "@/lib/router";
+import { ENSEMBLES, runEnsemble } from "@/lib/ensemble";
 import { logServerError } from "@/lib/logger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// AIMLAPI может думать до минуты на reasoning-моделях
-export const maxDuration = 120;
+// Ensemble + Judge с GPT-5 reasoning=high может занимать 60-180с
+// (3 кандидата параллельно + reasoning-судья). Запас даём щедро.
+export const maxDuration = 240;
 
 function getUid(req: Request): string | null {
   const h = req.headers.get("x-chat-uid");
@@ -338,7 +340,203 @@ export async function POST(req: Request, ctx: Ctx) {
         return;
       }
 
-      // ── Ветка текстовая (chatStream)
+      // ── Ветка ансамбля: для research/code/analyze/strategy запускаем
+      //   2-3 модели параллельно и судью (GPT-5 high). Пропускаем, если
+      //   пользователь явно зафиксировал модель — override-model значит
+      //   «хочу именно эту модель», а не «синтезированный микс».
+      const ensembleModels = ENSEMBLES[decision.category];
+      const shouldEnsemble =
+        ensembleModels !== null &&
+        ensembleModels.length > 1 &&
+        decision.source !== "override-model";
+
+      if (shouldEnsemble) {
+        const t0 = Date.now();
+        const buildMessages = (modelId: string) =>
+          buildMessagesForModel(systemPrompt, history, modelId);
+
+        // Дедупликация изображений/цитат для случая, если кто-то из кандидатов
+        // (Perplexity Sonar) их вернёт в стриме судьи. На текущей реализации
+        // судья — GPT-5 без поиска, так что обычно пусто.
+        const seenImages = new Set<string>();
+        const collectedImages: WebImage[] = [];
+        const seenCitations = new Set<string>();
+        const collectedCitations: WebCitation[] = [];
+
+        let acc = "";
+        let judgeTokens = 0;
+        const judgeUsageRef: {
+          current: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
+        } = { current: null };
+
+        try {
+          const result = await runEnsemble(
+            {
+              category: decision.category,
+              models: ensembleModels,
+              buildMessages,
+              originalUserText: content,
+              candidateMaxTokens: decision.max_tokens,
+            },
+            {
+              onEnsembleStart: (models) => send("ensemble_start", { models }),
+              onCandidateDone: (model, duration_ms, tokens) =>
+                send("candidate_done", { model, duration_ms, tokens }),
+              onCandidateError: (model, message) =>
+                send("candidate_error", { model, message }),
+              onJudgeStart: (model) => send("judge_start", { model }),
+              onJudgeDelta: (text) => {
+                acc += text;
+                send("delta", { text });
+              },
+              onJudgeUsage: (u) => {
+                judgeUsageRef.current = u;
+                judgeTokens = u.completion_tokens;
+              },
+            },
+          );
+
+          const durationMs = Date.now() - t0;
+
+          if (result.allFailed) {
+            const error_id = await logServerError(
+              new Error("ensemble: all candidates failed"),
+              "/api/chat/sessions/[id]/messages ensemble",
+              {
+                session_id: id,
+                category: decision.category,
+                models: ensembleModels,
+                candidate_errors: result.candidates.map((c) => ({
+                  model: c.model,
+                  error: c.error,
+                })),
+              },
+            );
+            send("error", {
+              message: "Все модели упали — попробуйте ещё раз.",
+              error_id,
+            });
+            controller.close();
+            return;
+          }
+
+          if (!acc.trim()) {
+            const error_id = await logServerError(
+              new Error("ensemble: judge returned empty content"),
+              "/api/chat/sessions/[id]/messages ensemble",
+              { session_id: id, category: decision.category },
+            );
+            send("error", { message: "Судья вернул пустой ответ.", error_id });
+            controller.close();
+            return;
+          }
+
+          // Сводим картинки и цитаты от всех кандидатов в общий пул для UI:
+          // фронт уже умеет рендерить web_images-мозаику и citations-чипы
+          // в обычном single-model flow — переиспользуем тот же канал.
+          for (const c of result.candidates) {
+            for (const img of c.images ?? []) {
+              if (seenImages.has(img.image_url)) continue;
+              seenImages.add(img.image_url);
+              collectedImages.push(img);
+            }
+            for (const cit of c.citations ?? []) {
+              if (seenCitations.has(cit.url)) continue;
+              seenCitations.add(cit.url);
+              collectedCitations.push(cit);
+            }
+          }
+          if (collectedImages.length > 0) {
+            send("web_images", { images: collectedImages });
+          }
+          if (collectedCitations.length > 0) {
+            send("citations", { citations: collectedCitations });
+          }
+
+          const routeMeta: RouteMeta = {
+            category: decision.category,
+            complexity: decision.complexity,
+            source: decision.source,
+            reason: decision.reason,
+            reasoning_effort: decision.reasoning_effort,
+            uncertain: decision.uncertain ?? false,
+            routing_latency_ms: decision.routing_latency_ms,
+            ensemble: true,
+            candidates: result.candidates.map((c) => ({
+              model: c.model,
+              duration_ms: c.duration_ms,
+              tokens: c.tokens,
+              response: c.response,
+              error: c.error ?? null,
+            })),
+            judge: {
+              model: result.judge.model,
+              duration_ms: result.judge.duration_ms,
+              tokens: result.judge.tokens,
+            },
+            total_duration_ms: result.total_duration_ms,
+          };
+
+          // Веб-картинки сохраняем в attachments (image_url) — чтобы они
+          // оставались в истории при перезагрузке, как в single-model flow.
+          const webImageAttachments = collectedImages.slice(0, 8).map((img, i) => ({
+            filename: img.title ? img.title.slice(0, 100) : `web-image-${i + 1}`,
+            mime_type: "image/*",
+            size: 0,
+            kind: "image_url" as const,
+            content_text: img.image_url,
+          }));
+
+          const assistantMsg = await appendMessage(id, "assistant", acc, {
+            // «model» для дисплея — судья. Это то, что финально отвечало.
+            model: result.judge.model,
+            tokensPrompt: judgeUsageRef.current?.prompt_tokens ?? null,
+            tokensCompletion: judgeUsageRef.current?.completion_tokens ?? judgeTokens,
+            durationMs,
+            routeMeta,
+            attachments: webImageAttachments.length ? webImageAttachments : undefined,
+          }).catch(async (err) => {
+            await logServerError(err, "/api/chat/sessions/[id]/messages save ensemble", {
+              session_id: id,
+            });
+            return null;
+          });
+
+          await setSessionLastModel(id, uid, result.judge.model).catch(() => {});
+
+          send("done", {
+            id: assistantMsg?.id ?? null,
+            created_at: assistantMsg?.created_at ?? new Date().toISOString(),
+            model: result.judge.model,
+            usage: judgeUsageRef.current,
+            duration_ms: durationMs,
+            route: routeMeta,
+            web_images: collectedImages,
+            citations: collectedCitations,
+          });
+          controller.close();
+          return;
+        } catch (err) {
+          let message = "Ensemble request failed";
+          let status: number | undefined;
+          if (err instanceof AIError) {
+            message = err.message;
+            status = err.status;
+          } else if (err instanceof Error) {
+            message = err.message;
+          }
+          const error_id = await logServerError(err, "/api/chat/sessions/[id]/messages ensemble", {
+            session_id: id,
+            category: decision.category,
+            status,
+          });
+          send("error", { message, error_id });
+          controller.close();
+          return;
+        }
+      }
+
+      // ── Ветка текстовая (chatStream) — одна модель
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const aimlOpts: any = {
         model: chosenModel,
