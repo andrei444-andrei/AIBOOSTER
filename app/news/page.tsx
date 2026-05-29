@@ -69,6 +69,21 @@ interface NewsItem {
   validation_input: string | null;
   validation_output_json: string | null;
   validation_error: string | null;
+  has_enrichment?: boolean;
+}
+
+interface Enrichment {
+  id: string;
+  status: "pending" | "running" | "done" | "failed";
+  summary: string | null;
+  key_facts: string[];
+  sources_used: Array<{ url: string; title: string; why_relevant: string }>;
+  model_used: string | null;
+  cost_cents: number | null;
+  latency_ms: number | null;
+  created_at: string;
+  completed_at: string | null;
+  synthesis_error: string | null;
 }
 
 interface PromptData {
@@ -289,6 +304,9 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
   const [expandedFeedback, setExpandedFeedback] = useState<null | "like" | "dislike">(null);
   const [sent, setSent] = useState(false);
   const [inflight, setInflight] = useState(false);
+  const [enrichmentOpen, setEnrichmentOpen] = useState(false);
+  const [enrichment, setEnrichment] = useState<Enrichment | null>(null);
+  const [enrichmentLoading, setEnrichmentLoading] = useState(false);
 
   const handleQuick = (s: "like" | "dislike") => {
     if (sent || inflight) return;
@@ -302,11 +320,43 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
     setSent(true);
   };
 
+  const loadEnrichment = async () => {
+    if (enrichment || enrichmentLoading) {
+      setEnrichmentOpen(!enrichmentOpen);
+      return;
+    }
+    setEnrichmentLoading(true);
+    setEnrichmentOpen(true);
+    try {
+      const r = await fetch(`/api/news/enrichment?item_id=${encodeURIComponent(item.id)}`);
+      const data = await r.json();
+      setEnrichment(data.enrichment);
+    } catch {
+      // soft: бейдж не появится без has_enrichment, но если кликнули - сообщение об ошибке необязательно
+    } finally {
+      setEnrichmentLoading(false);
+    }
+  };
+
   return (
     <Card padded>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 17, fontWeight: 600, flex: 1 }}>
           {item.title || "(без заголовка)"}
+          {item.has_enrichment && (
+            <span style={{
+              marginLeft: 8,
+              fontSize: 11,
+              fontWeight: 500,
+              padding: "2px 8px",
+              borderRadius: 99,
+              color: "var(--info)",
+              background: "var(--info-bg)",
+              verticalAlign: "middle",
+            }}>
+              🔍 углублено
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
           {item.source.name} · {item.relevance ?? "—"}/100
@@ -351,6 +401,71 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
       )}
       {sent && (
         <div style={{ marginTop: 10, fontSize: 12, color: "var(--success)" }}>Спасибо за фидбэк.</div>
+      )}
+      {item.has_enrichment && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+          <button
+            onClick={loadEnrichment}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--info)",
+              cursor: "pointer",
+              fontSize: "var(--text-sm)",
+              padding: 0,
+              fontFamily: "inherit",
+            }}
+          >
+            {enrichmentOpen ? "▼ свернуть углубление" : "▶ показать углубление (Opus + web search)"}
+          </button>
+          {enrichmentOpen && (
+            <div style={{ marginTop: 10 }}>
+              {enrichmentLoading && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Загружаю…</div>}
+              {!enrichmentLoading && enrichment && enrichment.summary && (
+                <>
+                  <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "var(--text)" }}>
+                    {enrichment.summary}
+                  </div>
+                  {enrichment.key_facts.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+                        Ключевые факты
+                      </div>
+                      <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "var(--text-secondary)" }}>
+                        {enrichment.key_facts.map((f, i) => <li key={i} style={{ marginBottom: 4 }}>{f}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {enrichment.sources_used.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+                        Источники ({enrichment.sources_used.length})
+                      </div>
+                      <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
+                        {enrichment.sources_used.map((s, i) => (
+                          <li key={i} style={{ marginBottom: 6 }}>
+                            <a href={s.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", borderBottom: "1px solid var(--border)" }}>
+                              {s.title || s.url}
+                            </a>
+                            {s.why_relevant && <span style={{ color: "var(--text-muted)", marginLeft: 6 }}>— {s.why_relevant}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-muted)" }}>
+                    {enrichment.model_used} · {enrichment.cost_cents != null ? `${(enrichment.cost_cents / 100).toFixed(2)}¢` : "?"} · {enrichment.latency_ms != null ? `${(enrichment.latency_ms / 1000).toFixed(1)}s` : "?"}
+                  </div>
+                </>
+              )}
+              {!enrichmentLoading && enrichment && !enrichment.summary && (
+                <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                  Углубление не удалось: {enrichment.synthesis_error ?? "неизвестная ошибка"}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </Card>
   );

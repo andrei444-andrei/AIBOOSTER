@@ -610,6 +610,173 @@ export async function recordFeedback(input: {
   });
 }
 
+// ---------- enrichment ----------
+
+export type EnrichmentStatus = "pending" | "running" | "done" | "failed";
+
+export interface NewsEnrichmentRow {
+  id: string;
+  item_id: string;
+  status: EnrichmentStatus;
+  locked_until: string | null;
+  search_query: string | null;
+  search_results_json: string | null;
+  related_sources_json: string | null;
+  synthesis_input: string | null;
+  synthesis_output_json: string | null;
+  synthesis_error: string | null;
+  model_used: string | null;
+  synthesized_summary: string | null;
+  key_facts_json: string | null;
+  sources_used_json: string | null;
+  cost_cents: number | null;
+  latency_ms: number | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+// Ставит enrichment-задачу для item'а. Если уже есть (любого статуса) —
+// no-op: один enrichment на пост, не плодим повторы.
+export async function enqueueEnrichment(itemId: string, searchQuery: string): Promise<boolean> {
+  await ensureSchema();
+  const db = getDb();
+  const id = randomUUID();
+  try {
+    const res = await db.execute({
+      sql: `INSERT INTO news_enrichments (id, item_id, status, search_query)
+            VALUES (?, ?, 'pending', ?)`,
+      args: [id, itemId, searchQuery.slice(0, 1000)],
+    });
+    return res.rowsAffected > 0;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/UNIQUE|constraint/i.test(msg)) return false;
+    throw err;
+  }
+}
+
+// Атомарно забирает один pending enrichment под лок. Аналог claimDueSource.
+export async function claimPendingEnrichment(
+  lockMinutes = 5,
+): Promise<NewsEnrichmentRow | null> {
+  await ensureSchema();
+  const db = getDb();
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const lockUntilIso = new Date(now.getTime() + lockMinutes * 60_000).toISOString();
+    const pick = await db.execute({
+      sql: `SELECT id FROM news_enrichments
+            WHERE status = 'pending'
+              AND (locked_until IS NULL OR locked_until < ?)
+            ORDER BY created_at ASC
+            LIMIT 1`,
+      args: [nowIso],
+    });
+    const id = pick.rows[0]?.id as string | undefined;
+    if (!id) return null;
+    const upd = await db.execute({
+      sql: `UPDATE news_enrichments
+            SET status = 'running', locked_until = ?
+            WHERE id = ? AND status = 'pending'
+              AND (locked_until IS NULL OR locked_until < ?)`,
+      args: [lockUntilIso, id, nowIso],
+    });
+    if (upd.rowsAffected > 0) {
+      const row = await db.execute({
+        sql: `SELECT * FROM news_enrichments WHERE id = ?`,
+        args: [id],
+      });
+      return (row.rows[0] as unknown as NewsEnrichmentRow) ?? null;
+    }
+  }
+  return null;
+}
+
+export interface EnrichmentResult {
+  status: EnrichmentStatus;
+  search_results_json: string | null;
+  related_sources_json: string | null;
+  synthesis_input: string | null;
+  synthesis_output_json: string | null;
+  synthesis_error: string | null;
+  model_used: string | null;
+  synthesized_summary: string | null;
+  key_facts: string[] | null;
+  sources_used: unknown | null;
+  cost_cents: number | null;
+  latency_ms: number | null;
+}
+
+export async function completeEnrichment(id: string, r: EnrichmentResult): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `UPDATE news_enrichments
+          SET status = ?,
+              locked_until = NULL,
+              search_results_json = ?,
+              related_sources_json = ?,
+              synthesis_input = ?,
+              synthesis_output_json = ?,
+              synthesis_error = ?,
+              model_used = ?,
+              synthesized_summary = ?,
+              key_facts_json = ?,
+              sources_used_json = ?,
+              cost_cents = ?,
+              latency_ms = ?,
+              completed_at = ?
+          WHERE id = ?`,
+    args: [
+      r.status,
+      r.search_results_json,
+      r.related_sources_json,
+      r.synthesis_input,
+      r.synthesis_output_json,
+      r.synthesis_error,
+      r.model_used,
+      r.synthesized_summary,
+      r.key_facts ? JSON.stringify(r.key_facts) : null,
+      r.sources_used ? JSON.stringify(r.sources_used) : null,
+      r.cost_cents,
+      r.latency_ms,
+      now,
+      id,
+    ],
+  });
+}
+
+export async function getEnrichmentByItem(itemId: string): Promise<NewsEnrichmentRow | null> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute({
+    sql: `SELECT * FROM news_enrichments WHERE item_id = ? ORDER BY created_at DESC LIMIT 1`,
+    args: [itemId],
+  });
+  return (res.rows[0] as unknown as NewsEnrichmentRow) ?? null;
+}
+
+// Возвращает map item_id → enrichment (только status='done') для быстрой
+// подсветки enriched-карточек в ленте.
+export async function listEnrichmentsForItems(itemIds: string[]): Promise<Map<string, NewsEnrichmentRow>> {
+  if (itemIds.length === 0) return new Map();
+  await ensureSchema();
+  const db = getDb();
+  const placeholders = itemIds.map(() => "?").join(",");
+  const res = await db.execute({
+    sql: `SELECT * FROM news_enrichments
+          WHERE status = 'done' AND item_id IN (${placeholders})`,
+    args: itemIds,
+  });
+  const map = new Map<string, NewsEnrichmentRow>();
+  for (const row of res.rows as unknown as NewsEnrichmentRow[]) {
+    map.set(row.item_id, row);
+  }
+  return map;
+}
+
 // ---------- stats для отладочной панели ----------
 
 export interface NewsStats {

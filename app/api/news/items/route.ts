@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { logServerError } from "@/lib/logger";
-import { listItems, type NewsItemVerdict } from "@/lib/news";
+import { listItems, listEnrichmentsForItems, type NewsItemVerdict } from "@/lib/news";
 import { serializeItem } from "@/lib/news-serialize";
 
 export const dynamic = "force-dynamic";
@@ -21,9 +21,13 @@ export async function GET(req: Request) {
 
   try {
     const items = await listItems({ verdict, limit });
+    const enrichments = await listEnrichmentsForItems(items.map((it) => it.id));
     return NextResponse.json({
       count: items.length,
-      items: items.map(serializeItem),
+      items: items.map((it) => ({
+        ...serializeItem(it),
+        has_enrichment: enrichments.has(it.id),
+      })),
     });
   } catch (err) {
     const error_id = await logServerError(err, "/api/news/items");

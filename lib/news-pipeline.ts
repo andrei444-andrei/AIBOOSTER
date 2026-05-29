@@ -25,6 +25,7 @@ import {
   getActiveProfile,
   seedProfileIfEmpty,
   seedSourcesIfEmpty,
+  enqueueEnrichment,
   type NewsSourceRow,
   type NewsItemRow,
 } from "./news";
@@ -372,6 +373,25 @@ async function validateOne(
       return "failed";
     }
     await applyValidation(item.id, makeUpdate(parsed, res.rawText, res.model, inputDump));
+    // Триггер enrichment: интересно, но раскрыто поверхностно → ставим в
+    // очередь для Opus-углубления. Не блокирующий — soft-fail.
+    if (parsed.verdict === "show" && parsed.value_for_user.depth === "shallow") {
+      try {
+        const query = item.title || item.body?.slice(0, 200) || "";
+        if (query.trim()) {
+          await enqueueEnrichment(item.id, query);
+          console.log(`[news/tick] enqueued enrichment for ${item.id}`);
+        }
+      } catch (err) {
+        await logError({
+          level: "warn",
+          source: "server",
+          route: "news/cron/tick:enqueue_enrichment",
+          message: err instanceof Error ? err.message : String(err),
+          meta: { item_id: item.id },
+        });
+      }
+    }
     return parsed.verdict;
   } catch (err) {
     await applyValidation(item.id, {

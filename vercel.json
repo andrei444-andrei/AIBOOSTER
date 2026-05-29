@@ -16,6 +16,10 @@
     {
       "path": "/api/news/cron/tick",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/news/enrich/tick",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
