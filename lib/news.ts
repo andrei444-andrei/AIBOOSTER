@@ -650,7 +650,7 @@ export async function enqueueEnrichment(itemId: string, searchQuery: string): Pr
     args: [itemId],
   });
   if (existing.rows.length > 0) {
-    const row = existing.rows[0] as { id: string; status: string; locked_until: string | null };
+    const row = existing.rows[0] as unknown as { id: string; status: string; locked_until: string | null };
     if (row.status === "done") return false;
     if (row.status === "failed") {
       await db.execute({
