@@ -372,6 +372,7 @@ export async function POST(req: Request, ctx: Ctx) {
         try {
           const result = await runEnsemble(
             {
+              category: decision.category,
               models: ensembleModels,
               buildMessages,
               originalUserText: content,
