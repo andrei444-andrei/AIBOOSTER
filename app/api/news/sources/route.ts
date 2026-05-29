@@ -6,11 +6,11 @@ import {
   deleteSource,
   type SourceKind,
 } from "@/lib/news";
+import { discoverFeed } from "@/lib/feed-discover";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// GET /api/news/sources — список всех источников.
 export async function GET() {
   try {
     const rows = await listSources();
@@ -21,7 +21,11 @@ export async function GET() {
   }
 }
 
-// POST /api/news/sources { kind, url, name, fetch_interval_minutes? }
+// POST /api/news/sources { url, name?, fetch_interval_minutes? }
+// Тип источника определяется автоматически:
+//   - t.me/CHANNEL → telegram
+//   - URL ведёт на RSS/Atom (через <link rel="alternate"> или /rss /feed /...) → rss
+//   - Иначе → web (HTML-скрейп заголовков с главной).
 export async function POST(req: Request) {
   let body: Record<string, unknown> = {};
   try {
@@ -29,24 +33,11 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
-  const kind = body.kind;
-  const url = body.url;
-  const name = body.name;
-  if (kind !== "telegram" && kind !== "rss") {
-    return NextResponse.json({ error: "kind must be telegram|rss" }, { status: 400 });
+  const rawUrl = typeof body.url === "string" ? body.url.trim() : "";
+  if (!rawUrl) {
+    return NextResponse.json({ error: "url required" }, { status: 400 });
   }
-  if (typeof url !== "string" || !url.startsWith("http")) {
-    return NextResponse.json({ error: "url must be a valid http(s) URL" }, { status: 400 });
-  }
-  if (kind === "telegram" && !/^https?:\/\/t\.me\//i.test(url)) {
-    return NextResponse.json(
-      { error: "telegram url must look like https://t.me/CHANNEL" },
-      { status: 400 },
-    );
-  }
-  if (typeof name !== "string" || !name.trim()) {
-    return NextResponse.json({ error: "name is required" }, { status: 400 });
-  }
+  const userName = typeof body.name === "string" ? body.name.trim() : "";
   const intervalRaw = typeof body.fetch_interval_minutes === "number" ? body.fetch_interval_minutes : 30;
   if (!Number.isFinite(intervalRaw) || intervalRaw < 5 || intervalRaw > 1440) {
     return NextResponse.json(
@@ -54,14 +45,42 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+
+  let kind: SourceKind;
+  let resolvedUrl: string;
+  let autoTitle: string | null = null;
+  try {
+    if (/t\.me\//i.test(rawUrl)) {
+      kind = "telegram";
+      resolvedUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : "https://" + rawUrl;
+    } else {
+      const d = await discoverFeed(rawUrl);
+      kind = d.kind;
+      resolvedUrl = d.feed_url;
+      autoTitle = d.title;
+    }
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error:
+          err instanceof Error
+            ? `не получилось разобрать ссылку: ${err.message}`
+            : "не получилось разобрать ссылку",
+      },
+      { status: 400 },
+    );
+  }
+
+  const finalName = (userName || autoTitle || deriveNameFromUrl(rawUrl)).slice(0, 200);
+
   try {
     const row = await createSource({
-      kind: kind as SourceKind,
-      url,
-      name: name.trim().slice(0, 200),
+      kind,
+      url: resolvedUrl,
+      name: finalName,
       fetch_interval_minutes: Math.round(intervalRaw),
     });
-    return NextResponse.json({ source: row });
+    return NextResponse.json({ source: row, kind, resolved_url: resolvedUrl });
   } catch (err) {
     const error_id = await logServerError(err, "/api/news/sources POST");
     return NextResponse.json({ error: "failed", error_id }, { status: 500 });
@@ -79,5 +98,14 @@ export async function DELETE(req: Request) {
   } catch (err) {
     const error_id = await logServerError(err, "/api/news/sources DELETE");
     return NextResponse.json({ error: "failed", error_id }, { status: 500 });
+  }
+}
+
+function deriveNameFromUrl(raw: string): string {
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw);
+    return u.hostname.replace(/^www\./, "");
+  } catch {
+    return raw.slice(0, 80);
   }
 }

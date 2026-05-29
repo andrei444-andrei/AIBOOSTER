@@ -12,13 +12,11 @@ const wrap: React.CSSProperties = {
 
 interface SourceRow {
   id: string;
-  kind: "telegram" | "rss";
+  kind: "telegram" | "rss" | "web";
   url: string;
   name: string;
   fetch_interval_minutes: number;
   last_fetched_at: string | null;
-  apify_run_id: string | null;
-  apify_run_status: string | null;
   active: number;
   created_at: string;
 }
@@ -27,7 +25,6 @@ export default function SourcesPage() {
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [kind, setKind] = useState<"telegram" | "rss">("telegram");
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [intervalMin, setIntervalMin] = useState(30);
@@ -63,16 +60,17 @@ export default function SourcesPage() {
       const r = await fetch("/api/news/sources", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind, url, name, fetch_interval_minutes: intervalMin }),
+        body: JSON.stringify({ url, name: name || undefined, fetch_interval_minutes: intervalMin }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       if (data.source) {
         setSources((cur) => [data.source as SourceRow, ...cur]);
       }
+      const kindLabel = data.kind === "telegram" ? "Telegram" : data.kind === "rss" ? "RSS" : "сайт (HTML)";
       setUrl("");
       setName("");
-      setNotice(`добавлено · «Запустить сейчас» — чтобы спарсить посты`);
+      setNotice(`добавлено как ${kindLabel} · нажми «запустить сейчас», чтобы спарсить`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -126,16 +124,6 @@ export default function SourcesPage() {
     }
   };
 
-  const selectStyle: React.CSSProperties = {
-    padding: "8px 10px",
-    background: "var(--surface)",
-    border: "1px solid var(--border-strong)",
-    borderRadius: "var(--radius-sm)",
-    color: "var(--text)",
-    fontSize: "var(--text-sm)",
-    fontFamily: "inherit",
-  };
-
   return (
     <main style={wrap}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 24, gap: 12, flexWrap: "wrap" }}>
@@ -152,23 +140,22 @@ export default function SourcesPage() {
 
       <Card padded style={{ marginBottom: 16 }}>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>Добавить источник</h2>
-        <form onSubmit={submit} style={{ display: "grid", gap: 10, gridTemplateColumns: "120px 1fr 1fr 90px auto", alignItems: "center" }}>
-          <select value={kind} onChange={(e) => setKind(e.target.value as "telegram" | "rss")} style={selectStyle} aria-label="Тип источника">
-            <option value="telegram">telegram</option>
-            <option value="rss">rss</option>
-          </select>
+        <p style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)", marginTop: 0, marginBottom: 12 }}>
+          Просто вставь ссылку — на t.me-канал, на RSS, или на главную сайта (как bloomberg.com).
+          Тип определю сам: RSS найду по `&lt;link rel=&quot;alternate&quot;&gt;`, иначе спарсю заголовки с главной.
+        </p>
+        <form onSubmit={submit} style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr 90px auto", alignItems: "center" }}>
           <Input
-            placeholder={kind === "telegram" ? "https://t.me/CHANNEL" : "https://blog.example.com/rss"}
+            placeholder="https://t.me/seeallochnaya  ·  bloomberg.com  ·  news.ycombinator.com/rss"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             required
             aria-label="URL"
           />
           <Input
-            placeholder="имя для UI"
+            placeholder="имя для UI (необязательно)"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            required
             aria-label="Имя"
           />
           <Input
@@ -179,7 +166,7 @@ export default function SourcesPage() {
             title="интервал в минутах"
             aria-label="Интервал в минутах"
           />
-          <Button type="submit" disabled={busy}>Добавить</Button>
+          <Button type="submit" disabled={busy}>{busy ? "ищу…" : "Добавить"}</Button>
         </form>
         {error && <div style={{ color: "var(--danger)", marginTop: 10, fontSize: "var(--text-sm)" }}>{error}</div>}
         {notice && <div style={{ color: "var(--success)", marginTop: 10, fontSize: "var(--text-sm)" }}>{notice}</div>}

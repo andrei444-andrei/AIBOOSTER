@@ -30,6 +30,7 @@ import {
 } from "./news";
 import { fetchTelegramChannel } from "./telegram-scrape";
 import { fetchRss, stripHtml } from "./rss";
+import { fetchWebHeadlines } from "./web-scrape";
 import { chatJson } from "./aimlapi";
 import {
   buildValidatorPrompt,
@@ -118,6 +119,9 @@ export async function runTick(workerId: string): Promise<TickStats> {
         stats.source_action = acted;
       } else if (source.kind === "rss") {
         const acted = await processRssSource(source, stats);
+        stats.source_action = acted;
+      } else if (source.kind === "web") {
+        const acted = await processWebSource(source, stats);
         stats.source_action = acted;
       } else {
         stats.warnings.push(`unknown source kind: ${source.kind}`);
@@ -240,6 +244,8 @@ export async function processSourceNow(
     action = await processTelegramSource(source, stats);
   } else if (source.kind === "rss") {
     action = await processRssSource(source, stats);
+  } else if (source.kind === "web") {
+    action = await processWebSource(source, stats);
   } else {
     throw new Error(`unknown source kind: ${source.kind}`);
   }
@@ -268,6 +274,30 @@ async function processTelegramSource(
   stats.items_inserted += inserted;
   await setSourceFetched(source.id);
   return `tg_${inserted}_of_${posts.length}`;
+}
+
+async function processWebSource(
+  source: NewsSourceRow,
+  stats: TickStats,
+): Promise<string> {
+  const items = await fetchWebHeadlines(source.url);
+  const limited = items.slice(0, MAX_ITEMS_PER_SOURCE);
+  let inserted = 0;
+  for (const it of limited) {
+    const id = await insertRawItem({
+      source_id: source.id,
+      external_id: it.external_id,
+      url: it.url || null,
+      title: it.title,
+      body: it.body,
+      published_at: it.published_at,
+      raw_meta: it.raw_meta,
+    });
+    if (id) inserted++;
+  }
+  stats.items_inserted += inserted;
+  await setSourceFetched(source.id);
+  return `web_${inserted}_of_${items.length}`;
 }
 
 async function processRssSource(

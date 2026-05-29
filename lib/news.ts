@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { getDb, ensureSchema } from "./db";
 import type { InterestProfile, InterestTopic } from "./news-prompt";
 
-export type SourceKind = "telegram" | "rss";
+export type SourceKind = "telegram" | "rss" | "web";
 
 export interface NewsSourceRow {
   id: string;
