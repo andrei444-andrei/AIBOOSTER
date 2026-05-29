@@ -637,24 +637,54 @@ export interface NewsEnrichmentRow {
   completed_at: string | null;
 }
 
-// Ставит enrichment-задачу для item'а. Если уже есть (любого статуса) —
-// no-op: один enrichment на пост, не плодим повторы.
+// Ставит enrichment-задачу для item'а. Если уже есть:
+// - status='done' → no-op, не пересоздаём (success всегда финален).
+// - status='failed' или stale 'running' (lock истёк >5 мин назад) → resetим
+//   в 'pending', чтобы воркер взял заново.
+// - status='pending' / actively 'running' → no-op (уже в работе).
 export async function enqueueEnrichment(itemId: string, searchQuery: string): Promise<boolean> {
   await ensureSchema();
   const db = getDb();
-  const id = randomUUID();
-  try {
-    const res = await db.execute({
-      sql: `INSERT INTO news_enrichments (id, item_id, status, search_query)
-            VALUES (?, ?, 'pending', ?)`,
-      args: [id, itemId, searchQuery.slice(0, 1000)],
-    });
-    return res.rowsAffected > 0;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (/UNIQUE|constraint/i.test(msg)) return false;
-    throw err;
+  const existing = await db.execute({
+    sql: `SELECT id, status, locked_until FROM news_enrichments WHERE item_id = ?`,
+    args: [itemId],
+  });
+  if (existing.rows.length > 0) {
+    const row = existing.rows[0] as { id: string; status: string; locked_until: string | null };
+    if (row.status === "done") return false;
+    if (row.status === "failed") {
+      await db.execute({
+        sql: `UPDATE news_enrichments
+              SET status = 'pending', locked_until = NULL, synthesis_error = NULL, search_query = ?
+              WHERE id = ?`,
+        args: [searchQuery.slice(0, 1000), row.id],
+      });
+      return true;
+    }
+    // running: проверяем, не зависший ли
+    if (row.status === "running") {
+      const stale =
+        !row.locked_until ||
+        Date.parse(row.locked_until) < Date.now();
+      if (stale) {
+        await db.execute({
+          sql: `UPDATE news_enrichments
+                SET status = 'pending', locked_until = NULL, search_query = ?
+                WHERE id = ?`,
+          args: [searchQuery.slice(0, 1000), row.id],
+        });
+        return true;
+      }
+    }
+    return false;
   }
+  const id = randomUUID();
+  await db.execute({
+    sql: `INSERT INTO news_enrichments (id, item_id, status, search_query)
+          VALUES (?, ?, 'pending', ?)`,
+    args: [id, itemId, searchQuery.slice(0, 1000)],
+  });
+  return true;
 }
 
 // Атомарно забирает один pending enrichment под лок. Аналог claimDueSource.
