@@ -71,7 +71,7 @@ interface NewsItem {
   validation_input: string | null;
   validation_output_json: string | null;
   validation_error: string | null;
-  has_enrichment?: boolean;
+  enrichment: Enrichment | null;
 }
 
 interface Enrichment {
@@ -309,11 +309,11 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
   const [expandedFeedback, setExpandedFeedback] = useState<null | "like" | "dislike">(null);
   const [sent, setSent] = useState(false);
   const [inflight, setInflight] = useState(false);
-  const [enrichmentOpen, setEnrichmentOpen] = useState(false);
-  const [enrichment, setEnrichment] = useState<Enrichment | null>(null);
-  const [enrichmentLoading, setEnrichmentLoading] = useState(false);
-  const [enqueuing, setEnqueuing] = useState(false);
-  const [enqueueNote, setEnqueueNote] = useState<string | null>(null);
+  const [fullOpen, setFullOpen] = useState(false);
+  const enrichment = item.enrichment;
+  const isDone = enrichment?.status === "done" && enrichment.article_body;
+  const isPending = enrichment && (enrichment.status === "pending" || enrichment.status === "running");
+  const isFailed = enrichment?.status === "failed";
 
   const handleQuick = (s: "like" | "dislike") => {
     if (sent || inflight) return;
@@ -327,63 +327,11 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
     setSent(true);
   };
 
-  const loadEnrichment = async () => {
-    if (enrichment || enrichmentLoading) {
-      setEnrichmentOpen(!enrichmentOpen);
-      return;
-    }
-    setEnrichmentLoading(true);
-    setEnrichmentOpen(true);
-    try {
-      const r = await fetch(`/api/news/enrichment?item_id=${encodeURIComponent(item.id)}`);
-      const data = await r.json();
-      setEnrichment(data.enrichment);
-    } catch {
-      // soft
-    } finally {
-      setEnrichmentLoading(false);
-    }
-  };
-
-  const triggerEnrichment = async () => {
-    if (enqueuing) return;
-    setEnqueuing(true);
-    setEnqueueNote(null);
-    try {
-      const r = await fetch("/api/news/enrichment", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ item_id: item.id }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-      setEnqueueNote(data.note || "поставлено в очередь — Opus возьмёт через несколько минут");
-    } catch (e) {
-      setEnqueueNote(`не получилось: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setEnqueuing(false);
-    }
-  };
-
   return (
     <Card padded>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 17, fontWeight: 600, flex: 1 }}>
           {item.title || "(без заголовка)"}
-          {item.has_enrichment && (
-            <span style={{
-              marginLeft: 8,
-              fontSize: 11,
-              fontWeight: 500,
-              padding: "2px 8px",
-              borderRadius: 99,
-              color: "var(--info)",
-              background: "var(--info-bg)",
-              verticalAlign: "middle",
-            }}>
-              🔍 углублено
-            </span>
-          )}
         </div>
         <div style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
           {item.source.name} · {item.relevance ?? "—"}/100
@@ -429,36 +377,54 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
       {sent && (
         <div style={{ marginTop: 10, fontSize: 12, color: "var(--success)" }}>Спасибо за фидбэк.</div>
       )}
-      <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
-        {item.has_enrichment ? (
+
+      {/* Inline статья */}
+      {isDone && enrichment && (
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+          <ArticleView enrichment={enrichment} compact={!fullOpen} />
           <button
-            onClick={loadEnrichment}
-            style={enrichToggleStyle}
+            onClick={() => setFullOpen(!fullOpen)}
+            style={{
+              ...enrichToggleStyle,
+              marginTop: 12,
+            }}
           >
-            {enrichmentOpen ? "▼ свернуть полную статью" : "▶ читать полную статью (Opus + web search)"}
+            {fullOpen ? "▲ свернуть статью" : "▼ развернуть полностью (все факты, цитаты, источники)"}
           </button>
-        ) : (
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <Button variant="secondary" size="sm" onClick={triggerEnrichment} disabled={enqueuing}>
-              {enqueuing ? "ставлю в очередь…" : "🔍 собрать полную статью"}
-            </Button>
-            {enqueueNote && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{enqueueNote}</span>}
-          </div>
-        )}
-        {enrichmentOpen && (
-          <div style={{ marginTop: 12 }}>
-            {enrichmentLoading && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Загружаю…</div>}
-            {!enrichmentLoading && enrichment && enrichment.article_body && (
-              <ArticleView enrichment={enrichment} />
-            )}
-            {!enrichmentLoading && enrichment && !enrichment.article_body && (
-              <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-                Статья не собралась: {enrichment.synthesis_error ?? `статус ${enrichment.status}`}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Прогресс — собирается */}
+      {isPending && (
+        <div
+          style={{
+            marginTop: 12,
+            paddingTop: 12,
+            borderTop: "1px solid var(--border)",
+            color: "var(--text-muted)",
+            fontSize: 13,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid var(--border)", borderTopColor: "var(--info)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+          Собираю полную статью (Perplexity + Opus + Vision)… займёт пару минут.
+        </div>
+      )}
+
+      {/* Ошибка */}
+      {isFailed && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 12 }}>
+          ⚠ Статья не собралась: {enrichment?.synthesis_error?.slice(0, 200) ?? "ошибка"}
+        </div>
+      )}
+
+      <style jsx>{`
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </Card>
   );
 }
@@ -473,7 +439,7 @@ const enrichToggleStyle: React.CSSProperties = {
   fontFamily: "inherit",
 };
 
-function ArticleView({ enrichment }: { enrichment: Enrichment }) {
+function ArticleView({ enrichment, compact = false }: { enrichment: Enrichment; compact?: boolean }) {
   // Извлекаем headline + lead из synthesis_output_json если есть.
   let headline: string | null = null;
   let lead: string | null = null;
@@ -495,6 +461,11 @@ function ArticleView({ enrichment }: { enrichment: Enrichment }) {
     // soft
   }
 
+  // В compact-режиме показываем: headline + lead + 1 картинка + key_facts (5).
+  // Полный body / цитаты / таймлайн / источники — только в expanded.
+  const imagesToShow = compact ? enrichment.images.slice(0, 1) : enrichment.images.slice(0, 4);
+  const factsToShow = compact ? enrichment.key_facts.slice(0, 5) : enrichment.key_facts;
+
   return (
     <article style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {headline && (
@@ -506,15 +477,15 @@ function ArticleView({ enrichment }: { enrichment: Enrichment }) {
         </p>
       )}
 
-      {enrichment.images.length > 0 && (
+      {imagesToShow.length > 0 && (
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: enrichment.images.length === 1 ? "1fr" : "repeat(auto-fit, minmax(220px, 1fr))",
+            gridTemplateColumns: imagesToShow.length === 1 ? "1fr" : "repeat(auto-fit, minmax(220px, 1fr))",
             gap: 8,
           }}
         >
-          {enrichment.images.slice(0, 4).map((img, i) => (
+          {imagesToShow.map((img, i) => (
             <figure key={i} style={{ margin: 0 }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -538,22 +509,24 @@ function ArticleView({ enrichment }: { enrichment: Enrichment }) {
         </div>
       )}
 
-      {enrichment.key_facts.length > 0 && (
+      {factsToShow.length > 0 && (
         <Card padded style={{ background: "var(--bg-subtle)" }}>
           <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
-            Ключевые факты
+            Ключевые факты{compact && enrichment.key_facts.length > 5 ? ` (топ-5 из ${enrichment.key_facts.length})` : ""}
           </div>
           <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14, color: "var(--text)" }}>
-            {enrichment.key_facts.map((f, i) => <li key={i} style={{ marginBottom: 4 }}>{f}</li>)}
+            {factsToShow.map((f, i) => <li key={i} style={{ marginBottom: 4 }}>{f}</li>)}
           </ul>
         </Card>
       )}
 
-      <div style={{ fontSize: 15, lineHeight: 1.7, color: "var(--text)" }} className="article-md">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{enrichment.article_body ?? ""}</ReactMarkdown>
-      </div>
+      {!compact && (
+        <div style={{ fontSize: 15, lineHeight: 1.7, color: "var(--text)" }} className="article-md">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{enrichment.article_body ?? ""}</ReactMarkdown>
+        </div>
+      )}
 
-      {quotes.length > 0 && (
+      {!compact && quotes.length > 0 && (
         <div>
           <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
             Цитаты
@@ -574,7 +547,7 @@ function ArticleView({ enrichment }: { enrichment: Enrichment }) {
         </div>
       )}
 
-      {timeline.length > 0 && (
+      {!compact && timeline.length > 0 && (
         <div>
           <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
             Хронология
@@ -598,7 +571,7 @@ function ArticleView({ enrichment }: { enrichment: Enrichment }) {
         </Card>
       )}
 
-      {enrichment.sources_used.length > 0 && (
+      {!compact && enrichment.sources_used.length > 0 && (
         <div>
           <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
             Источники ({enrichment.sources_used.length})
@@ -617,10 +590,12 @@ function ArticleView({ enrichment }: { enrichment: Enrichment }) {
         </div>
       )}
 
-      <div style={{ fontSize: 11, color: "var(--text-muted)", borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-        {enrichment.model_used} · {enrichment.cost_cents != null ? `${(enrichment.cost_cents / 100).toFixed(2)}¢` : "?"} · {enrichment.latency_ms != null ? `${(enrichment.latency_ms / 1000).toFixed(1)}s` : "?"}
-        {qualityNote && <span style={{ marginLeft: 8, fontStyle: "italic" }}>· {qualityNote}</span>}
-      </div>
+      {!compact && (
+        <div style={{ fontSize: 11, color: "var(--text-muted)", borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+          {enrichment.model_used} · {enrichment.cost_cents != null ? `${(enrichment.cost_cents / 100).toFixed(2)}¢` : "?"} · {enrichment.latency_ms != null ? `${(enrichment.latency_ms / 1000).toFixed(1)}s` : "?"}
+          {qualityNote && <span style={{ marginLeft: 8, fontStyle: "italic" }}>· {qualityNote}</span>}
+        </div>
+      )}
     </article>
   );
 }

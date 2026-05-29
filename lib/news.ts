@@ -828,8 +828,8 @@ export async function getEnrichmentByItem(itemId: string): Promise<NewsEnrichmen
   return (res.rows[0] as unknown as NewsEnrichmentRow) ?? null;
 }
 
-// Возвращает map item_id → enrichment (только status='done') для быстрой
-// подсветки enriched-карточек в ленте.
+// Возвращает map item_id → enrichment ЛЮБОГО статуса. UI смотрит на status
+// и показывает article inline / прогресс / кнопку.
 export async function listEnrichmentsForItems(itemIds: string[]): Promise<Map<string, NewsEnrichmentRow>> {
   if (itemIds.length === 0) return new Map();
   await ensureSchema();
@@ -837,7 +837,7 @@ export async function listEnrichmentsForItems(itemIds: string[]): Promise<Map<st
   const placeholders = itemIds.map(() => "?").join(",");
   const res = await db.execute({
     sql: `SELECT * FROM news_enrichments
-          WHERE status = 'done' AND item_id IN (${placeholders})`,
+          WHERE item_id IN (${placeholders})`,
     args: itemIds,
   });
   const map = new Map<string, NewsEnrichmentRow>();
@@ -845,6 +845,41 @@ export async function listEnrichmentsForItems(itemIds: string[]): Promise<Map<st
     map.set(row.item_id, row);
   }
   return map;
+}
+
+// Bulk-enqueue: для всех itemIds без записи в news_enrichments создаём
+// pending. Идемпотентно, no-op если запись уже есть (UNIQUE на item_id).
+// Возвращает кол-во реально вставленных.
+export async function bulkEnqueueEnrichmentsForItems(
+  items: Array<{ id: string; title: string | null; body: string | null }>,
+): Promise<number> {
+  if (items.length === 0) return 0;
+  await ensureSchema();
+  const db = getDb();
+  const existing = await db.execute({
+    sql: `SELECT item_id FROM news_enrichments
+          WHERE item_id IN (${items.map(() => "?").join(",")})`,
+    args: items.map((i) => i.id),
+  });
+  const have = new Set((existing.rows as unknown as Array<{ item_id: string }>).map((r) => r.item_id));
+  let inserted = 0;
+  for (const it of items) {
+    if (have.has(it.id)) continue;
+    const query = (it.title || it.body?.slice(0, 200) || "").trim();
+    if (!query) continue;
+    try {
+      await db.execute({
+        sql: `INSERT INTO news_enrichments (id, item_id, status, search_query)
+              VALUES (?, ?, 'pending', ?)`,
+        args: [randomUUID(), it.id, query.slice(0, 1000)],
+      });
+      inserted++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/UNIQUE|constraint/i.test(msg)) throw err;
+    }
+  }
+  return inserted;
 }
 
 // ---------- stats для отладочной панели ----------
