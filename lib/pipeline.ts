@@ -90,10 +90,13 @@ export interface ModeConfig {
 }
 
 export const MODE_CONFIG: Record<"thinking" | "pro", ModeConfig> = {
+  // Семантика как у ChatGPT: Thinking и Pro — одна и та же gpt-5, разница
+  // только в reasoning_effort. §4 «качество > экономия» — мы не экономим
+  // на размере модели.
   thinking: {
-    synthModel: MODELS.GPT_5_MINI,
+    synthModel: MODELS.GPT_5,
     synthReasoning: "medium",
-    synthMaxTokens: 6000,
+    synthMaxTokens: 8000,
     webModel: MODELS.PERPLEXITY_SONAR,
     webMaxTokens: 4000,
   },
