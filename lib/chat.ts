@@ -60,6 +60,21 @@ export interface RouteMeta {
   uncertain?: boolean;
   /** Сколько мс занял сам роутер (классификатор). */
   routing_latency_ms?: number;
+  // ─── Ensemble + Judge (PR #25 фронт это уже рендерит) ─────────────
+  /** Прошёл ли запрос через ансамбль 2-3 моделей + судью. */
+  ensemble?: boolean;
+  /** Полные ответы кандидатов с метаданными — для коллапсибла «что ответили модели». */
+  candidates?: Array<{
+    model: string;
+    duration_ms: number;
+    tokens?: number;
+    response: string;
+    error?: string | null;
+  }>;
+  /** Кто синтезировал финальный ответ. */
+  judge?: { model: string; duration_ms: number; tokens?: number };
+  /** Сумма от первого fetch'а кандидата до окончания стрима судьи. */
+  total_duration_ms?: number;
 }
 
 export interface ChatMessage {
