@@ -28,6 +28,7 @@ import {
 } from "./ai";
 import { getModelOption, type TaskCategory } from "./chat-client";
 import { logServerError } from "./logger";
+import { SONAR_ENGLISH_SYSTEM, translateQueryToEnglish } from "./pipeline";
 
 // ─── Конфигурация ансамблей ─────────────────────────────────────────
 
@@ -193,7 +194,9 @@ export async function runEnsemble(
   //   AIMLAPI временами 500-ит на отдельных моделях — теряем кандидата, но
   //   не валим весь ансамбль. Если упали все — выкидываем allFailed.
   const candidates = await Promise.all(
-    models.map((model) => runCandidate(model, buildMessages(model), candidateMaxTokens, signal, handlers)),
+    models.map((model) =>
+      runCandidate(model, buildMessages(model), originalUserText, candidateMaxTokens, signal, handlers),
+    ),
   );
 
   const alive = candidates.filter((c) => !c.error);
@@ -251,16 +254,28 @@ export async function runEnsemble(
 async function runCandidate(
   model: string,
   messages: Array<{ role: string; content: unknown }>,
+  originalUserText: string,
   baseMaxTokens: number,
   signal: AbortSignal | undefined,
   handlers: EnsembleHandlers,
 ): Promise<CandidateResult> {
   const t = Date.now();
   try {
+    // Sonar (Perplexity): подменяем messages на упрощённый английский запрос.
+    // Качество поиска вырастет — английский веб шире и чище. Ответ Sonar
+    // придёт по-английски, дальше судья переведёт в язык пользователя.
+    let actualMessages = messages;
+    if (model.startsWith("perplexity/")) {
+      const { english } = await translateQueryToEnglish(originalUserText, signal);
+      actualMessages = [
+        { role: "system", content: SONAR_ENGLISH_SYSTEM },
+        { role: "user", content: english },
+      ];
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const reqOpts: any = {
       model,
-      messages,
+      messages: actualMessages,
       max_tokens: baseMaxTokens,
     };
     // GPT-5 в ансамбле всегда reasoning_effort=high — §4 «качество > экономия».
@@ -268,8 +283,8 @@ async function runCandidate(
     if (model.startsWith("gpt-5")) {
       reqOpts.reasoning_effort = "high";
     }
-    // Perplexity Sonar в research-ансамбле должен возвращать картинки/цитаты —
-    // через non-stream API они приходят в самом ответе.
+    // Perplexity Sonar: запрашиваем картинки/цитаты — через non-stream API
+    // они приходят в самом ответе.
     if (model.startsWith("perplexity/")) {
       reqOpts.return_images = true;
       reqOpts.return_related_questions = false;

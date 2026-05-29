@@ -16,6 +16,7 @@ import {
   MODELS,
   chat,
   chatStream,
+  chatText,
   AIError,
   normalizeCitation,
   normalizeImage,
@@ -25,6 +26,53 @@ import {
   type WebImage,
 } from "./ai";
 import type { ChatMode } from "./chat-client";
+
+// ─── Веб-поиск ВСЕГДА на английском ──────────────────────────────
+//
+// Идея: английский веб в 10+ раз больше русского, лучше покрытие
+// техники/науки/бизнеса/международных новостей, меньше SEO-спама.
+// Поэтому переводим запрос на английский → Sonar ищет в English web →
+// синтезатор GPT-5 переводит обратно в язык пользователя (это уже в
+// правилах промта: «Язык — язык пользователя»).
+//
+// Локальные русские темы (новости Армении, цены в РФ и т.п.) могут
+// слегка пострадать, но даже там часто есть качественные English
+// источники (Reuters, Bloomberg, etc.).
+
+export function hasCyrillic(s: string): boolean {
+  return /[а-яА-ЯёЁ]/.test(s);
+}
+
+/** Если в тексте есть кириллица — переводим на английский через Flash.
+ *  Soft-fail: при ошибке вернём оригинал. */
+export async function translateQueryToEnglish(
+  text: string,
+  signal?: AbortSignal,
+): Promise<{ original: string; english: string; translated: boolean }> {
+  if (!hasCyrillic(text)) {
+    return { original: text, english: text, translated: false };
+  }
+  try {
+    const out = await chatText(
+      {
+        model: MODELS.GEMINI_FLASH,
+        system: "Translate the user's query into natural English. Keep proper nouns as-is. Output ONLY the translation — no quotes, no comments, no preamble.",
+        user: text,
+        temperature: 0,
+        max_tokens: 800,
+      },
+      { signal },
+    );
+    return { original: text, english: out.trim(), translated: true };
+  } catch {
+    return { original: text, english: text, translated: false };
+  }
+}
+
+/** System-промт для Sonar: ищи в English web, отвечай на английском. */
+export const SONAR_ENGLISH_SYSTEM =
+  "Search English-language web sources for the best, most up-to-date information. " +
+  "Respond in English. Your response will be synthesized into the user's language by another model.";
 
 // ─── Конфиг режимов ────────────────────────────────────────────────
 
@@ -104,11 +152,14 @@ async function fetchWebFacts(
   signal: AbortSignal | undefined,
 ): Promise<WebStep> {
   const t = Date.now();
+  // Переводим запрос на английский — больше и качественнее источников.
+  const { english } = await translateQueryToEnglish(webQuery, signal);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const reqOpts: any = {
     model: config.webModel,
     messages: [
-      { role: "user", content: webQuery },
+      { role: "system", content: SONAR_ENGLISH_SYSTEM },
+      { role: "user", content: english },
     ],
     max_tokens: config.webMaxTokens,
     return_images: true,
