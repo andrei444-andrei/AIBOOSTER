@@ -940,8 +940,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
               <div className={styles.welcome}>
                 <h2>С чего начнём?</h2>
                 <p style={{ color: "var(--text-secondary)", fontSize: "var(--text-md)", maxWidth: 460, margin: "0 auto" }}>
-                  Auto-роутер сам подберёт модель под задачу. Или выберите пресет —
-                  Быстрый/Ресёрч/Код/Анализ/Стратегия — в селекторе ниже.
+                  Auto сам подберёт режим под задачу. Или выберите вручную —
+                  Thinking / Pro / Judge / Картинка — в селекторе ниже.
                 </p>
               </div>
             )}
