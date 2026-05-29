@@ -74,6 +74,112 @@ export const SONAR_ENGLISH_SYSTEM =
   "Search English-language web sources for the best, most up-to-date information. " +
   "Respond in English. Your response will be synthesized into the user's language by another model.";
 
+// ─── Веб-намерение: гонять Sonar или нет ────────────────────────
+//
+// Sonar на ВСЁ подряд — стратегическая ошибка: математика «3450*453»
+// уходит в Sonar → бейсболки по номерам игроков. Чистая шумовая утечка.
+//
+// Классификатор web-intent перед Sonar. Если запрос не требует свежих
+// фактов из веба — идём в LLM напрямую, без Sonar. Это закрывает 80%
+// случаев (математика, код, перевод, общие концепции).
+//
+// Эвристика-фастпасс для очевидно-нет-веб (чистая арифметика, очень
+// короткие команды) — экономит даже Flash-вызов.
+
+const PURE_MATH_RE = /^[\d\s+\-*/.()=,×÷^]+$/;
+
+function isPureMathOrTrivial(s: string): boolean {
+  const t = s.trim();
+  if (t.length === 0) return true;
+  if (PURE_MATH_RE.test(t)) return true; // чистые цифры и операторы
+  return false;
+}
+
+/** Объединённый Flash-классификатор: одним вызовом получаем перевод
+ *  на английский И решение «нужен ли веб-поиск». Экономим лишний
+ *  параллельный вызов и обвязку. Soft-fail: при ошибке/непарсе шлём
+ *  в Sonar (т.е. сохраняем старое поведение — лучше шум, чем потеря
+ *  актуальности). */
+export interface QueryAnalysis {
+  english: string;
+  needsWeb: boolean;
+  reason: string;
+}
+
+export async function analyzeQuery(
+  text: string,
+  signal?: AbortSignal,
+): Promise<QueryAnalysis> {
+  if (isPureMathOrTrivial(text)) {
+    return { english: text, needsWeb: false, reason: "pure-math/trivial" };
+  }
+  const system = `You analyze user queries for a chat assistant. Output STRICT JSON:
+{"english": "<translated query, or same text if already English>", "needs_web": true|false, "reason": "<≤60 chars why>"}
+
+Rules for "english":
+- Translate non-English queries (Russian/etc) to natural English. Keep proper nouns as-is.
+- If already English, return the original text unchanged.
+- Output the translation, not the question itself.
+
+Rules for "needs_web": when is real-time web search USEFUL?
+- TRUE: latest news, current events, today's prices, recent releases, stock/crypto prices, weather, "what's new", specific dates (2024-2026), brand/product info that changes (iPhone X price, latest version of Y, recent benchmarks), "когда вышло", scientific papers and recent research.
+- FALSE: pure math, arithmetic, coding tasks (write/fix code, syntax, algorithm questions), general concepts/definitions (what is recursion, how does HTTP work), language translation alone, greetings, conversational chit-chat, personal opinions/advice without external facts, hypothetical scenarios, creative writing requests.
+- When borderline (could go either way) — choose FALSE. Sonar pollutes context with irrelevant matches on numbers/keywords. Better to skip web than to pollute.
+
+Strict JSON only. No code fences, no commentary.`;
+
+  try {
+    const raw = await chatText(
+      {
+        model: MODELS.GEMINI_FLASH,
+        system,
+        user: text,
+        temperature: 0,
+        max_tokens: 1000,
+      },
+      { signal },
+    );
+    const parsed = extractJson(raw);
+    if (!parsed) {
+      // Парс не удался — на всякий случай идём в Sonar (старое поведение).
+      return { english: hasCyrillic(text) ? text : text, needsWeb: true, reason: "classifier-unparseable" };
+    }
+    const english = typeof parsed.english === "string" && parsed.english.length > 0 ? parsed.english : text;
+    const needsWeb = parsed.needs_web === true;
+    const reason = typeof parsed.reason === "string" ? parsed.reason.slice(0, 80) : "";
+    return { english: english.trim(), needsWeb, reason };
+  } catch {
+    return { english: text, needsWeb: true, reason: "classifier-failed" };
+  }
+}
+
+function extractJson(s: string): Record<string, unknown> | null {
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fence?.[1] ?? s;
+  const start = candidate.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < candidate.length; i++) {
+    const ch = candidate[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(candidate.slice(start, i + 1)) as Record<string, unknown>; }
+        catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
 // ─── Конфиг режимов ────────────────────────────────────────────────
 
 export interface ModeConfig {
@@ -129,6 +235,9 @@ export interface PipelineHandlers {
   onCitations?: (citations: WebCitation[]) => void;
   /** Когда веб-шаг закончился — для UI-индикатора. */
   onWebStepDone?: (step: { model: string; duration_ms: number; tokens: number; citations_count: number; images_count: number }) => void;
+  /** Этап пайплайна для UI (searching → synthesizing → writing). Шлётся
+   *  на каждом ключевом переходе. */
+  onStage?: (stage: "searching" | "synthesizing" | "writing") => void;
 }
 
 export interface RunPipelineOptions {
@@ -137,6 +246,9 @@ export interface RunPipelineOptions {
   synthMessages: Array<{ role: string; content: unknown }>;
   /** Текст последнего вопроса пользователя — для веб-запроса к Sonar (он не любит длинный контекст). */
   webQuery: string;
+  /** Если задано — переиспользуем готовый анализ (из route-handler'а),
+   *  не дёргаем Flash повторно. */
+  precomputedAnalysis?: QueryAnalysis;
   signal?: AbortSignal;
 }
 
@@ -237,32 +349,40 @@ export async function runPipeline(
   opts: RunPipelineOptions,
   handlers: PipelineHandlers = {},
 ): Promise<RunPipelineResult> {
-  const { mode, synthMessages, webQuery, signal } = opts;
+  const { mode, synthMessages, webQuery, precomputedAnalysis, signal } = opts;
   const config = MODE_CONFIG[mode];
   const t0 = Date.now();
 
-  // ── Шаг 1: Sonar тянет факты. Если упал — пайплайн НЕ валится: синтезируем
-  //    без веб-контекста (как gpt-5 один). UI получает уведомление, что веб
-  //    недоступен.
+  // ── Web-intent: классификатор решает, гонять ли Sonar. Чистая математика,
+  //    код, общие концепции — идут сразу в LLM без Sonar. Это убирает шум
+  //    и экономит 5-15с латентности на 80% запросов.
+  const analysis = precomputedAnalysis ?? (await analyzeQuery(webQuery, signal));
+
+  // ── Шаг 1: Sonar тянет факты — только если analysis.needsWeb. Если упал —
+  //    пайплайн НЕ валится: синтезируем без веб-контекста (как gpt-5 один).
   let webStep: WebStep | null = null;
-  try {
-    webStep = await fetchWebFacts(config, webQuery, signal);
-    if (webStep.images.length > 0) handlers.onWebImages?.(webStep.images);
-    if (webStep.citations.length > 0) handlers.onCitations?.(webStep.citations);
-    handlers.onWebStepDone?.({
-      model: config.webModel,
-      duration_ms: webStep.duration_ms,
-      tokens: webStep.tokens,
-      citations_count: webStep.citations.length,
-      images_count: webStep.images.length,
-    });
-  } catch (err) {
-    // Soft-fail на веб-шаге: продолжаем без него.
-    // eslint-disable-next-line no-console
-    console.warn("[pipeline] web step failed, continuing without web context:", err instanceof Error ? err.message : String(err));
+  if (analysis.needsWeb) {
+    handlers.onStage?.("searching");
+    try {
+      webStep = await fetchWebFacts(config, analysis.english, signal);
+      if (webStep.images.length > 0) handlers.onWebImages?.(webStep.images);
+      if (webStep.citations.length > 0) handlers.onCitations?.(webStep.citations);
+      handlers.onWebStepDone?.({
+        model: config.webModel,
+        duration_ms: webStep.duration_ms,
+        tokens: webStep.tokens,
+        citations_count: webStep.citations.length,
+        images_count: webStep.images.length,
+      });
+    } catch (err) {
+      // Soft-fail на веб-шаге: продолжаем без него.
+      // eslint-disable-next-line no-console
+      console.warn("[pipeline] web step failed, continuing without web context:", err instanceof Error ? err.message : String(err));
+    }
   }
 
   // ── Шаг 2: GPT синтезирует. Web-контекст вшиваем дополнительным system-блоком.
+  handlers.onStage?.("synthesizing");
   const messages: ChatMessage[] = synthMessages as ChatMessage[];
   if (webStep && webStep.text.trim()) {
     const webBlock = buildWebContextSystem(webStep);
@@ -282,10 +402,17 @@ export async function runPipeline(
   };
 
   let synthTokens = 0;
+  let firstDeltaSent = false;
   const text = await chatStream(
     synthOpts,
     {
-      onDelta: handlers.onDelta,
+      onDelta: (t) => {
+        if (!firstDeltaSent) {
+          firstDeltaSent = true;
+          handlers.onStage?.("writing");
+        }
+        handlers.onDelta?.(t);
+      },
       onUsage: (u) => {
         synthTokens = u.completion_tokens;
         handlers.onUsage?.(u);
