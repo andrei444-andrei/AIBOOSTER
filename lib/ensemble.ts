@@ -31,14 +31,18 @@ import { logServerError } from "./logger";
 
 // ─── Конфигурация ансамблей ─────────────────────────────────────────
 
-/** Какие 2-3 модели запускать параллельно для каждой категории.
- *  null — категория не ансамблируется (quick — одна модель, image — другой пайплайн). */
+/** Какие 2-4 модели запускать параллельно для каждой категории.
+ *  null — категория не ансамблируется (quick — одна модель, image — другой пайплайн).
+ *
+ *  Sonar присутствует в КАЖДОМ ансамбле — даёт свежие данные из веба:
+ *  reasoning-модели работают по памяти и не видят актуальные цены,
+ *  релизы, метрики, новости. Sonar закрывает это слепое пятно. */
 export const ENSEMBLES: Record<TaskCategory, string[] | null> = {
   quick: null,
-  research: [MODELS.PERPLEXITY_SONAR, MODELS.CLAUDE_OPUS, MODELS.GPT_5],
-  code: [MODELS.CLAUDE_OPUS, MODELS.DEEPSEEK_R1, MODELS.GPT_5],
-  analyze: [MODELS.GEMINI_PRO, MODELS.CLAUDE_OPUS, MODELS.GPT_5],
-  strategy: [MODELS.GPT_5, MODELS.CLAUDE_OPUS, MODELS.DEEPSEEK_R1],
+  research: [MODELS.PERPLEXITY_SONAR, MODELS.CLAUDE_OPUS, MODELS.GEMINI_PRO, MODELS.GPT_5],
+  code: [MODELS.PERPLEXITY_SONAR, MODELS.CLAUDE_OPUS, MODELS.DEEPSEEK_R1, MODELS.GPT_5],
+  analyze: [MODELS.PERPLEXITY_SONAR, MODELS.GEMINI_PRO, MODELS.CLAUDE_OPUS, MODELS.GPT_5],
+  strategy: [MODELS.PERPLEXITY_SONAR, MODELS.GPT_5, MODELS.CLAUDE_OPUS, MODELS.DEEPSEEK_R1],
   image: null,
 };
 
