@@ -32,6 +32,8 @@ import {
 import { fetchTelegramChannel } from "./telegram-scrape";
 import { fetchRss, stripHtml } from "./rss";
 import { fetchWebHeadlines } from "./web-scrape";
+import { extractArticle } from "./article-extract";
+import { sonarUrlRead } from "./perplexity-search";
 import { chatJson } from "./aimlapi";
 import {
   buildValidatorPrompt,
@@ -42,16 +44,13 @@ import {
 } from "./news-prompt";
 
 const VALIDATOR_MODEL = "claude-sonnet-4-6";
-// Размер батча валидации намеренно небольшой: каждая валидация ~3-8 сек,
-// плюс фаза фетча (~5-15 сек). За один tick укладываемся в ~30-40 сек,
-// оставляя запас от лимита maxDuration=60. Сидящие pending подберёт
-// следующий тик через 10 минут.
-const VALIDATE_BATCH = 3;
+// Размер батча валидации намеренно небольшой: каждая валидация теперь
+// включает body-enrich фазу (~10-15 сек на article-extract + Sonar URL-read),
+// плюс сам Sonnet-call (~5-8 сек). За один tick укладываемся в ~50 сек,
+// 2 валидации × 25 сек = 50 сек. Остальные pending подберёт следующий тик.
+const VALIDATE_BATCH = 2;
 const MAX_ITEMS_PER_SOURCE = 20;
-// Если до конца maxDuration осталось меньше — не запускаем новую валидацию.
 const VALIDATION_TIME_BUDGET_MS = 50_000;
-// Каждый LLM-вызов сам себя режет — но и в pipeline ставим страховку,
-// чтобы один зависший вызов не уносил остальные.
 const CHAT_TIMEOUT_MS = 25_000;
 
 export interface TickStats {
@@ -328,11 +327,27 @@ async function validateOne(
   item: NewsItemRow,
   profile: InterestProfile,
 ): Promise<"show" | "borderline" | "skip" | "failed"> {
+  // BODY-ENRICH перед валидацией: для RSS-aggregator'ов (HN, HBR), web-скрейпа
+  // главной (bloomberg.com) и многих rss-only ленты — приходит только title.
+  // Без полного текста Sonnet штрафует за «поверхностно», и почти всё уходит
+  // в skip. Если body < 800 chars и есть URL — пробуем дотянуть полный текст:
+  // сначала наш HTML-scraper (быстрый), потом Sonar URL-read (~$0.005, ~10s).
+  let bodyForValidation = item.body ?? "";
+  let bodyQuality: "full" | "partial" | "headline_only" = bodyForValidation.length >= 800 ? "full" : "partial";
+  if (bodyForValidation.length < 800 && item.url) {
+    const enrichedBody = await tryEnrichBody(item.url, bodyForValidation);
+    if (enrichedBody.length > bodyForValidation.length) {
+      bodyForValidation = enrichedBody;
+      bodyQuality = enrichedBody.length >= 1500 ? "full" : "partial";
+    }
+    if (bodyForValidation.length < 200) bodyQuality = "headline_only";
+  }
   const post: PostForValidation = {
     title: item.title,
-    body: item.body ?? "",
+    body: bodyForValidation,
     url: item.url,
     published_at: item.published_at,
+    body_quality: bodyQuality,
   };
   const prompt = buildValidatorPrompt(profile, post);
   const inputDump = `SYSTEM:\n${prompt.system}\n\n---\nUSER:\n${prompt.user}`;
@@ -438,4 +453,31 @@ function makeUpdate(
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// Дотягивание body перед валидацией. Сперва пробуем дешёвый HTML-scrape,
+// потом Sonar URL-read как fallback. Soft-fail на всё — возвращаем
+// исходный body если ничего не получилось.
+async function tryEnrichBody(url: string, existing: string): Promise<string> {
+  let best = existing;
+  // Phase 1: HTML scrape с нашим article-extract (~5-10s).
+  try {
+    const art = await extractArticle(url);
+    if (art.text && art.text.length > best.length && art.text.length >= 300) {
+      best = art.text;
+      if (best.length >= 1500) return best;
+    }
+  } catch {
+    /* soft */
+  }
+  // Phase 2: Sonar URL-read — у Perplexity свой crawler с paywall-данными.
+  try {
+    const read = await sonarUrlRead(url, { timeoutMs: 10_000 });
+    if (read.text && read.text.length > best.length) {
+      best = read.text;
+    }
+  } catch {
+    /* soft */
+  }
+  return best;
 }
