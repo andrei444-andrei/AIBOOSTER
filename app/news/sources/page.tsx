@@ -30,6 +30,8 @@ export default function SourcesPage() {
   const [intervalMin, setIntervalMin] = useState(30);
   const [busy, setBusy] = useState(false);
   const [fetchingId, setFetchingId] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestResult, setSuggestResult] = useState<{ added: number; skipped: number; topics?: string[] } | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -97,6 +99,32 @@ export default function SourcesPage() {
     }
   };
 
+  const autoSuggest = async () => {
+    if (suggesting) return;
+    setSuggesting(true);
+    setSuggestResult(null);
+    setError(null);
+    setNotice(null);
+    try {
+      const r = await fetch("/api/news/sources/auto-suggest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ per_topic: 2, max_add: 30 }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      const added: Array<{ url: string; name: string; topic: string }> = data.added ?? [];
+      const skipped: unknown[] = data.skipped ?? [];
+      const topics = [...new Set(added.map((a) => a.topic))];
+      setSuggestResult({ added: added.length, skipped: skipped.length, topics });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
   const fetchNow = async (id: string) => {
     if (fetchingId) return;
     setFetchingId(id);
@@ -137,6 +165,30 @@ export default function SourcesPage() {
           ← к ленте
         </Link>
       </header>
+
+      <Card padded style={{ marginBottom: 16, background: "var(--bg-subtle)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <h2 style={{ marginTop: 0, marginBottom: 4, fontSize: 16 }}>🪄 Наполнить под профиль</h2>
+            <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>
+              Perplexity подберёт авторитетные источники под темы из <Link href="/news/profile" style={{ color: "var(--info)" }}>профиля</Link>, я авто-определю их тип (RSS / Telegram / web) и добавлю в список. Дубликаты не повторяются.
+            </p>
+          </div>
+          <Button onClick={autoSuggest} disabled={suggesting}>
+            {suggesting ? "ищу источники…" : "🪄 наполнить"}
+          </Button>
+        </div>
+        {suggestResult && (
+          <div style={{ marginTop: 12, fontSize: "var(--text-sm)", color: "var(--text)" }}>
+            <b>Добавлено {suggestResult.added}</b>{suggestResult.skipped > 0 && <span style={{ color: "var(--text-muted)" }}> · пропущено {suggestResult.skipped} (дубликаты/не открылись)</span>}
+            {suggestResult.topics && suggestResult.topics.length > 0 && (
+              <div style={{ marginTop: 4, color: "var(--text-muted)", fontSize: 12 }}>
+                по темам: {suggestResult.topics.join(", ")}
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
 
       <Card padded style={{ marginBottom: 16 }}>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>Добавить источник</h2>
