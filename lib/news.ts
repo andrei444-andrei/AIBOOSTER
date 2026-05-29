@@ -622,6 +622,8 @@ export interface NewsEnrichmentRow {
   search_query: string | null;
   search_results_json: string | null;
   related_sources_json: string | null;
+  original_source_url: string | null;
+  images_json: string | null;
   synthesis_input: string | null;
   synthesis_output_json: string | null;
   synthesis_error: string | null;
@@ -697,6 +699,8 @@ export interface EnrichmentResult {
   status: EnrichmentStatus;
   search_results_json: string | null;
   related_sources_json: string | null;
+  original_source_url: string | null;
+  images_json: string | null;
   synthesis_input: string | null;
   synthesis_output_json: string | null;
   synthesis_error: string | null;
@@ -718,6 +722,8 @@ export async function completeEnrichment(id: string, r: EnrichmentResult): Promi
               locked_until = NULL,
               search_results_json = ?,
               related_sources_json = ?,
+              original_source_url = ?,
+              images_json = ?,
               synthesis_input = ?,
               synthesis_output_json = ?,
               synthesis_error = ?,
@@ -733,6 +739,8 @@ export async function completeEnrichment(id: string, r: EnrichmentResult): Promi
       r.status,
       r.search_results_json,
       r.related_sources_json,
+      r.original_source_url,
+      r.images_json,
       r.synthesis_input,
       r.synthesis_output_json,
       r.synthesis_error,

@@ -57,6 +57,9 @@ const COLUMN_MIGRATIONS: ColumnAddition[] = [
   // массива [{start_sec, title}] для навигации по аудио.
   { table: "video_translation_jobs", column: "summary", ddl: "summary TEXT" },
   { table: "video_translation_jobs", column: "chapters", ddl: "chapters TEXT" },
+  // News enrichments v1.5: первоисточник, картинки, расширенный синтез.
+  { table: "news_enrichments", column: "original_source_url", ddl: "original_source_url TEXT" },
+  { table: "news_enrichments", column: "images_json", ddl: "images_json TEXT" },
 ];
 
 async function hasColumn(table: string, column: string): Promise<boolean> {

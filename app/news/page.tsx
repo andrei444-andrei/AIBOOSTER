@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Card, Button } from "@/components/ui";
 
 const wrap: React.CSSProperties = {
@@ -75,9 +77,12 @@ interface NewsItem {
 interface Enrichment {
   id: string;
   status: "pending" | "running" | "done" | "failed";
-  summary: string | null;
+  article_body: string | null;
   key_facts: string[];
-  sources_used: Array<{ url: string; title: string; why_relevant: string }>;
+  sources_used: Array<{ url: string; title: string; role?: string; why_relevant: string }>;
+  images: Array<{ url: string; caption: string; source_url: string }>;
+  original_source_url: string | null;
+  synthesis_output_json: string | null;
   model_used: string | null;
   cost_cents: number | null;
   latency_ms: number | null;
@@ -307,6 +312,8 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
   const [enrichmentOpen, setEnrichmentOpen] = useState(false);
   const [enrichment, setEnrichment] = useState<Enrichment | null>(null);
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
+  const [enqueuing, setEnqueuing] = useState(false);
+  const [enqueueNote, setEnqueueNote] = useState<string | null>(null);
 
   const handleQuick = (s: "like" | "dislike") => {
     if (sent || inflight) return;
@@ -332,9 +339,29 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
       const data = await r.json();
       setEnrichment(data.enrichment);
     } catch {
-      // soft: бейдж не появится без has_enrichment, но если кликнули - сообщение об ошибке необязательно
+      // soft
     } finally {
       setEnrichmentLoading(false);
+    }
+  };
+
+  const triggerEnrichment = async () => {
+    if (enqueuing) return;
+    setEnqueuing(true);
+    setEnqueueNote(null);
+    try {
+      const r = await fetch("/api/news/enrichment", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ item_id: item.id }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      setEnqueueNote(data.note || "поставлено в очередь — Opus возьмёт через несколько минут");
+    } catch (e) {
+      setEnqueueNote(`не получилось: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setEnqueuing(false);
     }
   };
 
@@ -402,72 +429,199 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
       {sent && (
         <div style={{ marginTop: 10, fontSize: 12, color: "var(--success)" }}>Спасибо за фидбэк.</div>
       )}
-      {item.has_enrichment && (
-        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+      <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+        {item.has_enrichment ? (
           <button
             onClick={loadEnrichment}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--info)",
-              cursor: "pointer",
-              fontSize: "var(--text-sm)",
-              padding: 0,
-              fontFamily: "inherit",
-            }}
+            style={enrichToggleStyle}
           >
-            {enrichmentOpen ? "▼ свернуть углубление" : "▶ показать углубление (Opus + web search)"}
+            {enrichmentOpen ? "▼ свернуть полную статью" : "▶ читать полную статью (Opus + web search)"}
           </button>
-          {enrichmentOpen && (
-            <div style={{ marginTop: 10 }}>
-              {enrichmentLoading && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Загружаю…</div>}
-              {!enrichmentLoading && enrichment && enrichment.summary && (
-                <>
-                  <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "var(--text)" }}>
-                    {enrichment.summary}
-                  </div>
-                  {enrichment.key_facts.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
-                        Ключевые факты
-                      </div>
-                      <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "var(--text-secondary)" }}>
-                        {enrichment.key_facts.map((f, i) => <li key={i} style={{ marginBottom: 4 }}>{f}</li>)}
-                      </ul>
-                    </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <Button variant="secondary" size="sm" onClick={triggerEnrichment} disabled={enqueuing}>
+              {enqueuing ? "ставлю в очередь…" : "🔍 собрать полную статью"}
+            </Button>
+            {enqueueNote && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{enqueueNote}</span>}
+          </div>
+        )}
+        {enrichmentOpen && (
+          <div style={{ marginTop: 12 }}>
+            {enrichmentLoading && <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Загружаю…</div>}
+            {!enrichmentLoading && enrichment && enrichment.article_body && (
+              <ArticleView enrichment={enrichment} />
+            )}
+            {!enrichmentLoading && enrichment && !enrichment.article_body && (
+              <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                Статья не собралась: {enrichment.synthesis_error ?? `статус ${enrichment.status}`}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+const enrichToggleStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "var(--info)",
+  cursor: "pointer",
+  fontSize: "var(--text-sm)",
+  padding: 0,
+  fontFamily: "inherit",
+};
+
+function ArticleView({ enrichment }: { enrichment: Enrichment }) {
+  // Извлекаем headline + lead из synthesis_output_json если есть.
+  let headline: string | null = null;
+  let lead: string | null = null;
+  let implications: string | null = null;
+  let quotes: Array<{ text: string; attribution: string; source_url?: string }> = [];
+  let timeline: Array<{ date: string; event: string }> = [];
+  let qualityNote: string | null = null;
+  try {
+    if (enrichment.synthesis_output_json) {
+      const j = JSON.parse(enrichment.synthesis_output_json);
+      headline = typeof j.headline === "string" ? j.headline : null;
+      lead = typeof j.lead === "string" ? j.lead : null;
+      implications = typeof j.implications === "string" ? j.implications : null;
+      qualityNote = typeof j.quality_note === "string" ? j.quality_note : null;
+      if (Array.isArray(j.quotes)) quotes = j.quotes;
+      if (Array.isArray(j.timeline)) timeline = j.timeline;
+    }
+  } catch {
+    // soft
+  }
+
+  return (
+    <article style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {headline && (
+        <h2 style={{ margin: 0, fontSize: 22, lineHeight: 1.25, color: "var(--text)" }}>{headline}</h2>
+      )}
+      {lead && (
+        <p style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 500, lineHeight: 1.5, color: "var(--text)" }}>
+          {lead}
+        </p>
+      )}
+
+      {enrichment.images.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: enrichment.images.length === 1 ? "1fr" : "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 8,
+          }}
+        >
+          {enrichment.images.slice(0, 4).map((img, i) => (
+            <figure key={i} style={{ margin: 0 }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={img.url}
+                alt={img.caption || "иллюстрация"}
+                style={{ width: "100%", height: "auto", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+              {(img.caption || img.source_url) && (
+                <figcaption style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+                  {img.caption}
+                  {img.source_url && (
+                    <a href={img.source_url} target="_blank" rel="noreferrer" style={{ color: "var(--text-muted)", marginLeft: 4 }}>
+                      · источник
+                    </a>
                   )}
-                  {enrichment.sources_used.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
-                        Источники ({enrichment.sources_used.length})
-                      </div>
-                      <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
-                        {enrichment.sources_used.map((s, i) => (
-                          <li key={i} style={{ marginBottom: 6 }}>
-                            <a href={s.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", borderBottom: "1px solid var(--border)" }}>
-                              {s.title || s.url}
-                            </a>
-                            {s.why_relevant && <span style={{ color: "var(--text-muted)", marginLeft: 6 }}>— {s.why_relevant}</span>}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-muted)" }}>
-                    {enrichment.model_used} · {enrichment.cost_cents != null ? `${(enrichment.cost_cents / 100).toFixed(2)}¢` : "?"} · {enrichment.latency_ms != null ? `${(enrichment.latency_ms / 1000).toFixed(1)}s` : "?"}
-                  </div>
-                </>
+                </figcaption>
               )}
-              {!enrichmentLoading && enrichment && !enrichment.summary && (
-                <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-                  Углубление не удалось: {enrichment.synthesis_error ?? "неизвестная ошибка"}
-                </div>
-              )}
-            </div>
-          )}
+            </figure>
+          ))}
         </div>
       )}
-    </Card>
+
+      {enrichment.key_facts.length > 0 && (
+        <Card padded style={{ background: "var(--bg-subtle)" }}>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+            Ключевые факты
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14, color: "var(--text)" }}>
+            {enrichment.key_facts.map((f, i) => <li key={i} style={{ marginBottom: 4 }}>{f}</li>)}
+          </ul>
+        </Card>
+      )}
+
+      <div style={{ fontSize: 15, lineHeight: 1.7, color: "var(--text)" }} className="article-md">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{enrichment.article_body ?? ""}</ReactMarkdown>
+      </div>
+
+      {quotes.length > 0 && (
+        <div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+            Цитаты
+          </div>
+          {quotes.map((q, i) => (
+            <blockquote key={i} style={{ margin: "0 0 10px 0", paddingLeft: 12, borderLeft: "3px solid var(--info)", fontSize: 14, color: "var(--text-secondary)" }}>
+              «{q.text}»
+              {q.attribution && (
+                <footer style={{ marginTop: 4, fontSize: 12, color: "var(--text-muted)" }}>
+                  — {q.attribution}
+                  {q.source_url && (
+                    <a href={q.source_url} target="_blank" rel="noreferrer" style={{ marginLeft: 6, color: "var(--text-muted)" }}>↗</a>
+                  )}
+                </footer>
+              )}
+            </blockquote>
+          ))}
+        </div>
+      )}
+
+      {timeline.length > 0 && (
+        <div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+            Хронология
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "var(--text-secondary)" }}>
+            {timeline.map((t, i) => (
+              <li key={i} style={{ marginBottom: 4 }}>
+                <b style={{ color: "var(--text)" }}>{t.date}</b> — {t.event}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {implications && (
+        <Card padded style={{ borderLeft: "3px solid var(--info)", background: "var(--info-bg)" }}>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+            Что это значит для вас
+          </div>
+          <div style={{ fontSize: 14, lineHeight: 1.6, color: "var(--text)", whiteSpace: "pre-wrap" }}>{implications}</div>
+        </Card>
+      )}
+
+      {enrichment.sources_used.length > 0 && (
+        <div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+            Источники ({enrichment.sources_used.length})
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
+            {enrichment.sources_used.map((s, i) => (
+              <li key={i} style={{ marginBottom: 6 }}>
+                {s.role === "original" && <span style={{ fontSize: 10, color: "var(--success)", marginRight: 6 }}>★ ПЕРВОИСТОЧНИК</span>}
+                <a href={s.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", borderBottom: "1px solid var(--border)" }}>
+                  {s.title || s.url}
+                </a>
+                {s.why_relevant && <span style={{ color: "var(--text-muted)", marginLeft: 6 }}>— {s.why_relevant}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, color: "var(--text-muted)", borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+        {enrichment.model_used} · {enrichment.cost_cents != null ? `${(enrichment.cost_cents / 100).toFixed(2)}¢` : "?"} · {enrichment.latency_ms != null ? `${(enrichment.latency_ms / 1000).toFixed(1)}s` : "?"}
+        {qualityNote && <span style={{ marginLeft: 8, fontStyle: "italic" }}>· {qualityNote}</span>}
+      </div>
+    </article>
   );
 }
 
