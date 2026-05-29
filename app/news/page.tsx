@@ -167,6 +167,37 @@ export default function NewsPage() {
     else void loadDebug();
   }, [tab, loadFeed, loadSkipped, loadDebug]);
 
+  // Auto-poll каждые 25 сек на feed: pending/running enrichments сами
+  // подтянутся в done без F5. Заодно дёргаем enrich-tick fire-and-forget
+  // если есть pending — это разгоняет очередь, не дожидаясь 5-минутного
+  // cron-таймера Vercel.
+  useEffect(() => {
+    if (tab !== "feed") return;
+    const id = setInterval(() => {
+      const hasPending = items.some(
+        (it) => it.enrichment && (it.enrichment.status === "pending" || it.enrichment.status === "running"),
+      );
+      void loadFeed();
+      if (hasPending) {
+        // fire-and-forget
+        void fetch("/api/news/enrich/tick").catch(() => {});
+      }
+    }, 25_000);
+    return () => clearInterval(id);
+  }, [tab, items, loadFeed]);
+
+  // При первой загрузке feed: если есть pending — сразу дёргаем enrich-tick.
+  useEffect(() => {
+    if (tab !== "feed" || items.length === 0) return;
+    const hasPending = items.some(
+      (it) => it.enrichment && (it.enrichment.status === "pending" || it.enrichment.status === "running"),
+    );
+    if (hasPending) {
+      void fetch("/api/news/enrich/tick").catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.length]);
+
   const sendFeedback = async (item_id: string, signal: "like" | "dislike", reason?: string) => {
     try {
       await fetch("/api/news/feedback", {
