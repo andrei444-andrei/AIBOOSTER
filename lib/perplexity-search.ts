@@ -20,7 +20,7 @@ export interface PerplexitySearchResult {
 
 export async function perplexitySearch(
   query: string,
-  opts: { timeoutMs?: number; model?: string } = {},
+  opts: { timeoutMs?: number; model?: string; recencyFilter?: "day" | "week" | "month" | "year" } = {},
 ): Promise<PerplexitySearchResult> {
   const key = process.env.AIMLAPI_KEY;
   if (!key) throw new Error("AIMLAPI_KEY is not set");
@@ -48,13 +48,14 @@ export async function perplexitySearch(
           {
             role: "system",
             content:
-              "You are a news researcher. Given a topic or headline, find recent news " +
-              "articles (last 7 days, English or Russian) that report or analyze the same " +
-              "event. Briefly summarize what you found and ALWAYS cite each source.",
+              "You are a news researcher. Search the ENGLISH-language web for the most authoritative and recent " +
+              "primary sources covering the user's topic. Always prefer primary outlets (Axios, Reuters, " +
+              "Bloomberg, WSJ, AP, FT, NYT, official press releases). Briefly summarize what you found in " +
+              "English and ALWAYS cite each source with a URL. Note publication dates when available.",
           },
           { role: "user", content: query },
         ],
-        // Sonar возвращает свои citations автоматически, response_format не нужен.
+        ...(opts.recencyFilter ? { search_recency_filter: opts.recencyFilter } : {}),
       }),
     });
   } catch (err) {

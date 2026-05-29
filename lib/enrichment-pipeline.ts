@@ -23,6 +23,7 @@ import {
 import { perplexitySearch } from "./perplexity-search";
 import { extractArticle } from "./article-extract";
 import { chatJson } from "./aimlapi";
+import { ensureEnglish } from "./translate-en";
 import {
   buildEnrichmentPrompt,
   validateEnrichmentOutput,
@@ -106,9 +107,15 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
   const inlineUrls = extractHttpUrls(item.body ?? "");
   let originalSourceUrl: string | null = inlineUrls.find((u) => !isAggregatorUrl(u)) ?? null;
 
-  // ── Шаг B: Perplexity search ─────────────────────────────────────────
-  const searchQuery = buildSearchQuery(title, originalSourceUrl);
-  const search = await perplexitySearch(searchQuery, { timeoutMs: PERPLEXITY_TIMEOUT_MS });
+  // ── Шаг B: Perplexity search (на ЭНГЛИЙСКОМ — там в 10× больше качественного контента) ──
+  const rawQuery = buildSearchQuery(title, originalSourceUrl);
+  const searchQuery = await ensureEnglish(rawQuery);
+  // Recency filter: «month» — компромисс между актуальностью и охватом.
+  // «week» иногда отсекает важные подтверждения, опубликованные позже исходного поста.
+  const search = await perplexitySearch(searchQuery, {
+    timeoutMs: PERPLEXITY_TIMEOUT_MS,
+    recencyFilter: "month",
+  });
 
   // ── Шаг C: список URL'ов для парсинга ────────────────────────────────
   // Дедуп по host (не берём 3 страницы одного сайта). Первоисточник
@@ -129,15 +136,14 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
   if (originalSourceUrl) push(originalSourceUrl);
   for (const u of search.citations) push(u);
 
-  // Шаг D: parallel fetch (с soft-fail).
+  // Шаг D: parallel fetch (с soft-fail). Источник остаётся в наборе даже
+  // если fetch упал — Opus имеет ответ Perplexity, может сослаться по URL.
   const fetched: RelatedSource[] = [];
   const collectedImages = new Set<string>();
   await Promise.all(
     ordered.slice(0, MAX_RELATED_SOURCES + 2).map(async (url) => {
       try {
         const art = await extractArticle(url);
-        if (!art.text || art.text.length < 200) return;
-        // первое og:image и до 2 крупных img
         const heroImage = art.image_urls[0] ?? null;
         for (const img of art.image_urls.slice(0, 3)) {
           if (looksLikeRealImage(img)) collectedImages.add(img);
@@ -145,9 +151,10 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
         fetched.push({
           url: art.url,
           title: art.title,
-          text: art.text,
+          text: art.text.length >= 200 ? art.text : "",
           was_original: originalSourceUrl === url,
           hero_image: heroImage,
+          published_at: art.published_at,
         });
       } catch (err) {
         await logError({
@@ -157,20 +164,29 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
           message: err instanceof Error ? err.message : String(err),
           meta: { url, enrichmentId: job.id },
         });
+        // Не выкидываем источник: остаётся URL + пустой текст,
+        // Opus возьмёт информацию из Perplexity-сниппета.
+        fetched.push({
+          url,
+          title: null,
+          text: "",
+          was_original: originalSourceUrl === url,
+          hero_image: null,
+          published_at: null,
+        });
       }
     }),
   );
 
-  // Если первоисточник не дотянулся, но был угадан — пометим хотя бы URL,
-  // чтобы Opus знал и сослался.
   const related = fetched.slice(0, MAX_RELATED_SOURCES);
   if (originalSourceUrl && !related.some((r) => r.url === originalSourceUrl)) {
     related.unshift({
       url: originalSourceUrl,
       title: null,
-      text: "(полный текст не удалось дотянуть — возможно paywall или blocking)",
+      text: "",
       was_original: true,
       hero_image: null,
+      published_at: null,
     });
   }
 
@@ -181,6 +197,7 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     url: item.url,
     source_name: item.source_name,
     matched_topics: parseTopics(item.matched_topics_json),
+    published_at: item.published_at,
   };
   const imageList = [...collectedImages];
   const prompt = buildEnrichmentPrompt(profile, originalPost, search.answer, related, imageList);

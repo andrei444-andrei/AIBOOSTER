@@ -23,6 +23,9 @@ export interface ExtractedArticle {
   text: string;
   // Если из meta или og:image — пригодится в фазе 2 для vision.
   image_urls: string[];
+  // Дата публикации статьи (ISO). Нужна для проверки актуальности
+  // при синтезе: старая статья не должна «опровергать» свежий пост.
+  published_at: string | null;
 }
 
 export async function extractArticle(url: string): Promise<ExtractedArticle> {
@@ -60,6 +63,7 @@ export async function extractArticle(url: string): Promise<ExtractedArticle> {
 export function parseArticle(html: string, baseUrl: string): ExtractedArticle {
   const title = pickMeta(html, "og:title") || pickTitle(html);
   const image_urls = collectImages(html, baseUrl);
+  const published_at = extractPublishedAt(html);
 
   // Удаляем не-контентные секции до текстового извлечения.
   const cleaned = html
@@ -96,7 +100,37 @@ export function parseArticle(html: string, baseUrl: string): ExtractedArticle {
 
   const text = (meaningful.length > 5 ? meaningful : lines).join("\n\n").slice(0, MAX_TEXT_CHARS);
 
-  return { url: baseUrl, title, text, image_urls };
+  return { url: baseUrl, title, text, image_urls, published_at };
+}
+
+// Дата публикации: ищем самые надёжные источники в порядке убывания
+// доверия: og:article:published_time / article:published_time, JSON-LD
+// schema datePublished, meta name=date / pubdate, <time datetime=...>.
+function extractPublishedAt(html: string): string | null {
+  const candidates: (string | null)[] = [
+    pickMeta(html, "article:published_time"),
+    pickMeta(html, "og:article:published_time"),
+    pickMeta(html, "datePublished"),
+    pickMeta(html, "date"),
+    pickMeta(html, "pubdate"),
+    pickMeta(html, "DC.date.issued"),
+  ];
+  // JSON-LD "datePublished"
+  const jsonLd = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (jsonLd) {
+    const m = jsonLd[1].match(/"datePublished"\s*:\s*"([^"]+)"/);
+    if (m) candidates.push(m[1]);
+  }
+  // <time datetime="...">
+  const tm = html.match(/<time[^>]*datetime=["']([^"']+)["']/i);
+  if (tm) candidates.push(tm[1]);
+
+  for (const c of candidates) {
+    if (!c) continue;
+    const t = Date.parse(c);
+    if (!Number.isNaN(t)) return new Date(t).toISOString();
+  }
+  return null;
 }
 
 function matchFirst(s: string, re: RegExp): string | null {
