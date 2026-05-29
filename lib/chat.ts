@@ -141,11 +141,23 @@ export async function createSession(
   // model — стартовое значение для UI (что писать в сайдбаре до первого ответа).
   const model = modelOverride ?? DEFAULT_MODEL;
   const title = opts.title?.slice(0, 200) ?? "Новый чат";
-  await db.execute({
-    sql: `INSERT INTO chat_sessions (id, uid, title, model, mode, model_override, category_override, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    args: [id, uid, title, model, mode, modelOverride, categoryOverride, now, now],
-  });
+  // Динамический INSERT по mode: на старых БД колонка mode была TEXT NOT NULL
+  // DEFAULT 'normal' (v1). Если шлём null в эту колонку — constraint violation
+  // → 500. Если опускаем колонку из INSERT — default подхватит. На новых БД
+  // (mode TEXT nullable) — оба варианта работают.
+  if (mode !== null) {
+    await db.execute({
+      sql: `INSERT INTO chat_sessions (id, uid, title, model, mode, model_override, category_override, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [id, uid, title, model, mode, modelOverride, categoryOverride, now, now],
+    });
+  } else {
+    await db.execute({
+      sql: `INSERT INTO chat_sessions (id, uid, title, model, model_override, category_override, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [id, uid, title, model, modelOverride, categoryOverride, now, now],
+    });
+  }
   return {
     id,
     uid,
@@ -161,6 +173,16 @@ export async function createSession(
 
 const SESSION_COLS = "id, uid, title, model, mode, model_override, category_override, created_at, updated_at";
 
+/** Нормализация прочитанной session: на старых БД mode='normal' (legacy v1),
+ *  для нового UI это эквивалент null (Auto). isChatMode фильтрует. */
+function normalizeSessionRow(r: unknown): ChatSession {
+  const row = r as ChatSession & { mode: string | null };
+  return {
+    ...row,
+    mode: row.mode && isChatMode(row.mode) ? row.mode : null,
+  };
+}
+
 export async function listSessions(uid: string, limit = 100): Promise<ChatSession[]> {
   await ensureSchema();
   const db = getDb();
@@ -170,7 +192,7 @@ export async function listSessions(uid: string, limit = 100): Promise<ChatSessio
           ORDER BY updated_at DESC LIMIT ?`,
     args: [uid, limit],
   });
-  return res.rows as unknown as ChatSession[];
+  return (res.rows as unknown as ChatSession[]).map(normalizeSessionRow);
 }
 
 export async function getSession(id: string, uid: string): Promise<ChatSession | null> {
@@ -181,7 +203,8 @@ export async function getSession(id: string, uid: string): Promise<ChatSession |
           FROM chat_sessions WHERE id = ? AND uid = ?`,
     args: [id, uid],
   });
-  return (res.rows[0] as unknown as ChatSession) ?? null;
+  const row = res.rows[0] as unknown as ChatSession | undefined;
+  return row ? normalizeSessionRow(row) : null;
 }
 
 export async function deleteSession(id: string, uid: string): Promise<boolean> {
