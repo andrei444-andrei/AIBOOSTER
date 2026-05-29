@@ -17,9 +17,12 @@ export interface SourceSuggestion {
   why: string;
 }
 
-const SUGGEST_MODEL = "perplexity/sonar";
+// Claude Sonnet надёжнее в JSON-mode чем Sonar. Знает большинство
+// устоявшихся отраслевых источников (это OK — для базовых рекомендаций
+// нам не нужен realtime web-search).
+const SUGGEST_MODEL = "claude-sonnet-4-6";
 
-// Один запрос на ВЕСЬ профиль. Sonar выдаёт JSON-массив с 2-4 источниками
+// Один запрос на ВЕСЬ профиль. Возвращает JSON-массив с 2-4 источниками
 // на тему. Если что-то не парсится — soft-fail, возвращаем пусто.
 export async function suggestSourcesForProfile(
   profile: InterestProfile,
@@ -36,8 +39,10 @@ export async function suggestSourcesForProfile(
     })
     .join("\n");
 
-  // Sonar лучше отвечает на английском, поэтому конвертируем темы.
-  const englishTopics = await ensureEnglish(topicsBlock);
+  // Шлём темы на исходном языке — Sonnet многоязычен и Russian/English
+  // источники не путает.
+  const englishTopics = topicsBlock;
+  void ensureEnglish; // оставлен импортом на случай возврата к Sonar
 
   const system =
     `You are a news-feed curator. For a personal reader with the topics below, suggest the most ` +
@@ -57,27 +62,37 @@ export async function suggestSourcesForProfile(
   const user = `TOPICS:\n${englishTopics}\n\nSuggest ${perTopic} sources per topic. Output JSON only.`;
 
   try {
-    const { parsed } = await chatJson<{ suggestions?: unknown }>({
+    const { parsed, rawText } = await chatJson<{ suggestions?: unknown }>({
       model: SUGGEST_MODEL,
       system,
       user,
-      temperature: 0.2,
+      temperature: 0.3,
       timeoutMs: 30_000,
     });
-    return normalizeSuggestions(parsed, active);
+    const out = normalizeSuggestions(parsed, active);
+    if (out.length === 0) {
+      // На отладку: пишу в console, чтобы было видно в Vercel logs.
+      console.log(`[source-suggest] empty result. raw preview: ${rawText.slice(0, 400)}`);
+    }
+    return out;
   } catch (err) {
-    // Если sonar упал — пробуем fallback с GPT-роутером (бесплатно: ничего).
-    // На MVP уровне просто возвращаем пусто.
-    void err;
+    console.log(`[source-suggest] error: ${err instanceof Error ? err.message : String(err)}`);
     return [];
   }
 }
 
 function normalizeSuggestions(raw: unknown, topics: InterestTopic[]): SourceSuggestion[] {
-  // Иногда sonar заворачивает в { suggestions: [...] }, иногда сразу массив.
+  // Модели возвращают по-разному: чистый массив, { suggestions }, { sources },
+  // { results }, { items } — поддерживаем все варианты.
   let arr: unknown = raw;
-  if (raw && typeof raw === "object" && Array.isArray((raw as { suggestions?: unknown[] }).suggestions)) {
-    arr = (raw as { suggestions: unknown[] }).suggestions;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const r = raw as Record<string, unknown>;
+    for (const key of ["suggestions", "sources", "results", "items", "data"]) {
+      if (Array.isArray(r[key])) {
+        arr = r[key];
+        break;
+      }
+    }
   } else if (typeof raw === "string") {
     arr = extractJsonObject(raw);
   }
