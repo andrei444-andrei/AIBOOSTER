@@ -27,7 +27,9 @@ export async function perplexitySearch(
 
   const started = Date.now();
   const timeoutMs = opts.timeoutMs ?? 25_000;
-  const model = opts.model ?? "perplexity/sonar-pro";
+  // sonar (без -pro): быстрее (~5-10s) и достаточно для нашего use-case.
+  // sonar-pro системно бьёт 25-35s, что не помещается в наш бюджет.
+  const model = opts.model ?? "perplexity/sonar";
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
