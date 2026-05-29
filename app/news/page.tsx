@@ -5,51 +5,42 @@ import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Card, Button } from "@/components/ui";
+import s from "./news-card.module.css";
 
 const wrap: React.CSSProperties = {
-  maxWidth: 1000,
+  maxWidth: 760,
   margin: "0 auto",
-  padding: "48px 32px 64px",
+  padding: "32px 24px 80px",
 };
 
 const tabBtn = (active: boolean): React.CSSProperties => ({
-  padding: "8px 14px",
-  background: active ? "var(--bg-subtle)" : "transparent",
-  border: "1px solid var(--border)",
-  borderRight: "none",
-  color: active ? "var(--text)" : "var(--text-secondary)",
+  padding: "6px 14px",
+  background: active ? "var(--text)" : "transparent",
+  border: "1px solid " + (active ? "var(--text)" : "var(--border)"),
+  borderRadius: 999,
+  color: active ? "var(--text-on-accent)" : "var(--text-secondary)",
   cursor: "pointer",
-  fontSize: "var(--text-sm)",
+  fontSize: 13,
   fontFamily: "inherit",
+  fontWeight: 500,
 });
 
-const chip: React.CSSProperties = {
-  display: "inline-block",
-  fontSize: 12,
-  padding: "2px 8px",
-  borderRadius: 99,
-  background: "var(--bg-subtle)",
-  border: "1px solid var(--border)",
-  marginRight: 6,
-  marginTop: 4,
-  color: "var(--text-secondary)",
-};
-
-const codeBox: React.CSSProperties = {
-  background: "var(--bg-subtle)",
-  border: "1px solid var(--border)",
-  borderRadius: "var(--radius-sm)",
-  padding: 10,
-  fontFamily: "var(--font-mono)",
-  fontSize: 12,
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-  maxHeight: 400,
-  overflow: "auto",
-  color: "var(--text)",
-};
-
 type Tab = "feed" | "skipped" | "debug";
+
+interface Enrichment {
+  status: "pending" | "running" | "done" | "failed";
+  article_body: string | null;
+  key_facts: string[];
+  sources_used: Array<{ url: string; title: string; role?: string; why_relevant: string }>;
+  images: Array<{ url: string; caption: string; source_url: string }>;
+  original_source_url: string | null;
+  synthesis_output_json: string | null;
+  model_used: string | null;
+  cost_cents: number | null;
+  latency_ms: number | null;
+  completed_at: string | null;
+  synthesis_error: string | null;
+}
 
 interface NewsItem {
   id: string;
@@ -72,23 +63,6 @@ interface NewsItem {
   validation_output_json: string | null;
   validation_error: string | null;
   enrichment: Enrichment | null;
-}
-
-interface Enrichment {
-  id: string;
-  status: "pending" | "running" | "done" | "failed";
-  article_body: string | null;
-  key_facts: string[];
-  sources_used: Array<{ url: string; title: string; role?: string; why_relevant: string }>;
-  images: Array<{ url: string; caption: string; source_url: string }>;
-  original_source_url: string | null;
-  synthesis_output_json: string | null;
-  model_used: string | null;
-  cost_cents: number | null;
-  latency_ms: number | null;
-  created_at: string;
-  completed_at: string | null;
-  synthesis_error: string | null;
 }
 
 interface PromptData {
@@ -167,10 +141,7 @@ export default function NewsPage() {
     else void loadDebug();
   }, [tab, loadFeed, loadSkipped, loadDebug]);
 
-  // Auto-poll каждые 25 сек на feed: pending/running enrichments сами
-  // подтянутся в done без F5. Заодно дёргаем enrich-tick fire-and-forget
-  // если есть pending — это разгоняет очередь, не дожидаясь 5-минутного
-  // cron-таймера Vercel.
+  // Auto-poll каждые 25 сек: pending/running enrichments сами подтянутся.
   useEffect(() => {
     if (tab !== "feed") return;
     const id = setInterval(() => {
@@ -179,14 +150,13 @@ export default function NewsPage() {
       );
       void loadFeed();
       if (hasPending) {
-        // fire-and-forget
         void fetch("/api/news/enrich/tick").catch(() => {});
       }
     }, 25_000);
     return () => clearInterval(id);
   }, [tab, items, loadFeed]);
 
-  // При первой загрузке feed: если есть pending — сразу дёргаем enrich-tick.
+  // При первой загрузке: pending → пинаем enrich-tick.
   useEffect(() => {
     if (tab !== "feed" || items.length === 0) return;
     const hasPending = items.some(
@@ -232,424 +202,389 @@ export default function NewsPage() {
 
   return (
     <main style={wrap}>
-      <header style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
-        <div>
-          <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 4px" }}>
-            Модуль · Новости
-          </p>
-          <h1 style={{ fontSize: 32, lineHeight: 1.15, margin: 0 }}>Персональная лента</h1>
+      <header style={{ marginBottom: 28 }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+          <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em", margin: 0 }}>Лента</h1>
+          <nav style={{ display: "flex", gap: 14, fontSize: 13 }}>
+            <Link href="/news/sources" style={{ color: "var(--text-secondary)" }}>источники</Link>
+            <Link href="/news/profile" style={{ color: "var(--text-secondary)" }}>профиль</Link>
+          </nav>
         </div>
-        <nav style={{ fontSize: "var(--text-sm)", display: "flex", gap: 16 }}>
-          <Link href="/news/sources" style={{ color: "var(--text-secondary)", textDecoration: "none", borderBottom: "1px solid var(--border)" }}>
-            источники →
-          </Link>
-          <Link href="/news/profile" style={{ color: "var(--text-secondary)", textDecoration: "none", borderBottom: "1px solid var(--border)" }}>
-            профиль →
-          </Link>
-        </nav>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button style={tabBtn(tab === "feed")} onClick={() => setTab("feed")}>лента</button>
+          <button style={tabBtn(tab === "skipped")} onClick={() => setTab("skipped")}>отсеяно</button>
+          <button style={tabBtn(tab === "debug")} onClick={() => setTab("debug")}>отладка</button>
+        </div>
       </header>
-
-      <div style={{ display: "flex", marginBottom: 24 }}>
-        <button style={{ ...tabBtn(tab === "feed"), borderTopLeftRadius: 6, borderBottomLeftRadius: 6 }} onClick={() => setTab("feed")}>Лента</button>
-        <button style={tabBtn(tab === "skipped")} onClick={() => setTab("skipped")}>Отсеяно</button>
-        <button style={{ ...tabBtn(tab === "debug"), borderRight: "1px solid var(--border)", borderTopRightRadius: 6, borderBottomRightRadius: 6 }} onClick={() => setTab("debug")}>Отладка</button>
-      </div>
 
       {error && (
         <Card padded style={{ borderColor: "var(--danger)", marginBottom: 16 }}>
           <span style={{ color: "var(--danger)" }}>Ошибка: {error}</span>
         </Card>
       )}
-      {loading && <div style={{ color: "var(--text-muted)", marginBottom: 12 }}>Загрузка…</div>}
 
-      {tab === "feed" && <FeedList items={items} onFeedback={sendFeedback} />}
-      {tab === "skipped" && <SkippedList items={skipped} onPromote={promote} />}
-      {tab === "debug" && <DebugPanel prompt={promptData} decisions={decisions} />}
+      {tab === "feed" && (
+        <FeedList items={items} loading={loading} onFeedback={sendFeedback} />
+      )}
+      {tab === "skipped" && <SkippedList items={skipped} loading={loading} onPromote={promote} />}
+      {tab === "debug" && <DebugPanel prompt={promptData} decisions={decisions} loading={loading} />}
     </main>
   );
 }
 
-function FeedList({ items, onFeedback }: { items: NewsItem[]; onFeedback: (id: string, s: "like" | "dislike", r?: string) => void }) {
+function FeedList({
+  items,
+  loading,
+  onFeedback,
+}: {
+  items: NewsItem[];
+  loading: boolean;
+  onFeedback: (id: string, s: "like" | "dislike", r?: string) => void;
+}) {
+  if (loading && items.length === 0) {
+    return <div style={{ textAlign: "center", padding: 40, color: "var(--text-muted)" }}>Загрузка…</div>;
+  }
   if (items.length === 0) {
     return (
       <Card padded>
         <p style={{ marginTop: 0 }}>В ленте пусто.</p>
         <p style={{ color: "var(--text-secondary)" }}>
-          Это нормально на чистой БД. Cron-tick запускается раз в 10 минут.
-          Также все валидированные посты могут быть в «Отсеяно» — открой и посмотри.
+          Cron-tick запускается раз в 10 минут. Можно дёрнуть руками или подождать.
         </p>
-        <pre style={codeBox}>{`curl -X POST $APP/api/news/cron/tick`}</pre>
       </Card>
     );
   }
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {items.map((it) => <ItemCard key={it.id} item={it} onFeedback={onFeedback} />)}
-    </div>
-  );
-}
-
-function SkippedList({ items, onPromote }: { items: NewsItem[]; onPromote: (id: string) => void }) {
-  if (items.length === 0) {
-    return (
-      <Card padded>
-        <p style={{ marginTop: 0 }}>Отсеянных нет.</p>
-      </Card>
-    );
-  }
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <p style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
-        Посты, которые валидатор пометил как skip. Если что-то реально полезное здесь —
-        нажми «показать в ленте», это сигнал для калибровки промта.
-      </p>
+    <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
       {items.map((it) => (
-        <Card key={it.id} padded>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ fontWeight: 600 }}>{it.title || "(без заголовка)"}</div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-              {it.source.name} · {it.relevance ?? "—"}/100
-            </div>
-          </div>
-          {it.summary && <div style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginTop: 6 }}>{it.summary}</div>}
-          {it.reasoning && (
-            <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 8, fontStyle: "italic" }}>
-              Причина: {it.reasoning}
-            </div>
-          )}
-          <div style={{ marginTop: 8 }}>
-            {(it.matched_topics ?? []).map((t) => <span key={t} style={chip}>{t}</span>)}
-          </div>
-          <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center" }}>
-            {it.url && (
-              <a href={it.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", borderBottom: "1px solid var(--border)" }}>
-                читать источник →
-              </a>
-            )}
-            <Button variant="secondary" size="sm" onClick={() => onPromote(it.id)}>
-              показать в ленте
-            </Button>
-          </div>
-        </Card>
+        <Story key={it.id} item={it} onFeedback={onFeedback} />
       ))}
     </div>
   );
 }
 
-function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: string, s: "like" | "dislike", r?: string) => void }) {
-  const [expandedFeedback, setExpandedFeedback] = useState<null | "like" | "dislike">(null);
+function Story({
+  item,
+  onFeedback,
+}: {
+  item: NewsItem;
+  onFeedback: (id: string, s: "like" | "dislike", r?: string) => void;
+}) {
+  const [expanded, setExpanded] = useState<null | "like" | "dislike">(null);
   const [sent, setSent] = useState(false);
   const [inflight, setInflight] = useState(false);
   const [fullOpen, setFullOpen] = useState(false);
-  const enrichment = item.enrichment;
-  const hasBody = !!enrichment?.article_body;
-  const isDone = enrichment?.status === "done" && hasBody;
-  // «Обновляется»: pending/running, но есть уже готовая старая статья от
-  // предыдущего прогона — покажем её и пометим что идёт перегенерация.
-  const isRefreshing =
-    enrichment && (enrichment.status === "pending" || enrichment.status === "running") && hasBody;
-  // «В обработке»: pending/running без готовой статьи (первый прогон).
-  const isPending =
-    enrichment && (enrichment.status === "pending" || enrichment.status === "running") && !hasBody;
-  const isFailed = enrichment?.status === "failed" && !hasBody;
 
-  const handleQuick = (s: "like" | "dislike") => {
+  const e = item.enrichment;
+  const hasBody = !!e?.article_body;
+  const isDone = e?.status === "done" && hasBody;
+  const isRefreshing =
+    e && (e.status === "pending" || e.status === "running") && hasBody;
+  const isPending =
+    e && (e.status === "pending" || e.status === "running") && !hasBody;
+  const isFailed = e?.status === "failed" && !hasBody;
+
+  // Parsed enrichment fields from synthesis_output_json
+  const synth = parseSynthesis(e?.synthesis_output_json ?? null);
+
+  const handleQuick = (sig: "like" | "dislike") => {
     if (sent || inflight) return;
     setInflight(true);
-    setExpandedFeedback(s);
-    void onFeedback(item.id, s);
+    setExpanded(sig);
+    void onFeedback(item.id, sig);
   };
   const handleReason = (r: string) => {
-    if (!expandedFeedback || sent) return;
-    void onFeedback(item.id, expandedFeedback, r);
+    if (!expanded || sent) return;
+    void onFeedback(item.id, expanded, r);
     setSent(true);
   };
 
+  // Подсчёт времени чтения по article_body
+  const readingMin =
+    e?.article_body ? Math.max(2, Math.round(e.article_body.length / 1500)) : null;
+
+  // Final display data
+  const displayHeadline = (synth.headline || item.title || "").trim();
+  const displayLead = synth.lead || item.summary || item.value_explanation || "";
+  const heroImg = e?.images?.[0];
+
   return (
-    <Card padded>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 17, fontWeight: 600, flex: 1 }}>
-          {item.title || "(без заголовка)"}
-        </div>
-        <div style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-          {item.source.name} · {item.relevance ?? "—"}/100
-        </div>
-      </div>
-      {item.summary && (
-        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginTop: 8 }}>{item.summary}</div>
-      )}
-      {item.value_explanation && (
-        <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 10, paddingLeft: 12, borderLeft: "2px solid var(--info)" }}>
-          <b style={{ color: "var(--text)" }}>Почему вам:</b> {item.value_explanation}
-        </div>
-      )}
-      <div style={{ marginTop: 10 }}>
-        {(item.matched_topics ?? []).map((t) => <span key={t} style={chip}>{t}</span>)}
-      </div>
-      <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        {item.url && (
-          <a href={item.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", borderBottom: "1px solid var(--border)", marginRight: 8 }}>
-            читать источник →
-          </a>
+    <article className={s.story}>
+      {/* META: topics + published time + source + reading time */}
+      <div className={s.metaRow}>
+        {(item.matched_topics ?? []).slice(0, 3).map((t) => (
+          <span key={t} className={s.topicChip}>{t}</span>
+        ))}
+        {readingMin && (
+          <>
+            <span className={s.metaDot} />
+            <span>{readingMin} мин чтения</span>
+          </>
         )}
-        <Button variant={expandedFeedback === "like" ? "primary" : "secondary"} size="sm" onClick={() => handleQuick("like")} disabled={sent || inflight} aria-label="Нравится">
-          👍
-        </Button>
-        <Button variant={expandedFeedback === "dislike" ? "primary" : "secondary"} size="sm" onClick={() => handleQuick("dislike")} disabled={sent || inflight} aria-label="Не нравится">
-          👎
-        </Button>
-        {item.verdict === "borderline" && (
-          <span style={{ ...chip, color: "var(--warning)", borderColor: "var(--warning)", background: "var(--warning-bg)" }}>borderline</span>
-        )}
+        <span className={s.metaDot} />
+        <span>
+          {item.source.name}
+          {item.published_at && ` · ${relativeTime(item.published_at)}`}
+        </span>
+        {isDone && <><span className={s.metaDot} /><span>🤖 AI-разбор</span></>}
       </div>
-      {expandedFeedback && !sent && (
-        <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-muted)" }}>
-          <span>Почему? (опционально)</span>
-          <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {(expandedFeedback === "like" ? LIKE_REASONS : DISLIKE_REASONS).map((r) => (
-              <Button key={r} variant="secondary" size="sm" onClick={() => handleReason(r)}>{r}</Button>
-            ))}
-          </div>
+
+      {/* HEADLINE */}
+      <h2 className={s.headline}>{displayHeadline || "(без заголовка)"}</h2>
+
+      {/* LEAD */}
+      {displayLead && <p className={s.lead}>{displayLead}</p>}
+
+      {/* Refresh indicator */}
+      {isRefreshing && (
+        <div className={s.refreshing}>
+          <span className={s.spinner} /> обновляется с новым pipeline…
         </div>
-      )}
-      {sent && (
-        <div style={{ marginTop: 10, fontSize: 12, color: "var(--success)" }}>Спасибо за фидбэк.</div>
       )}
 
-      {/* Inline статья — показываем если есть готовый body, даже если идёт re-sync */}
-      {(isDone || isRefreshing) && enrichment && (
-        <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
-          {isRefreshing && (
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8, fontStyle: "italic" }}>
-              ↻ обновляется с новым pipeline…
+      {/* HERO IMAGE — большая, при наличии */}
+      {(isDone || isRefreshing) && heroImg && (
+        <figure className={s.hero}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={heroImg.url}
+            alt={heroImg.caption || ""}
+            onError={(ev) => { (ev.target as HTMLImageElement).style.display = "none"; }}
+          />
+          {heroImg.caption && (
+            <figcaption className={s.heroCaption}>{heroImg.caption}</figcaption>
+          )}
+        </figure>
+      )}
+
+      {/* KEY FACTS — pull-quote callout */}
+      {(isDone || isRefreshing) && e!.key_facts.length > 0 && (
+        <div className={s.keyFacts}>
+          <div className={s.keyFactsLabel}>Главное</div>
+          <ul className={s.keyFactsList}>
+            {(fullOpen ? e!.key_facts : e!.key_facts.slice(0, 5)).map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* PENDING — нет body */}
+      {isPending && (
+        <div className={s.pending}>
+          <span className={s.spinner} />
+          <span>Собираю полную статью — Perplexity + Opus + Vision. Готова через ~1 минуту.</span>
+        </div>
+      )}
+
+      {/* FAILED — нет body */}
+      {isFailed && e?.synthesis_error && (
+        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          ⚠ Не собралась: {e.synthesis_error.slice(0, 200)}
+        </div>
+      )}
+
+      {/* FULL ARTICLE — only when expanded */}
+      {fullOpen && (isDone || isRefreshing) && e?.article_body && (
+        <>
+          <div className={s.body}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{e.article_body}</ReactMarkdown>
+          </div>
+
+          {synth.quotes.length > 0 && (
+            <section className={s.quotes}>
+              {synth.quotes.map((q, i) => (
+                <blockquote key={i} className={s.quote}>
+                  <p className={s.quoteText}>«{q.text}»</p>
+                  {(q.attribution || q.source_url) && (
+                    <footer className={s.quoteAttr}>
+                      {q.attribution}
+                      {q.source_url && (
+                        <a href={q.source_url} target="_blank" rel="noreferrer" style={{ marginLeft: 6 }}>↗</a>
+                      )}
+                    </footer>
+                  )}
+                </blockquote>
+              ))}
+            </section>
+          )}
+
+          {synth.timeline.length > 0 && (
+            <section>
+              <div className={s.keyFactsLabel} style={{ marginBottom: 12 }}>Хронология</div>
+              <ul className={s.timeline}>
+                {synth.timeline.map((t, i) => (
+                  <li key={i}>
+                    <span className={s.timelineDate}>{t.date}</span>{t.event}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {synth.implications && (
+            <div className={s.implications}>
+              <div className={s.implicationsLabel}>Что это значит для вас</div>
+              <div className={s.implicationsBody}>{synth.implications}</div>
             </div>
           )}
-          <ArticleView enrichment={enrichment} compact={!fullOpen} />
-          <button
-            onClick={() => setFullOpen(!fullOpen)}
-            style={{
-              ...enrichToggleStyle,
-              marginTop: 12,
-            }}
-          >
-            {fullOpen ? "▲ свернуть статью" : "▼ развернуть полностью (все факты, цитаты, источники)"}
-          </button>
-        </div>
-      )}
 
-      {/* Прогресс — собирается */}
-      {isPending && (
-        <div
-          style={{
-            marginTop: 12,
-            paddingTop: 12,
-            borderTop: "1px solid var(--border)",
-            color: "var(--text-muted)",
-            fontSize: 13,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid var(--border)", borderTopColor: "var(--info)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-          Собираю полную статью (Perplexity + Opus + Vision)… займёт пару минут.
-        </div>
-      )}
-
-      {/* Ошибка */}
-      {isFailed && (
-        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 12 }}>
-          ⚠ Статья не собралась: {enrichment?.synthesis_error?.slice(0, 200) ?? "ошибка"}
-        </div>
-      )}
-
-      <style jsx>{`
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
-    </Card>
-  );
-}
-
-const enrichToggleStyle: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  color: "var(--info)",
-  cursor: "pointer",
-  fontSize: "var(--text-sm)",
-  padding: 0,
-  fontFamily: "inherit",
-};
-
-function ArticleView({ enrichment, compact = false }: { enrichment: Enrichment; compact?: boolean }) {
-  // Извлекаем headline + lead из synthesis_output_json если есть.
-  let headline: string | null = null;
-  let lead: string | null = null;
-  let implications: string | null = null;
-  let quotes: Array<{ text: string; attribution: string; source_url?: string }> = [];
-  let timeline: Array<{ date: string; event: string }> = [];
-  let qualityNote: string | null = null;
-  try {
-    if (enrichment.synthesis_output_json) {
-      const j = JSON.parse(enrichment.synthesis_output_json);
-      headline = typeof j.headline === "string" ? j.headline : null;
-      lead = typeof j.lead === "string" ? j.lead : null;
-      implications = typeof j.implications === "string" ? j.implications : null;
-      qualityNote = typeof j.quality_note === "string" ? j.quality_note : null;
-      if (Array.isArray(j.quotes)) quotes = j.quotes;
-      if (Array.isArray(j.timeline)) timeline = j.timeline;
-    }
-  } catch {
-    // soft
-  }
-
-  // В compact-режиме показываем: headline + lead + 1 картинка + key_facts (5).
-  // Полный body / цитаты / таймлайн / источники — только в expanded.
-  const imagesToShow = compact ? enrichment.images.slice(0, 1) : enrichment.images.slice(0, 4);
-  const factsToShow = compact ? enrichment.key_facts.slice(0, 5) : enrichment.key_facts;
-
-  return (
-    <article style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {headline && (
-        <h2 style={{ margin: 0, fontSize: 22, lineHeight: 1.25, color: "var(--text)" }}>{headline}</h2>
-      )}
-      {lead && (
-        <p style={{ margin: 0, fontSize: "var(--text-md)", fontWeight: 500, lineHeight: 1.5, color: "var(--text)" }}>
-          {lead}
-        </p>
-      )}
-
-      {imagesToShow.length > 0 && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: imagesToShow.length === 1 ? "1fr" : "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: 8,
-          }}
-        >
-          {imagesToShow.map((img, i) => (
-            <figure key={i} style={{ margin: 0 }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={img.url}
-                alt={img.caption || "иллюстрация"}
-                style={{ width: "100%", height: "auto", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)" }}
-                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-              />
-              {(img.caption || img.source_url) && (
-                <figcaption style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
-                  {img.caption}
-                  {img.source_url && (
-                    <a href={img.source_url} target="_blank" rel="noreferrer" style={{ color: "var(--text-muted)", marginLeft: 4 }}>
-                      · источник
+          {e.sources_used.length > 0 && (
+            <section>
+              <div className={s.keyFactsLabel} style={{ marginBottom: 10 }}>
+                Источники ({e.sources_used.length})
+              </div>
+              <div className={s.sources}>
+                {e.sources_used.map((src, i) => (
+                  <div key={i} className={s.sourceLine}>
+                    {src.role === "original" && (
+                      <span className={s.sourceRoleOriginal}>ОРИГИНАЛ</span>
+                    )}
+                    <a href={src.url} target="_blank" rel="noreferrer" className={s.sourceLink}>
+                      {src.title || src.url}
                     </a>
-                  )}
-                </figcaption>
-              )}
-            </figure>
-          ))}
-        </div>
-      )}
+                    {src.why_relevant && (
+                      <span className={s.sourceWhy}>· {src.why_relevant}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
-      {factsToShow.length > 0 && (
-        <Card padded style={{ background: "var(--bg-subtle)" }}>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
-            Ключевые факты{compact && enrichment.key_facts.length > 5 ? ` (топ-5 из ${enrichment.key_facts.length})` : ""}
+          <div className={s.metaSmall}>
+            {e.model_used}
+            {e.cost_cents != null && ` · ${(e.cost_cents / 100).toFixed(2)}¢`}
+            {e.latency_ms != null && ` · ${(e.latency_ms / 1000).toFixed(1)}s`}
+            {synth.quality_note && ` · ${synth.quality_note}`}
           </div>
-          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14, color: "var(--text)" }}>
-            {factsToShow.map((f, i) => <li key={i} style={{ marginBottom: 4 }}>{f}</li>)}
-          </ul>
-        </Card>
+        </>
       )}
 
-      {!compact && (
-        <div style={{ fontSize: 15, lineHeight: 1.7, color: "var(--text)" }} className="article-md">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{enrichment.article_body ?? ""}</ReactMarkdown>
+      {/* FOOTER: feedback + expand toggle */}
+      <div className={s.footer}>
+        <div className={s.feedbackLine}>
+          <span className={s.feedbackLabel}>Полезно?</span>
+          <button
+            className={`${s.feedbackBtn} ${expanded === "like" ? s.feedbackBtnActive : ""}`}
+            onClick={() => handleQuick("like")}
+            disabled={sent || inflight}
+            aria-label="Нравится"
+          >👍</button>
+          <button
+            className={`${s.feedbackBtn} ${expanded === "dislike" ? s.feedbackBtnActive : ""}`}
+            onClick={() => handleQuick("dislike")}
+            disabled={sent || inflight}
+            aria-label="Не нравится"
+          >👎</button>
+          {expanded && !sent && (
+            <div className={s.reasonChips}>
+              {(expanded === "like" ? LIKE_REASONS : DISLIKE_REASONS).map((r) => (
+                <button key={r} className={s.reasonChip} onClick={() => handleReason(r)}>
+                  {r}
+                </button>
+              ))}
+            </div>
+          )}
+          {sent && (
+            <span style={{ fontSize: 12, color: "var(--success)" }}>Спасибо.</span>
+          )}
         </div>
-      )}
-
-      {!compact && quotes.length > 0 && (
-        <div>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
-            Цитаты
-          </div>
-          {quotes.map((q, i) => (
-            <blockquote key={i} style={{ margin: "0 0 10px 0", paddingLeft: 12, borderLeft: "3px solid var(--info)", fontSize: 14, color: "var(--text-secondary)" }}>
-              «{q.text}»
-              {q.attribution && (
-                <footer style={{ marginTop: 4, fontSize: 12, color: "var(--text-muted)" }}>
-                  — {q.attribution}
-                  {q.source_url && (
-                    <a href={q.source_url} target="_blank" rel="noreferrer" style={{ marginLeft: 6, color: "var(--text-muted)" }}>↗</a>
-                  )}
-                </footer>
-              )}
-            </blockquote>
-          ))}
-        </div>
-      )}
-
-      {!compact && timeline.length > 0 && (
-        <div>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
-            Хронология
-          </div>
-          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "var(--text-secondary)" }}>
-            {timeline.map((t, i) => (
-              <li key={i} style={{ marginBottom: 4 }}>
-                <b style={{ color: "var(--text)" }}>{t.date}</b> — {t.event}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {implications && (
-        <Card padded style={{ borderLeft: "3px solid var(--info)", background: "var(--info-bg)" }}>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
-            Что это значит для вас
-          </div>
-          <div style={{ fontSize: 14, lineHeight: 1.6, color: "var(--text)", whiteSpace: "pre-wrap" }}>{implications}</div>
-        </Card>
-      )}
-
-      {!compact && enrichment.sources_used.length > 0 && (
-        <div>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
-            Источники ({enrichment.sources_used.length})
-          </div>
-          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
-            {enrichment.sources_used.map((s, i) => (
-              <li key={i} style={{ marginBottom: 6 }}>
-                {s.role === "original" && <span style={{ fontSize: 10, color: "var(--success)", marginRight: 6 }}>★ ПЕРВОИСТОЧНИК</span>}
-                <a href={s.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", borderBottom: "1px solid var(--border)" }}>
-                  {s.title || s.url}
-                </a>
-                {s.why_relevant && <span style={{ color: "var(--text-muted)", marginLeft: 6 }}>— {s.why_relevant}</span>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {!compact && (
-        <div style={{ fontSize: 11, color: "var(--text-muted)", borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-          {enrichment.model_used} · {enrichment.cost_cents != null ? `${(enrichment.cost_cents / 100).toFixed(2)}¢` : "?"} · {enrichment.latency_ms != null ? `${(enrichment.latency_ms / 1000).toFixed(1)}s` : "?"}
-          {qualityNote && <span style={{ marginLeft: 8, fontStyle: "italic" }}>· {qualityNote}</span>}
-        </div>
-      )}
+        {(isDone || isRefreshing) && e?.article_body && (
+          <button className={s.toggleFull} onClick={() => setFullOpen(!fullOpen)}>
+            {fullOpen ? "свернуть" : "читать полностью →"}
+          </button>
+        )}
+      </div>
     </article>
   );
 }
 
-function DebugPanel({ prompt, decisions }: { prompt: PromptData | null; decisions: NewsItem[] }) {
+function SkippedList({
+  items,
+  loading,
+  onPromote,
+}: {
+  items: NewsItem[];
+  loading: boolean;
+  onPromote: (id: string) => void;
+}) {
+  if (loading && items.length === 0) {
+    return <div style={{ textAlign: "center", padding: 40, color: "var(--text-muted)" }}>Загрузка…</div>;
+  }
+  if (items.length === 0) {
+    return <Card padded><p style={{ marginTop: 0 }}>Отсеянных нет.</p></Card>;
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <p style={{ color: "var(--text-muted)", fontSize: 14 }}>
+        Посты, которые валидатор пометил skip. «Показать в ленте» — сигнал для калибровки.
+      </p>
+      {items.map((it) => (
+        <article key={it.id} className={s.story} style={{ padding: "16px 18px" }}>
+          <div className={s.metaRow}>
+            <span>{it.source.name}</span>
+            <span className={s.metaDot} />
+            <span>relevance {it.relevance ?? "—"}/100</span>
+          </div>
+          <h3 style={{ fontSize: 18, lineHeight: 1.3, margin: "8px 0 0", fontWeight: 600 }}>
+            {it.title || "(без заголовка)"}
+          </h3>
+          {it.summary && (
+            <p style={{ color: "var(--text-secondary)", fontSize: 14, margin: "8px 0 0" }}>{it.summary}</p>
+          )}
+          {it.reasoning && (
+            <p style={{ fontSize: 13, color: "var(--text-muted)", margin: "8px 0 0", fontStyle: "italic" }}>
+              Причина: {it.reasoning}
+            </p>
+          )}
+          <div style={{ display: "flex", gap: 12, marginTop: 12, alignItems: "center" }}>
+            {it.url && (
+              <a href={it.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", fontSize: 13, borderBottom: "1px solid var(--border)" }}>
+                читать источник →
+              </a>
+            )}
+            <button className={s.toggleFull} onClick={() => onPromote(it.id)}>
+              показать в ленте
+            </button>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function DebugPanel({
+  prompt,
+  decisions,
+  loading,
+}: {
+  prompt: PromptData | null;
+  decisions: NewsItem[];
+  loading: boolean;
+}) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (id: string) => {
     const s = new Set(expanded);
     if (s.has(id)) s.delete(id);
     else s.add(id);
     setExpanded(s);
+  };
+  if (loading && !prompt) {
+    return <div style={{ textAlign: "center", padding: 40, color: "var(--text-muted)" }}>Загрузка…</div>;
+  }
+  const codeBox: React.CSSProperties = {
+    background: "var(--bg-subtle)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    padding: 10,
+    fontFamily: "var(--font-mono)",
+    fontSize: 12,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    maxHeight: 400,
+    overflow: "auto",
+    color: "var(--text)",
   };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -664,28 +599,20 @@ function DebugPanel({ prompt, decisions }: { prompt: PromptData | null; decision
             <h2 style={{ marginTop: 0, fontSize: 16 }}>Текущий профиль</h2>
             <pre style={codeBox}>{JSON.stringify(prompt.profile, null, 2)}</pre>
           </Card>
-          <Card padded>
-            <h2 style={{ marginTop: 0, fontSize: 16 }}>Собранный промт (пример)</h2>
-            <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 6 }}>SYSTEM:</div>
-            <pre style={codeBox}>{prompt.sample_prompt.system}</pre>
-            <div style={{ color: "var(--text-muted)", fontSize: 12, margin: "10px 0 6px" }}>USER (на фейковом посте):</div>
-            <pre style={codeBox}>{prompt.sample_prompt.user}</pre>
-          </Card>
         </>
       )}
       <Card padded>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>Последние решения валидатора ({decisions.length})</h2>
-        {decisions.length === 0 && <p style={{ color: "var(--text-muted)" }}>Пока пусто.</p>}
         {decisions.map((d) => (
           <div key={d.id} style={{ borderBottom: "1px solid var(--border)", paddingBottom: 12, marginBottom: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
               <div style={{ fontSize: 13 }}>
-                <b>{verdictLabel(d.verdict, d.status)}</b>
+                <b>{(d.verdict ?? d.status).toUpperCase()}</b>
                 <span style={{ color: "var(--text-muted)" }}> · {d.source.name} · {d.relevance ?? "—"}/100</span>
               </div>
-              <Button variant="secondary" size="sm" onClick={() => toggle(d.id)}>
+              <button className={s.toggleFull} onClick={() => toggle(d.id)}>
                 {expanded.has(d.id) ? "свернуть" : "развернуть"}
-              </Button>
+              </button>
             </div>
             <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>{d.title || "(без заголовка)"}</div>
             {d.reasoning && <div style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic", marginTop: 4 }}>{d.reasoning}</div>}
@@ -705,8 +632,44 @@ function DebugPanel({ prompt, decisions }: { prompt: PromptData | null; decision
   );
 }
 
-function verdictLabel(v: NewsItem["verdict"], status: string): string {
-  if (status === "failed") return "FAILED";
-  if (!v) return status.toUpperCase();
-  return v.toUpperCase();
+// ---------- helpers ----------
+
+interface SynthFields {
+  headline: string | null;
+  lead: string | null;
+  implications: string | null;
+  quotes: Array<{ text: string; attribution: string; source_url?: string }>;
+  timeline: Array<{ date: string; event: string }>;
+  quality_note: string | null;
+}
+function parseSynthesis(json: string | null): SynthFields {
+  const empty: SynthFields = { headline: null, lead: null, implications: null, quotes: [], timeline: [], quality_note: null };
+  if (!json) return empty;
+  try {
+    const j = JSON.parse(json) as Record<string, unknown>;
+    return {
+      headline: typeof j.headline === "string" ? j.headline : null,
+      lead: typeof j.lead === "string" ? j.lead : null,
+      implications: typeof j.implications === "string" ? j.implications : null,
+      quotes: Array.isArray(j.quotes) ? (j.quotes as Array<{ text: string; attribution: string; source_url?: string }>) : [],
+      timeline: Array.isArray(j.timeline) ? (j.timeline as Array<{ date: string; event: string }>) : [],
+      quality_note: typeof j.quality_note === "string" ? j.quality_note : null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+function relativeTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const diff = Date.now() - t;
+  const m = Math.floor(diff / 60_000);
+  if (m < 1) return "только что";
+  if (m < 60) return `${m} мин назад`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}ч назад`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}д назад`;
+  return new Date(t).toLocaleDateString("ru-RU");
 }

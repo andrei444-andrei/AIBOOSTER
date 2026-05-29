@@ -17,6 +17,9 @@ export interface ChatJsonInput {
   // Таймаут одного LLM-запроса. Без него зависший вызов съест весь бюджет
   // serverless-функции (60s) — валидатор обработает 1 пост вместо 10.
   timeoutMs?: number;
+  // Лимит на токены ответа. Для длинного синтеза Opus'у нужно много —
+  // дефолт 16k чтобы статья 1500-1800 слов точно не была обрезана.
+  maxTokens?: number;
   // requestId — только для логов/отладки; в запрос не отправляется.
   requestId?: string;
 }
@@ -57,6 +60,7 @@ export async function chatJson<T>(input: ChatJsonInput): Promise<ChatJsonResult<
       body: JSON.stringify({
         model: input.model,
         temperature: input.temperature ?? 0.2,
+        max_tokens: input.maxTokens ?? 16384,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: input.system },
@@ -147,6 +151,7 @@ export function extractJsonObject(text: string): unknown | null {
   let depth = 0;
   let inStr = false;
   let escape = false;
+  let stackTrace: string[] = []; // что открыли (для восстановления)
   for (let i = first; i < stripped.length; i++) {
     const ch = stripped[i];
     if (inStr) {
@@ -165,9 +170,12 @@ export function extractJsonObject(text: string): unknown | null {
       inStr = true;
       continue;
     }
-    if (ch === openCh) depth++;
-    else if (ch === closeCh) {
+    if (ch === "{" || ch === "[") {
+      depth++;
+      stackTrace.push(ch);
+    } else if (ch === "}" || ch === "]") {
       depth--;
+      stackTrace.pop();
       if (depth === 0) {
         const slice = stripped.slice(first, i + 1);
         try {
@@ -176,6 +184,26 @@ export function extractJsonObject(text: string): unknown | null {
           return null;
         }
       }
+    }
+  }
+  // ДОБАВКА: response был ОБРЕЗАН (depth > 0, дошли до конца). Пробуем
+  // спасти — закрываем строку и оставшиеся открытые скобки/массивы.
+  if (depth > 0) {
+    let salvage = stripped.slice(first);
+    if (inStr) salvage += '"'; // закрываем висящую строку
+    // Если последний символ — запятая или незавершённый ключ — обрежем до
+    // последней валидной запятой/значения.
+    salvage = salvage.replace(/,\s*$/, "");
+    salvage = salvage.replace(/"\s*:\s*$/, '": null');
+    salvage = salvage.replace(/:\s*$/, ": null");
+    // Закрываем стек в обратном порядке.
+    for (let i = stackTrace.length - 1; i >= 0; i--) {
+      salvage += stackTrace[i] === "{" ? "}" : "]";
+    }
+    try {
+      return JSON.parse(salvage);
+    } catch {
+      return null;
     }
   }
   return null;
