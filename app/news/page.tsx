@@ -342,9 +342,16 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
   const [inflight, setInflight] = useState(false);
   const [fullOpen, setFullOpen] = useState(false);
   const enrichment = item.enrichment;
-  const isDone = enrichment?.status === "done" && enrichment.article_body;
-  const isPending = enrichment && (enrichment.status === "pending" || enrichment.status === "running");
-  const isFailed = enrichment?.status === "failed";
+  const hasBody = !!enrichment?.article_body;
+  const isDone = enrichment?.status === "done" && hasBody;
+  // «Обновляется»: pending/running, но есть уже готовая старая статья от
+  // предыдущего прогона — покажем её и пометим что идёт перегенерация.
+  const isRefreshing =
+    enrichment && (enrichment.status === "pending" || enrichment.status === "running") && hasBody;
+  // «В обработке»: pending/running без готовой статьи (первый прогон).
+  const isPending =
+    enrichment && (enrichment.status === "pending" || enrichment.status === "running") && !hasBody;
+  const isFailed = enrichment?.status === "failed" && !hasBody;
 
   const handleQuick = (s: "like" | "dislike") => {
     if (sent || inflight) return;
@@ -409,9 +416,14 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
         <div style={{ marginTop: 10, fontSize: 12, color: "var(--success)" }}>Спасибо за фидбэк.</div>
       )}
 
-      {/* Inline статья */}
-      {isDone && enrichment && (
+      {/* Inline статья — показываем если есть готовый body, даже если идёт re-sync */}
+      {(isDone || isRefreshing) && enrichment && (
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+          {isRefreshing && (
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8, fontStyle: "italic" }}>
+              ↻ обновляется с новым pipeline…
+            </div>
+          )}
           <ArticleView enrichment={enrichment} compact={!fullOpen} />
           <button
             onClick={() => setFullOpen(!fullOpen)}
