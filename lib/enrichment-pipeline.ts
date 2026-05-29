@@ -191,14 +191,22 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
   }
 
   // ── Шаг D+: Sonar URL-read fallback для источников с пустым текстом ──
-  // У Perplexity свой crawler с data-deals — часто видит paywall/JS-SPA.
-  // Запускаем параллельно, мягко падаем на ошибки.
+  // Только для топ-N важных (первоисточник + первые 2). Иначе на 6
+  // параллельных вызовах добавим лишних 15-30 с latency и можем упереться
+  // в Vercel 120s бюджет.
   let extraSonarCost = 0;
+  const SONAR_FALLBACK_BUDGET = 3;
+  // Сортируем: was_original → начало; остальные сохраняют исходный порядок.
+  const fallbackTargets = related
+    .map((r, idx) => ({ r, idx }))
+    .filter(({ r }) => !r.text || r.text.length < 200)
+    .sort((a, b) => Number(b.r.was_original ?? false) - Number(a.r.was_original ?? false))
+    .slice(0, SONAR_FALLBACK_BUDGET);
+
   await Promise.all(
-    related.map(async (r, idx) => {
-      if (r.text && r.text.length >= 200) return;
+    fallbackTargets.map(async ({ r, idx }) => {
       try {
-        const read = await sonarUrlRead(r.url, { timeoutMs: 18_000 });
+        const read = await sonarUrlRead(r.url, { timeoutMs: 12_000 });
         if (read.text && read.text.length >= 200) {
           related[idx] = {
             ...r,
