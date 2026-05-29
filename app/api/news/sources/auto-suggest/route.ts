@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { logServerError } from "@/lib/logger";
 import { getActiveProfile, listSources, createSource, type SourceKind } from "@/lib/news";
-import { suggestSourcesForProfile } from "@/lib/source-suggest";
+import { suggestSourcesForProfile, lastSuggestDiag } from "@/lib/source-suggest";
 import { discoverFeed } from "@/lib/feed-discover";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +36,8 @@ export async function POST(req: Request) {
       return NextResponse.json({
         added: [],
         skipped: [],
-        note: "Perplexity ничего не предложил — попробуй ещё раз через минуту",
+        note: "Модель ничего не предложила — попробуй ещё раз через минуту",
+        diag: lastSuggestDiag,
       });
     }
 

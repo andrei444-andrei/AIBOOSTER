@@ -17,6 +17,9 @@ export interface SourceSuggestion {
   why: string;
 }
 
+// Глобальная диагностика последнего вызова — для отладочного endpoint'а.
+export let lastSuggestDiag: { error?: string; rawText?: string; rawLen?: number } = {};
+
 // Claude Sonnet надёжнее в JSON-mode чем Sonar. Знает большинство
 // устоявшихся отраслевых источников (это OK — для базовых рекомендаций
 // нам не нужен realtime web-search).
@@ -71,6 +74,7 @@ export async function suggestSourcesForProfile(
       maxTokens: 8000,
     });
     const out = normalizeSuggestions(parsed, active);
+    lastSuggestDiag = { rawText: rawText.slice(0, 2000), rawLen: rawText.length };
     if (out.length === 0) {
       console.log(
         `[source-suggest] empty result. rawText len=${rawText.length}. preview: ${rawText.slice(0, 800)}`,
@@ -79,6 +83,7 @@ export async function suggestSourcesForProfile(
     return out;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    lastSuggestDiag = { error: msg.slice(0, 2000) };
     console.log(`[source-suggest] error (model=${SUGGEST_MODEL}): ${msg.slice(0, 1000)}`);
     return [];
   }
