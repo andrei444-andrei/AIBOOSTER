@@ -1060,18 +1060,25 @@ function MessageBlock({ message }: { message: Message }) {
     live?.mode === "image" ||
     message.route_meta?.category === "image" ||
     live?.category === "image";
-  // Пока стримим:
-  // - текстовая категория: показываем "thinking" пока нет content
-  // - image-категория: показываем "Рисую…" пока нет attachments
+  // Веб-картинки — это промежуточный сигнал (Sonar отработал), а не финал ответа.
+  // Если они уже есть, но основной текст ещё не пошёл — индикатор должен оставаться,
+  // иначе пользователь видит только мозаику и думает что это финал.
+  const hasWebImages =
+    hasAttachments &&
+    !isImageCategory &&
+    message.attachments!.some((a) => a.kind === "image_url");
   const isThinking =
     message.streaming &&
-    !message.content &&
-    !hasAttachments;
+    (isImageCategory
+      ? !hasAttachments // image-режим: индикатор пока нет картинки
+      : !message.content); // текстовый режим: индикатор пока нет текста (даже если веб-картинки уже прилетели)
   const hintText = isImageCategory
     ? `Рисую · ${message.model ? getModelOption(message.model).label : "image-модель"}`
-    : live
-      ? routeLabel(live, message.model)
-      : "Маршрутизирую запрос";
+    : hasWebImages
+      ? `Источники найдены · готовлю ответ${message.model ? " · " + getModelOption(message.model).label : ""}`
+      : live
+        ? routeLabel(live, message.model)
+        : "Маршрутизирую запрос";
   const ensembleMeta = message.route_meta?.ensemble ? message.route_meta : null;
 
   return (
