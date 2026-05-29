@@ -22,6 +22,13 @@ import { compactRecentHistory, routeRequest } from "@/lib/router";
 import { runEnsemble, ENSEMBLES } from "@/lib/ensemble";
 import { MODE_CONFIG, pickAutoMode, runPipeline } from "@/lib/pipeline";
 import type { ChatMode } from "@/lib/chat-client";
+import {
+  createGeneration,
+  finalizeGenerationDone,
+  finalizeGenerationError,
+  makeThrottledContentWriter,
+  updateGenerationMeta,
+} from "@/lib/generations";
 import { logServerError } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -306,7 +313,23 @@ export async function POST(req: Request, ctx: Ctx) {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       };
 
+      // Создаём persistent generation row. К ней клиент сможет приконнектиться
+      // обратно через /generations/[id]/stream если уйдёт со страницы.
+      const persistMode: ChatMode =
+        effectiveMode === "image" || effectiveMode === "judge" || effectiveMode === "thinking" || effectiveMode === "pro"
+          ? effectiveMode
+          : "thinking"; // single-model тоже трактуем как «thinking-аналог» для отображения
+      const generation = await createGeneration(id, userMsg.id, persistMode).catch(async (err) => {
+        // Generation row failed — продолжаем без persistence, не валим запрос.
+        await logServerError(err, "/api/chat/sessions/[id]/messages create generation", { session_id: id });
+        return null;
+      });
+      const writer = generation ? makeThrottledContentWriter(generation.id) : null;
+
       send("user_message", { id: userMsg.id, created_at: userMsg.created_at });
+      if (generation) {
+        send("generation_start", { id: generation.id });
+      }
       send("route", {
         model: chosenModel,
         mode: effectiveMode,
@@ -361,6 +384,29 @@ export async function POST(req: Request, ctx: Ctx) {
           for (const img of images) {
             send("image", { base64: img.base64, mime: img.mime });
           }
+          const imageRouteMeta: RouteMeta = {
+            mode: "image",
+            category: decision.category,
+            complexity: decision.complexity,
+            source: decisionSource,
+            reason: decision.reason,
+            reasoning_effort: decision.reasoning_effort,
+            uncertain: decision.uncertain ?? false,
+            routing_latency_ms: decision.routing_latency_ms,
+          };
+          if (generation && assistantMsg) {
+            await finalizeGenerationDone(generation.id, {
+              assistantMessageId: assistantMsg.id,
+              content: caption,
+              model: chosenModel,
+              routeMeta: imageRouteMeta,
+              webImages: [],
+              citations: [],
+              tokensPrompt: null,
+              tokensCompletion: null,
+              durationMs,
+            }).catch(() => {});
+          }
           // И финальное событие done — клиент закрывает stream.
           send("done", {
             id: assistantMsg?.id ?? null,
@@ -368,16 +414,7 @@ export async function POST(req: Request, ctx: Ctx) {
             model: chosenModel,
             usage: null,
             duration_ms: durationMs,
-            route: {
-              mode: "image",
-              category: decision.category,
-              complexity: decision.complexity,
-              source: decisionSource,
-              reason: decision.reason,
-              reasoning_effort: decision.reasoning_effort,
-              uncertain: decision.uncertain ?? false,
-              routing_latency_ms: decision.routing_latency_ms,
-            },
+            route: imageRouteMeta,
             content: caption,
           });
           await setSessionLastModel(id, uid, chosenModel).catch(() => {});
@@ -395,6 +432,7 @@ export async function POST(req: Request, ctx: Ctx) {
             model: chosenModel,
             status,
           });
+          if (generation) await finalizeGenerationError(generation.id, message).catch(() => {});
           send("error", { message, error_id });
         }
         controller.close();
@@ -451,6 +489,7 @@ export async function POST(req: Request, ctx: Ctx) {
               onJudgeDelta: (text) => {
                 acc += text;
                 send("delta", { text });
+                writer?.schedule(acc);
               },
               onJudgeUsage: (u) => {
                 judgeUsageRef.current = u;
@@ -566,6 +605,21 @@ export async function POST(req: Request, ctx: Ctx) {
             return null;
           });
 
+          if (generation && assistantMsg) {
+            await writer?.finalFlush(acc);
+            await finalizeGenerationDone(generation.id, {
+              assistantMessageId: assistantMsg.id,
+              content: acc,
+              model: result.judge.model,
+              routeMeta,
+              webImages: collectedImages,
+              citations: collectedCitations,
+              tokensPrompt: judgeUsageRef.current?.prompt_tokens ?? null,
+              tokensCompletion: judgeUsageRef.current?.completion_tokens ?? judgeTokens,
+              durationMs,
+            }).catch(() => {});
+          }
+
           await setSessionLastModel(id, uid, result.judge.model).catch(() => {});
 
           send("done", {
@@ -589,6 +643,7 @@ export async function POST(req: Request, ctx: Ctx) {
           } else if (err instanceof Error) {
             message = err.message;
           }
+          if (generation) await finalizeGenerationError(generation.id, message).catch(() => {});
           const error_id = await logServerError(err, "/api/chat/sessions/[id]/messages ensemble", {
             session_id: id,
             category: decision.category,
@@ -624,6 +679,7 @@ export async function POST(req: Request, ctx: Ctx) {
               onDelta: (text) => {
                 accP += text;
                 send("delta", { text });
+                writer?.schedule(accP);
               },
               onUsage: (u) => {
                 usageRefP.current = u;
@@ -636,7 +692,10 @@ export async function POST(req: Request, ctx: Ctx) {
                   collectedImagesP.push(img);
                   fresh.push(img);
                 }
-                if (fresh.length) send("web_images", { images: fresh });
+                if (fresh.length) {
+                  send("web_images", { images: fresh });
+                  if (generation) void updateGenerationMeta(generation.id, { webImages: collectedImagesP });
+                }
               },
               onCitations: (cits) => {
                 const fresh: WebCitation[] = [];
@@ -646,7 +705,10 @@ export async function POST(req: Request, ctx: Ctx) {
                   collectedCitsP.push(c);
                   fresh.push(c);
                 }
-                if (fresh.length) send("citations", { citations: fresh });
+                if (fresh.length) {
+                  send("citations", { citations: fresh });
+                  if (generation) void updateGenerationMeta(generation.id, { citations: collectedCitsP });
+                }
               },
               onWebStepDone: (step) => {
                 webStepMeta = step;
@@ -667,6 +729,7 @@ export async function POST(req: Request, ctx: Ctx) {
             mode: effectiveMode,
             status,
           });
+          if (generation) await finalizeGenerationError(generation.id, message).catch(() => {});
           send("error", { message, error_id });
           controller.close();
           return;
@@ -715,6 +778,21 @@ export async function POST(req: Request, ctx: Ctx) {
           await logServerError(err, "/api/chat/sessions/[id]/messages save pipeline", { session_id: id });
           return null;
         });
+
+        if (generation && assistantMsg) {
+          await writer?.finalFlush(accP);
+          await finalizeGenerationDone(generation.id, {
+            assistantMessageId: assistantMsg.id,
+            content: accP,
+            model: chosenModel,
+            routeMeta,
+            webImages: collectedImagesP,
+            citations: collectedCitsP,
+            tokensPrompt: usageRefP.current?.prompt_tokens ?? null,
+            tokensCompletion: usageRefP.current?.completion_tokens ?? null,
+            durationMs,
+          }).catch(() => {});
+        }
 
         await setSessionLastModel(id, uid, chosenModel).catch(() => {});
 
@@ -770,6 +848,7 @@ export async function POST(req: Request, ctx: Ctx) {
           onDelta: (text) => {
             acc += text;
             send("delta", { text });
+            writer?.schedule(acc);
           },
           onUsage: (u) => {
             usageRef.current = u;
@@ -782,7 +861,10 @@ export async function POST(req: Request, ctx: Ctx) {
               collectedImages.push(img);
               fresh.push(img);
             }
-            if (fresh.length) send("web_images", { images: fresh });
+            if (fresh.length) {
+              send("web_images", { images: fresh });
+              if (generation) void updateGenerationMeta(generation.id, { webImages: collectedImages });
+            }
           },
           onCitations: (cits) => {
             const fresh: WebCitation[] = [];
@@ -792,7 +874,10 @@ export async function POST(req: Request, ctx: Ctx) {
               collectedCitations.push(c);
               fresh.push(c);
             }
-            if (fresh.length) send("citations", { citations: fresh });
+            if (fresh.length) {
+              send("citations", { citations: fresh });
+              if (generation) void updateGenerationMeta(generation.id, { citations: collectedCitations });
+            }
           },
         });
       } catch (err) {
@@ -809,6 +894,7 @@ export async function POST(req: Request, ctx: Ctx) {
           model: chosenModel,
           status,
         });
+        if (generation) await finalizeGenerationError(generation.id, message).catch(() => {});
         send("error", { message, error_id });
         controller.close();
         return;
@@ -822,6 +908,7 @@ export async function POST(req: Request, ctx: Ctx) {
           "/api/chat/sessions/[id]/messages",
           { session_id: id, model: chosenModel },
         );
+        if (generation) await finalizeGenerationError(generation.id, "empty response").catch(() => {});
         send("error", { message: "Модель вернула пустой ответ.", error_id });
         controller.close();
         return;
@@ -858,6 +945,21 @@ export async function POST(req: Request, ctx: Ctx) {
         await logServerError(err, "/api/chat/sessions/[id]/messages save assistant", { session_id: id });
         return null;
       });
+
+      if (generation && assistantMsg) {
+        await writer?.finalFlush(acc);
+        await finalizeGenerationDone(generation.id, {
+          assistantMessageId: assistantMsg.id,
+          content: acc,
+          model: chosenModel,
+          routeMeta,
+          webImages: collectedImages,
+          citations: collectedCitations,
+          tokensPrompt: usageRef.current?.prompt_tokens ?? null,
+          tokensCompletion: usageRef.current?.completion_tokens ?? null,
+          durationMs,
+        }).catch(() => {});
+      }
 
       await setSessionLastModel(id, uid, chosenModel).catch(() => {});
 

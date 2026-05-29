@@ -12,6 +12,7 @@ import {
   isTaskCategory,
   isChatMode,
 } from "@/lib/chat";
+import { getActiveGeneration } from "@/lib/generations";
 import type { ChatMode } from "@/lib/chat-client";
 import { logServerError } from "@/lib/logger";
 
@@ -45,8 +46,27 @@ export async function GET(req: Request, ctx: Ctx) {
         { status: 404 },
       );
     }
-    const messages = await listMessages(id);
-    return NextResponse.json({ session, messages });
+    const [messages, activeGen] = await Promise.all([
+      listMessages(id),
+      getActiveGeneration(id).catch(() => null),
+    ]);
+    return NextResponse.json({
+      session,
+      messages,
+      // active_generation: если есть идущая генерация для этой сессии — клиент
+      // подключится к её SSE-стриму через /generations/[id]/stream и увидит
+      // partial content + новые токены.
+      active_generation: activeGen
+        ? {
+            id: activeGen.id,
+            status: activeGen.status,
+            mode: activeGen.mode,
+            content: activeGen.content,
+            user_message_id: activeGen.user_message_id,
+            created_at: activeGen.created_at,
+          }
+        : null,
+    });
   } catch (err) {
     const error_id = await logServerError(err, "/api/chat/sessions/[id] GET");
     return NextResponse.json(
