@@ -24,6 +24,8 @@ import { perplexitySearch, sonarUrlRead } from "./perplexity-search";
 import { extractArticle } from "./article-extract";
 import { chatJson } from "./aimlapi";
 import { ensureEnglish } from "./translate-en";
+import { fetchArticleViaApify } from "./apify-article";
+import { analyzeImageBatch } from "./vision-analyze";
 import {
   buildEnrichmentPrompt,
   validateEnrichmentOutput,
@@ -229,6 +231,38 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     }),
   );
 
+  // ── Шаг D++: Apify article-extractor для первоисточника, если он
+  //    всё ещё пустой (paywall/JS-SPA, sonar тоже не справился). Только
+  //    для was_original — слишком дорого для остальных.
+  let extraApifyCost = 0;
+  if (process.env.APIFY_TOKEN) {
+    const originalEmpty = related.find((r) => r.was_original && (!r.text || r.text.length < 200));
+    if (originalEmpty) {
+      try {
+        const apify = await fetchArticleViaApify(originalEmpty.url, { timeoutMs: 30_000 });
+        if (apify.text && apify.text.length >= 200) {
+          const idx = related.indexOf(originalEmpty);
+          related[idx] = {
+            ...originalEmpty,
+            text: apify.text,
+            title: originalEmpty.title || apify.title,
+            published_at: originalEmpty.published_at || apify.published_at,
+          };
+          extraApifyCost += apify.cost_cents;
+          console.log(`[news/enrich] apify article OK for ${originalEmpty.url} (${apify.text.length} chars)`);
+        }
+      } catch (err) {
+        await logError({
+          level: "warn",
+          source: "server",
+          route: "news/enrich:apify_article",
+          message: err instanceof Error ? err.message : String(err),
+          meta: { url: originalEmpty.url, enrichmentId: job.id },
+        });
+      }
+    }
+  }
+
   // ── Шаг E: Opus full-article синтез ──────────────────────────────────
   const originalPost: OriginalPost = {
     title: item.title,
@@ -238,8 +272,36 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     matched_topics: parseTopics(item.matched_topics_json),
     published_at: item.published_at,
   };
-  const imageList = [...collectedImages];
-  const prompt = buildEnrichmentPrompt(profile, originalPost, search.answer, related, imageList);
+  // ── Шаг D+++: Vision-анализ собранных картинок ──────────────────────
+  // Каждую картинку прогоняем через Sonnet 4.6 vision и спрашиваем:
+  // что это, релевантно ли, какие данные/цифры. Отсеиваем мусор
+  // (логотипы, ads, декорации), оставляем релевантные с подписями.
+  const imageContext = `${item.title ?? ""} | ${(item.body ?? "").slice(0, 300)}`;
+  const visionResult = await analyzeImageBatch([...collectedImages], imageContext, {
+    maxToAnalyze: 8,
+  });
+  const extraVisionCost = visionResult.cost_cents;
+  // В Opus идут только реально полезные картинки с уже сгенерированными
+  // подписями, плюс data_extracted для чартов/скриншотов.
+  const annotatedImages = visionResult.analyses
+    .filter((a) => a.is_relevant && a.category !== "logo" && a.category !== "ad" && a.category !== "decoration")
+    .slice(0, 6);
+  const annotatedImageBlock = annotatedImages
+    .map((a, i) => {
+      const data = a.data_extracted ? `\n   ВЫЖИМКА ДАННЫХ: ${a.data_extracted}` : "";
+      return `${i + 1}. URL: ${a.url}\n   ТИП: ${a.category}\n   ПОДПИСЬ: ${a.caption}${data}`;
+    })
+    .join("\n");
+  console.log(`[news/enrich] vision: ${visionResult.analyses.length} analyzed, ${annotatedImages.length} kept`);
+
+  const prompt = buildEnrichmentPrompt(
+    profile,
+    originalPost,
+    search.answer,
+    related,
+    annotatedImages.map((a) => a.url),
+    annotatedImageBlock,
+  );
   const inputDump = `SYSTEM:\n${prompt.system}\n\n---\nUSER:\n${prompt.user}`;
 
   const syn = await chatJson<unknown>({
@@ -259,7 +321,12 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     synthesis_input: inputDump,
     synthesis_output_json: syn.rawText.slice(0, 32_000),
     model_used: syn.model,
-    cost_cents: search.cost_cents + extraSonarCost + estimateOpusCostCents(syn.rawText),
+    cost_cents:
+      search.cost_cents +
+      extraSonarCost +
+      extraApifyCost +
+      extraVisionCost +
+      estimateOpusCostCents(syn.rawText),
     latency_ms: syn.latencyMs,
   };
 
@@ -277,14 +344,15 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
   }
 
   // Финальный набор картинок: то, что Opus отобрал, + если ничего не вернул —
-  // первые 2 hero_image из источников. Это спасает случаи, когда Opus
+  // первые 2 vision-annotated картинки. Это спасает случаи, когда Opus
   // забыл секцию images.
   let finalImages = parsed.images;
   if (finalImages.length === 0) {
-    finalImages = related
-      .map((r) => (r.hero_image ? { url: r.hero_image, caption: "", source_url: r.url } : null))
-      .filter((x): x is { url: string; caption: string; source_url: string } => x !== null)
-      .slice(0, 2);
+    finalImages = annotatedImages.slice(0, 4).map((a) => ({
+      url: a.url,
+      caption: a.caption,
+      source_url: "", // источник не явный для vision-картинки
+    }));
   }
 
   await completeEnrichment(job.id, {

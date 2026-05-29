@@ -81,6 +81,10 @@ export function buildEnrichmentPrompt(
   perplexityAnswer: string,
   sources: RelatedSource[],
   imageUrls: string[],
+  /** Опционально — заранее проанализированные vision'ом картинки с
+   *  подписями и data_extracted. Если передан — Opus'у не надо самому
+   *  гадать, какие из imageUrls релевантны. */
+  annotatedImageBlock?: string,
 ): EnrichmentPrompt {
   const activeTopics = (profile.topics ?? []).filter((t) => (t.status ?? "active") === "active");
   const topicsBlock =
@@ -133,8 +137,9 @@ export function buildEnrichmentPrompt(
     })
     .join("\n\n---\n\n");
 
-  const imagesBlock =
-    imageUrls.length > 0
+  const imagesBlock = annotatedImageBlock
+    ? `\n\n## КАРТИНКИ С VISION-АНАЛИЗОМ (уже отфильтрованы от мусора, есть подписи и выжимки)\n${annotatedImageBlock}\n\nВыбери до 4 лучших из этого списка для секции images карточки. ИСПОЛЬЗУЙ готовую подпись + источник; для chart/screenshot встрой data_extracted прямо в article_body как факт со ссылкой.`
+    : imageUrls.length > 0
       ? `\n\n## ВСЕ СОБРАННЫЕ КАРТИНКИ (URL, без анализа)\n${imageUrls.slice(0, 20).map((u, i) => `${i + 1}. ${u}`).join("\n")}\nВыбери 1-4 лучшие из этого списка ИЛИ из hero_image у источников; не выдумывай URL'ы.`
       : "";
 
