@@ -21,8 +21,62 @@
   .chatLayout {
     grid-template-columns: 1fr;
   }
+  /* Sidebar превращается в drawer-меню. Закрытое состояние — слева за
+     экраном. Открытое — sliding in поверх контента. */
   .chatSidebar {
-    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(86vw, 320px);
+    z-index: 80;
+    transform: translateX(-100%);
+    transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    box-shadow: 16px 0 48px rgba(0, 0, 0, 0.18);
+  }
+  .chatSidebarOpen {
+    transform: translateX(0);
+  }
+  .chatsBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    background: rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    animation: chatsBackdropFade 200ms ease-out;
+  }
+  @keyframes chatsBackdropFade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}
+
+/* Гамбургер на мобилке — открывает drawer с историей чатов. */
+.chatsHamburger {
+  display: none;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 0;
+  margin-right: 8px;
+}
+.chatsHamburger:hover {
+  background: var(--surface-hover, var(--surface));
+}
+.chatsHamburger:active {
+  background: var(--border);
+}
+@media (max-width: 720px) {
+  .chatsHamburger {
+    display: inline-flex;
   }
 }
 
@@ -683,6 +737,35 @@
 .iconBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Микрофон в режиме записи — красная пульсация. */
+.iconBtnRecording {
+  background: #dc2626;
+  color: #fff;
+  border-color: #dc2626;
+  animation: micPulse 1.4s ease-in-out infinite;
+}
+.iconBtnRecording:hover:not(:disabled) {
+  background: #b91c1c;
+  color: #fff;
+  border-color: #b91c1c;
+}
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.45); }
+  50% { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0); }
+}
+
+/* Расшифровка в процессе — лёгкая подсветка + крутящийся спиннер. */
+.iconBtnBusy {
+  color: var(--text);
+}
+.spinner {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .toolsSpacer {

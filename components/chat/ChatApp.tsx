@@ -225,6 +225,101 @@ function readAsBase64(file: File): Promise<string> {
   });
 }
 
+// ─── Голосовой ввод (MediaRecorder → /api/transcribe) ────────────────
+
+interface VoiceState {
+  recording: boolean;
+  busy: boolean;
+  error: string | null;
+  start: () => Promise<void>;
+  stop: () => void;
+  toggle: () => void;
+}
+
+function useVoiceInput(onText: (text: string) => void): VoiceState {
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const stop = useCallback(() => {
+    try {
+      recorderRef.current?.stop();
+    } catch {
+      // Уже стоп — игнорируем.
+    }
+  }, []);
+
+  const start = useCallback(async () => {
+    setError(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Микрофон не поддерживается этим браузером");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : "";
+      const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      mr.onstop = async () => {
+        setRecording(false);
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        const blob = new Blob(chunksRef.current, { type: chunksRef.current[0]?.type || "audio/webm" });
+        if (blob.size === 0) return;
+        setBusy(true);
+        try {
+          const fd = new FormData();
+          fd.append("audio", blob, "voice.webm");
+          fd.append("language", "ru");
+          const r = await fetch("/api/transcribe", { method: "POST", body: fd });
+          const j = await r.json();
+          if (!r.ok) {
+            throw new Error(j?.error?.message ?? `HTTP ${r.status}`);
+          }
+          const text: string = (j.text ?? "").trim();
+          if (text) onText(text);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        } finally {
+          setBusy(false);
+        }
+      };
+      mr.start();
+      recorderRef.current = mr;
+      setRecording(true);
+    } catch (err) {
+      // Permission-deny / NotAllowedError и проч.
+      setError(err instanceof Error ? err.message : "Нет доступа к микрофону");
+      setRecording(false);
+    }
+  }, [onText]);
+
+  const toggle = useCallback(() => {
+    if (recording) stop();
+    else void start();
+  }, [recording, start, stop]);
+
+  useEffect(() => {
+    return () => {
+      try { recorderRef.current?.stop(); } catch { /* noop */ }
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  return { recording, busy, error, start, stop, toggle };
+}
+
 // ─── Форматирование ──────────────────────────────────────────────────
 
 function formatDuration(ms?: number | null): string | null {
@@ -247,6 +342,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
   // Выбор пользователя в селекторе. Хранится per-chat в БД, тут локальное зеркало.
   const [selection, setSelection] = useState<Selection>({ type: "auto" });
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
+  // Drawer-меню чатов на мобилке. На десктопе sidebar всегда видно.
+  const [chatsDrawerOpen, setChatsDrawerOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -881,9 +978,24 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
 
   return (
     <div className={styles.chatLayout}>
-      <aside className={styles.chatSidebar}>
+      {chatsDrawerOpen && (
+        <div
+          className={styles.chatsBackdrop}
+          onClick={() => setChatsDrawerOpen(false)}
+          aria-hidden
+        />
+      )}
+      <aside
+        className={`${styles.chatSidebar} ${chatsDrawerOpen ? styles.chatSidebarOpen : ""}`}
+      >
         <div className={styles.sessionsPanel}>
-          <button className={styles.newBtn} onClick={newChat}>
+          <button
+            className={styles.newBtn}
+            onClick={() => {
+              newChat();
+              setChatsDrawerOpen(false);
+            }}
+          >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M12 5v14" />
               <path d="M5 12h14" />
@@ -898,7 +1010,10 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
                 <div
                   key={s.id}
                   className={`${styles.sessionItem} ${activeId === s.id ? styles.active : ""}`}
-                  onClick={() => setActiveId(s.id)}
+                  onClick={() => {
+                    setActiveId(s.id);
+                    setChatsDrawerOpen(false);
+                  }}
                 >
                   <div className={styles.sessionTitle} title={s.title}>
                     {s.title || "Без названия"}
@@ -923,6 +1038,18 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
 
       <div className={styles.main}>
         <header className={styles.header}>
+          <button
+            type="button"
+            className={styles.chatsHamburger}
+            onClick={() => setChatsDrawerOpen(true)}
+            aria-label="Открыть список чатов"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <line x1="4" y1="6" x2="20" y2="6" />
+              <line x1="4" y1="12" x2="20" y2="12" />
+              <line x1="4" y1="18" x2="20" y2="18" />
+            </svg>
+          </button>
           <div className={styles.headerTitle}>
             {currentSession?.title || "AI Chat"}
           </div>
@@ -1280,6 +1407,10 @@ function Composer({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragCounter = useRef(0);
+  const voice = useVoiceInput((text) => {
+    // Доклеиваем расшифрованное к текущему input — позволяет дозаписать.
+    setInput((input ? input.trimEnd() + " " : "") + text);
+  });
 
   return (
     <div className={styles.composerOuter}>
@@ -1366,6 +1497,30 @@ function Composer({
               e.target.value = "";
             }}
           />
+
+          <button
+            type="button"
+            className={`${styles.iconBtn} ${voice.recording ? styles.iconBtnRecording : ""} ${voice.busy ? styles.iconBtnBusy : ""}`}
+            onClick={voice.toggle}
+            disabled={sending || voice.busy}
+            title={voice.recording ? "Остановить запись" : voice.busy ? "Расшифровываю…" : "Голосовой ввод"}
+            aria-label={voice.recording ? "Остановить запись" : "Голосовой ввод"}
+            aria-pressed={voice.recording}
+          >
+            {voice.busy ? (
+              // спиннер пока идёт транскрипция
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden className={styles.spinner}>
+                <path d="M12 2 v4 M12 18 v4 M2 12 h4 M18 12 h4 M4.93 4.93 l2.83 2.83 M16.24 16.24 l2.83 2.83 M4.93 19.07 l2.83 -2.83 M16.24 7.76 l2.83 -2.83" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <rect x="9" y="2" width="6" height="12" rx="3" />
+                <path d="M5 11a7 7 0 0 0 14 0" />
+                <path d="M12 18v3" />
+                <path d="M8 22h8" />
+              </svg>
+            )}
+          </button>
 
           <ModeSelector value={selectionValue} onChange={onChangeSelection} disabled={sending} />
 
