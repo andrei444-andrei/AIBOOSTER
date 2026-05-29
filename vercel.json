@@ -12,6 +12,10 @@
     {
       "path": "/api/cron/poll-playlist",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/news/cron/tick",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
