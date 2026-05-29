@@ -40,10 +40,9 @@ export async function GET(req: Request) {
   }
 }
 
-// POST /api/news/enrichment { item_id }
-// Ручной триггер: ставит item в очередь enrichment, даже если автотриггер
-// не сработал (например, если depth был не shallow в предыдущей версии,
-// или если у пользователя есть отдельный show-пост, который он хочет углубить).
+// POST /api/news/enrichment { item_id, force? }
+// Ручной триггер. force=true сбрасывает 'done' в 'pending' — для
+// принудительной пересборки старого enrichment'а с новой версией pipeline.
 export async function POST(req: Request) {
   let body: Record<string, unknown> = {};
   try {
@@ -52,6 +51,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
   const itemId = typeof body.item_id === "string" ? body.item_id : "";
+  const force = body.force === true;
   if (!itemId) return NextResponse.json({ error: "item_id required" }, { status: 400 });
 
   try {
@@ -60,6 +60,12 @@ export async function POST(req: Request) {
     const query = item.title || item.body?.slice(0, 200) || "";
     if (!query.trim()) {
       return NextResponse.json({ error: "item has no title or body to query on" }, { status: 400 });
+    }
+    if (force) {
+      // Сбрасываем status='done' в 'pending', чтобы pipeline пересобрал.
+      const { resetEnrichmentToPending } = await import("@/lib/news");
+      await resetEnrichmentToPending(itemId, query);
+      return NextResponse.json({ ok: true, queued: true, note: "force-resync, поставлено в очередь" });
     }
     const inserted = await enqueueEnrichment(itemId, query);
     return NextResponse.json({

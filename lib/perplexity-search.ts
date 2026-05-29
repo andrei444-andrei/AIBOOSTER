@@ -112,3 +112,98 @@ function extractUrlsFromText(text: string): string[] {
   const found = text.match(re) || [];
   return found.map((u) => u.replace(/[.,;:!?)\]]+$/, ""));
 }
+
+// Sonar URL-read fallback: когда наш HTML-scraper не смог достать текст
+// (paywall / JS-SPA / Cloudflare-блок), просим Perplexity сам прочитать
+// конкретный URL. У Perplexity свой crawler с data-deals со многими
+// изданиями, часто он видит то, что нам недоступно. ~$0.005-0.01 за вызов.
+export interface SonarUrlReadResult {
+  text: string;
+  title: string | null;
+  published_at: string | null;
+  cost_cents: number;
+  latency_ms: number;
+}
+
+export async function sonarUrlRead(
+  url: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<SonarUrlReadResult> {
+  const key = process.env.AIMLAPI_KEY;
+  if (!key) throw new Error("AIMLAPI_KEY is not set");
+  const started = Date.now();
+  const timeoutMs = opts.timeoutMs ?? 20_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/chat/completions`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "perplexity/sonar",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are an article reader. Read the article at the URL given and produce a faithful, " +
+              "thorough extract IN ENGLISH that preserves: headline, byline/author, publication date, " +
+              "ALL key facts, numbers, quotes (verbatim), names, dates, locations. Do not summarize " +
+              "lossily — keep specifics. Do not invent. If the article is paywalled or unreadable, say " +
+              "exactly: 'UNREADABLE'.",
+          },
+          {
+            role: "user",
+            content:
+              `Read and extract this article fully:\n${url}\n\nFormat:\n` +
+              `TITLE: <headline>\nDATE: <publication date if known>\nAUTHOR: <if known>\n\nBODY:\n<full extract>`,
+          },
+        ],
+      }),
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`sonar-url-read timeout after ${timeoutMs}ms`);
+    }
+    throw err;
+  }
+  clearTimeout(timer);
+  const latencyMs = Date.now() - started;
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`sonar-url-read ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const data = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+  const raw = data.choices?.[0]?.message?.content ?? "";
+  if (/^\s*UNREADABLE\s*$/i.test(raw)) {
+    return { text: "", title: null, published_at: null, cost_cents: 0, latency_ms: latencyMs };
+  }
+  const titleMatch = raw.match(/^TITLE:\s*(.+)$/m);
+  const dateMatch = raw.match(/^DATE:\s*(.+)$/m);
+  const bodyMatch = raw.match(/^BODY:\s*([\s\S]+)$/m);
+
+  let pub: string | null = null;
+  if (dateMatch) {
+    const t = Date.parse(dateMatch[1].trim());
+    if (!Number.isNaN(t)) pub = new Date(t).toISOString();
+  }
+  const text = (bodyMatch ? bodyMatch[1] : raw).trim();
+  const inT = data.usage?.prompt_tokens ?? 0;
+  const outT = data.usage?.completion_tokens ?? 0;
+  const cost_cents = Math.ceil((inT * 0.0003 + outT * 0.0015) * 100);
+  return {
+    text: text.length >= 100 ? text : "",
+    title: titleMatch ? titleMatch[1].trim() : null,
+    published_at: pub,
+    cost_cents,
+    latency_ms: latencyMs,
+  };
+}

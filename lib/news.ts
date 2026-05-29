@@ -786,6 +786,38 @@ export async function completeEnrichment(id: string, r: EnrichmentResult): Promi
   });
 }
 
+// Принудительный сброс enrichment'а в 'pending' для force-resync — даже
+// если уже status='done'. Используется при апгрейде pipeline и желании
+// пересобрать существующие карточки.
+export async function resetEnrichmentToPending(itemId: string, searchQuery: string): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const existing = await db.execute({
+    sql: `SELECT id FROM news_enrichments WHERE item_id = ?`,
+    args: [itemId],
+  });
+  if (existing.rows.length > 0) {
+    const id = (existing.rows[0] as unknown as { id: string }).id;
+    await db.execute({
+      sql: `UPDATE news_enrichments
+            SET status = 'pending',
+                locked_until = NULL,
+                synthesis_error = NULL,
+                completed_at = NULL,
+                search_query = ?
+            WHERE id = ?`,
+      args: [searchQuery.slice(0, 1000), id],
+    });
+  } else {
+    const id = randomUUID();
+    await db.execute({
+      sql: `INSERT INTO news_enrichments (id, item_id, status, search_query)
+            VALUES (?, ?, 'pending', ?)`,
+      args: [id, itemId, searchQuery.slice(0, 1000)],
+    });
+  }
+}
+
 export async function getEnrichmentByItem(itemId: string): Promise<NewsEnrichmentRow | null> {
   await ensureSchema();
   const db = getDb();

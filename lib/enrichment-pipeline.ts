@@ -20,7 +20,7 @@ import {
   getActiveProfile,
   type NewsEnrichmentRow,
 } from "./news";
-import { perplexitySearch } from "./perplexity-search";
+import { perplexitySearch, sonarUrlRead } from "./perplexity-search";
 import { extractArticle } from "./article-extract";
 import { chatJson } from "./aimlapi";
 import { ensureEnglish } from "./translate-en";
@@ -190,6 +190,37 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     });
   }
 
+  // ── Шаг D+: Sonar URL-read fallback для источников с пустым текстом ──
+  // У Perplexity свой crawler с data-deals — часто видит paywall/JS-SPA.
+  // Запускаем параллельно, мягко падаем на ошибки.
+  let extraSonarCost = 0;
+  await Promise.all(
+    related.map(async (r, idx) => {
+      if (r.text && r.text.length >= 200) return;
+      try {
+        const read = await sonarUrlRead(r.url, { timeoutMs: 18_000 });
+        if (read.text && read.text.length >= 200) {
+          related[idx] = {
+            ...r,
+            text: read.text,
+            title: r.title || read.title,
+            published_at: r.published_at || read.published_at,
+          };
+          extraSonarCost += read.cost_cents;
+          console.log(`[news/enrich] sonar-url-read OK for ${r.url} (${read.text.length} chars)`);
+        }
+      } catch (err) {
+        await logError({
+          level: "warn",
+          source: "server",
+          route: "news/enrich:sonar_url_read",
+          message: err instanceof Error ? err.message : String(err),
+          meta: { url: r.url, enrichmentId: job.id },
+        });
+      }
+    }),
+  );
+
   // ── Шаг E: Opus full-article синтез ──────────────────────────────────
   const originalPost: OriginalPost = {
     title: item.title,
@@ -220,7 +251,7 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     synthesis_input: inputDump,
     synthesis_output_json: syn.rawText.slice(0, 32_000),
     model_used: syn.model,
-    cost_cents: search.cost_cents + estimateOpusCostCents(syn.rawText),
+    cost_cents: search.cost_cents + extraSonarCost + estimateOpusCostCents(syn.rawText),
     latency_ms: syn.latencyMs,
   };
 
