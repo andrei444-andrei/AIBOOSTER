@@ -6,8 +6,10 @@ import { runEnrichTick } from "@/lib/enrichment-pipeline";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-// Один enrichment может занять до ~50 секунд (Perplexity + fetch'ы + Opus).
-export const maxDuration = 60;
+// Полный enrichment (v1.5): Perplexity sonar-pro (~25s) + параллельный fetch
+// 4-6 источников (~10-15s) + Opus 4.8 синтез длинной статьи (~40-60s).
+// Vercel Pro даёт до 300s, ставим 120 — с запасом, но не на потолке.
+export const maxDuration = 120;
 
 // POST/GET /api/news/enrich/tick — обрабатывает один pending enrichment.
 // Auth — та же конвенция, что и /api/news/cron/tick (см. project convention).

@@ -32,7 +32,11 @@ import {
 
 const SYNTHESIS_MODEL = "claude-opus-4-8";
 const MAX_RELATED_SOURCES = 6;
-const SYNTHESIS_TIMEOUT_MS = 50_000;
+// Бюджет: maxDuration=120s. Perplexity ~30s, fetch'и ~15s параллельно,
+// Opus синтез длинного текста (1500-3000 слов) — до 70s. Остаётся ~10s
+// запас.
+const SYNTHESIS_TIMEOUT_MS = 70_000;
+const PERPLEXITY_TIMEOUT_MS = 35_000;
 
 export interface EnrichTickStats {
   processed: number;
@@ -104,7 +108,7 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
 
   // ── Шаг B: Perplexity search ─────────────────────────────────────────
   const searchQuery = buildSearchQuery(title, originalSourceUrl);
-  const search = await perplexitySearch(searchQuery, { timeoutMs: 25_000 });
+  const search = await perplexitySearch(searchQuery, { timeoutMs: PERPLEXITY_TIMEOUT_MS });
 
   // ── Шаг C: список URL'ов для парсинга ────────────────────────────────
   // Дедуп по host (не берём 3 страницы одного сайта). Первоисточник
