@@ -14,8 +14,9 @@
 //   delta { text }            ← токены судьи, как обычно
 //   done { route: RouteMeta }  ← route_meta.ensemble=true, candidates, judge
 
-import { MODELS, chat, chatStream, type ChatMessage, type ChatOptions } from "./ai";
+import { MODELS, chat, chatStream, AIError, type ChatMessage, type ChatOptions } from "./ai";
 import { getModelOption, type TaskCategory } from "./chat-client";
+import { logServerError } from "./logger";
 
 // ─── Конфигурация ансамблей ─────────────────────────────────────────
 
@@ -263,6 +264,16 @@ async function runCandidate(
   } catch (err) {
     const duration_ms = Date.now() - t;
     const message = err instanceof Error ? err.message : String(err);
+    // Логируем падение кандидата в app_errors — без этого root cause
+    // приходится воспроизводить вручную, как было с Perplexity 400.
+    // Мягкий fire-and-forget: ошибка лога не должна валить ансамбль.
+    const body = err instanceof AIError ? err.body : undefined;
+    logServerError(err, "ensemble:candidate", {
+      model,
+      duration_ms,
+      api_status: err instanceof AIError ? err.status : undefined,
+      api_body: body ? body.slice(0, 800) : undefined,
+    }).catch(() => {});
     handlers.onCandidateError?.(model, message);
     return { model, duration_ms, tokens: 0, response: "", error: message };
   }
