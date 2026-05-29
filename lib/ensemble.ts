@@ -14,7 +14,18 @@
 //   delta { text }            ← токены судьи, как обычно
 //   done { route: RouteMeta }  ← route_meta.ensemble=true, candidates, judge
 
-import { MODELS, chat, chatStream, AIError, type ChatMessage, type ChatOptions } from "./ai";
+import {
+  MODELS,
+  chat,
+  chatStream,
+  AIError,
+  normalizeCitation,
+  normalizeImage,
+  type ChatMessage,
+  type ChatOptions,
+  type WebCitation,
+  type WebImage,
+} from "./ai";
 import { getModelOption, type TaskCategory } from "./chat-client";
 import { logServerError } from "./logger";
 
@@ -48,7 +59,11 @@ const JUDGE_BASE_SYSTEM = `Тебе даны N независимых ответ
 Правила синтеза:
 1. Факты — кросс-валидируй. При расхождении выбирай того кандидата, у кого есть источник или конкретика, а не общие слова.
 2. Структура — выбирай САМУЮ ИНФОРМАТИВНУЮ форму под содержимое (заголовки, таблицы GFM, списки, **жирный** для ключевых сущностей). Не ленись делать таблицы там, где они уместны.
-3. Источники — сохраняй ВСЕ URL и названия источников, которые упомянули кандидаты. Без потерь.
+3. Источники — **СТРОГО ОБЯЗАТЕЛЬНО**. Если у кандидата есть блок «ИСТОЧНИКИ КАНДИДАТА N (URL'ы по номерам)», ты ОБЯЗАН:
+   а) Вшить эти URL **inline** прямо в текст в формате \`[короткое название](URL)\` рядом с фактом, который оттуда взят. Не в конце предложения — а в той самой фразе, где приводится цифра/имя/дата.
+   б) Внутри таблиц добавить колонку «Источник» с кликабельной ссылкой \`[название](url)\` для каждой строки данных, либо ставить \`[\\[1\\]](url)\` после ячейки.
+   в) В САМОМ КОНЦЕ ответа — раздел \`## Источники\` или \`**Источники:**\` с нумерованным списком всех использованных URL.
+   г) НЕ пиши маркеры \`[1]\` без ссылки. Если упомянул номер — обязательно сделай его кликабельным \`[\\[1\\]](url)\`.
 4. Галлюцинации — выкидывай. Слабо обоснованные утверждения — тоже.
 5. НЕ пиши «Модель A сказала X», «По мнению нескольких моделей», «Большинство моделей считают». Выдай бесшовный ответ, как от одной сильной модели.
 6. ЗАПРЕЩЕНО начинать ответ с ярлыков «Короткий ответ:», «TL;DR:», «Кратко:», «Резюме:», «В двух словах:». Начинай сразу с сути — фактом, цифрой, тезисом, заголовком или таблицей. Никаких подводок.
@@ -101,6 +116,10 @@ export interface CandidateResult {
   duration_ms: number;
   tokens: number;
   response: string;
+  /** URL-источники, на которые ссылался кандидат (Perplexity Sonar и подобные). */
+  citations?: WebCitation[];
+  /** Картинки от веб-поиска. */
+  images?: WebImage[];
   /** Если задано — кандидат упал, response пустой, судья работал без него. */
   error?: string;
 }
@@ -259,8 +278,33 @@ async function runCandidate(
     if (!response || !response.trim()) {
       throw new Error(`empty content (finish=${r.choices?.[0]?.finish_reason ?? "?"})`);
     }
+    // Веб-источники и картинки от поисковых моделей (Perplexity Sonar): в
+    // non-stream ответе AIMLAPI они лежат на верхнем уровне как `citations`
+    // / `search_results` / `images`. Дедуп и нормализация — общими утилитами.
+    const rawCits = Array.isArray(r.citations)
+      ? r.citations
+      : Array.isArray(r.search_results)
+        ? r.search_results
+        : [];
+    const seenCit = new Set<string>();
+    const citations: WebCitation[] = [];
+    for (const c of rawCits) {
+      const n = normalizeCitation(c);
+      if (!n || seenCit.has(n.url)) continue;
+      seenCit.add(n.url);
+      citations.push(n);
+    }
+    const rawImgs = Array.isArray(r.images) ? r.images : [];
+    const seenImg = new Set<string>();
+    const images: WebImage[] = [];
+    for (const img of rawImgs) {
+      const n = normalizeImage(img);
+      if (!n || seenImg.has(n.image_url)) continue;
+      seenImg.add(n.image_url);
+      images.push(n);
+    }
     handlers.onCandidateDone?.(model, duration_ms, tokens);
-    return { model, duration_ms, tokens, response };
+    return { model, duration_ms, tokens, response, citations, images };
   } catch (err) {
     const duration_ms = Date.now() - t;
     const message = err instanceof Error ? err.message : String(err);
@@ -285,6 +329,15 @@ function buildJudgeUserMessage(original: string, candidates: CandidateResult[]):
   candidates.forEach((c, i) => {
     const label = getModelOption(c.model).label;
     parts.push(`ОТВЕТ КАНДИДАТА ${i + 1} (${label}):\n${c.response}\n`);
+    if (c.citations && c.citations.length > 0) {
+      // Подсовываем судье карту [N] → URL, чтобы он мог встроить ссылки
+      // прямо в текст вместо безымянных [1] [2] маркеров кандидата.
+      const lines = c.citations.map(
+        (src, j) =>
+          `[${j + 1}] ${src.title ? `${src.title.replace(/\s+/g, " ").trim()} — ` : ""}${src.url}`,
+      );
+      parts.push(`ИСТОЧНИКИ КАНДИДАТА ${i + 1} (URL'ы по номерам):\n${lines.join("\n")}\n`);
+    }
   });
   parts.push(`Финальный ответ:`);
   return parts.join("\n");

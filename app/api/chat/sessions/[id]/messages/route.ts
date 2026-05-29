@@ -431,6 +431,28 @@ export async function POST(req: Request, ctx: Ctx) {
             return;
           }
 
+          // Сводим картинки и цитаты от всех кандидатов в общий пул для UI:
+          // фронт уже умеет рендерить web_images-мозаику и citations-чипы
+          // в обычном single-model flow — переиспользуем тот же канал.
+          for (const c of result.candidates) {
+            for (const img of c.images ?? []) {
+              if (seenImages.has(img.image_url)) continue;
+              seenImages.add(img.image_url);
+              collectedImages.push(img);
+            }
+            for (const cit of c.citations ?? []) {
+              if (seenCitations.has(cit.url)) continue;
+              seenCitations.add(cit.url);
+              collectedCitations.push(cit);
+            }
+          }
+          if (collectedImages.length > 0) {
+            send("web_images", { images: collectedImages });
+          }
+          if (collectedCitations.length > 0) {
+            send("citations", { citations: collectedCitations });
+          }
+
           const routeMeta: RouteMeta = {
             category: decision.category,
             complexity: decision.complexity,
@@ -455,6 +477,16 @@ export async function POST(req: Request, ctx: Ctx) {
             total_duration_ms: result.total_duration_ms,
           };
 
+          // Веб-картинки сохраняем в attachments (image_url) — чтобы они
+          // оставались в истории при перезагрузке, как в single-model flow.
+          const webImageAttachments = collectedImages.slice(0, 8).map((img, i) => ({
+            filename: img.title ? img.title.slice(0, 100) : `web-image-${i + 1}`,
+            mime_type: "image/*",
+            size: 0,
+            kind: "image_url" as const,
+            content_text: img.image_url,
+          }));
+
           const assistantMsg = await appendMessage(id, "assistant", acc, {
             // «model» для дисплея — судья. Это то, что финально отвечало.
             model: result.judge.model,
@@ -462,6 +494,7 @@ export async function POST(req: Request, ctx: Ctx) {
             tokensCompletion: judgeUsageRef.current?.completion_tokens ?? judgeTokens,
             durationMs,
             routeMeta,
+            attachments: webImageAttachments.length ? webImageAttachments : undefined,
           }).catch(async (err) => {
             await logServerError(err, "/api/chat/sessions/[id]/messages save ensemble", {
               session_id: id,

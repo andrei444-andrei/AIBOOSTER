@@ -84,6 +84,11 @@ export interface ChatCompletion {
     completion_tokens: number;
     total_tokens: number;
   };
+  // Веб-поисковые модели (Perplexity Sonar и др.) добавляют верхнеуровневые
+  // поля с источниками и картинками. У обычных моделей их нет.
+  images?: unknown[];
+  citations?: unknown[];
+  search_results?: unknown[];
 }
 
 export class AIError extends Error {
@@ -177,7 +182,7 @@ interface PplxCitationItem {
   url?: string;
   title?: string;
 }
-function normalizeImage(it: unknown): WebImage | null {
+export function normalizeImage(it: unknown): WebImage | null {
   if (typeof it === "string") return { image_url: it };
   if (!it || typeof it !== "object") return null;
   const x = it as PplxImageItem;
@@ -185,7 +190,7 @@ function normalizeImage(it: unknown): WebImage | null {
   if (!url || typeof url !== "string") return null;
   return { image_url: url, origin_url: x.origin_url ?? x.origin, title: x.title };
 }
-function normalizeCitation(it: unknown): WebCitation | null {
+export function normalizeCitation(it: unknown): WebCitation | null {
   if (typeof it === "string") return { url: it };
   if (!it || typeof it !== "object") return null;
   const x = it as PplxCitationItem;
