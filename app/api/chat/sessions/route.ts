@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createSession, listSessions, isKnownModel, isTaskCategory } from "@/lib/chat";
+import { createSession, listSessions, isKnownModel, isTaskCategory, isChatMode } from "@/lib/chat";
+import type { ChatMode } from "@/lib/chat-client";
 import { logServerError } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -34,6 +35,7 @@ export async function GET(req: Request) {
 }
 
 interface CreateBody {
+  mode?: ChatMode | null;
   modelOverride?: string | null;
   categoryOverride?: string | null;
   title?: string;
@@ -53,6 +55,7 @@ export async function POST(req: Request) {
   } catch {
     // пустое тело — OK
   }
+  const mode = body.mode && isChatMode(body.mode) ? body.mode : null;
   const modelOverride =
     body.modelOverride && isKnownModel(body.modelOverride) ? body.modelOverride : null;
   const categoryOverride =
@@ -60,6 +63,7 @@ export async function POST(req: Request) {
   const title = body.title?.slice(0, 200);
   try {
     const session = await createSession(uid, {
+      mode,
       modelOverride,
       categoryOverride,
       title,

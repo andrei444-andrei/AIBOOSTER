@@ -6,10 +6,14 @@ import {
   renameSession,
   setSessionModelOverride,
   setSessionCategoryOverride,
+  setSessionMode,
   clearSessionOverride,
   isKnownModel,
   isTaskCategory,
+  isChatMode,
 } from "@/lib/chat";
+import { getActiveGeneration } from "@/lib/generations";
+import type { ChatMode } from "@/lib/chat-client";
 import { logServerError } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -42,8 +46,27 @@ export async function GET(req: Request, ctx: Ctx) {
         { status: 404 },
       );
     }
-    const messages = await listMessages(id);
-    return NextResponse.json({ session, messages });
+    const [messages, activeGen] = await Promise.all([
+      listMessages(id),
+      getActiveGeneration(id).catch(() => null),
+    ]);
+    return NextResponse.json({
+      session,
+      messages,
+      // active_generation: если есть идущая генерация для этой сессии — клиент
+      // подключится к её SSE-стриму через /generations/[id]/stream и увидит
+      // partial content + новые токены.
+      active_generation: activeGen
+        ? {
+            id: activeGen.id,
+            status: activeGen.status,
+            mode: activeGen.mode,
+            content: activeGen.content,
+            user_message_id: activeGen.user_message_id,
+            created_at: activeGen.created_at,
+          }
+        : null,
+    });
   } catch (err) {
     const error_id = await logServerError(err, "/api/chat/sessions/[id] GET");
     return NextResponse.json(
@@ -55,11 +78,13 @@ export async function GET(req: Request, ctx: Ctx) {
 
 interface PatchBody {
   title?: string;
-  /** Конкретная модель (строка) ИЛИ null = снять. */
+  /** Режим (thinking/pro/judge/image) ИЛИ null = Auto. Имеет приоритет над model/category. */
+  mode?: ChatMode | null;
+  /** Конкретная модель (строка) ИЛИ null = снять (legacy). */
   modelOverride?: string | null;
-  /** Категория-пресет (quick|...) ИЛИ null = снять. */
+  /** Категория-пресет ИЛИ null = снять (legacy). */
   categoryOverride?: string | null;
-  /** Полностью сбросить выбор → Auto. Эквивалентно modelOverride=null + categoryOverride=null. */
+  /** Полностью сбросить выбор → Auto. Эквивалентно mode=null + modelOverride=null + categoryOverride=null. */
   reset?: boolean;
 }
 
@@ -88,6 +113,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
     if (body.reset) {
       await clearSessionOverride(id, uid);
+    } else if ("mode" in body) {
+      if (body.mode === null) {
+        await setSessionMode(id, uid, null);
+      } else if (isChatMode(body.mode)) {
+        await setSessionMode(id, uid, body.mode);
+      }
     } else if ("modelOverride" in body) {
       if (body.modelOverride === null) {
         await setSessionModelOverride(id, uid, null);

@@ -369,6 +369,85 @@ async function fetchImageAsBase64(url: string): Promise<GeneratedImage> {
   return { base64: buf.toString("base64"), mime };
 }
 
+// ─── Аудио → текст (OpenAI direct, не через AIMLAPI) ───────────────
+//
+// AIMLAPI не поддерживает /v1/audio/transcriptions (whisper-* и
+// gpt-4o-audio-preview возвращают 404). Поэтому транскрипция идёт через
+// OpenAI напрямую — единственный сценарий, где мы используем отдельный
+// провайдерский ключ. Это исключение к §4 конституции, явно одобренное
+// владельцем (см. /CLAUDE.md).
+//
+// Модель по умолчанию — gpt-4o-transcribe (SOTA-2025, лучше Whisper на
+// сложной речи). Альтернативы: gpt-4o-mini-transcribe (дешевле, быстрее),
+// whisper-1 (базовый).
+
+const OPENAI_BASE_URL = "https://api.openai.com/v1";
+
+export interface TranscribeOptions {
+  /** Аудио-файл как Blob / File. */
+  audio: Blob;
+  /** Имя файла (для распознавания формата по расширению — webm/wav/mp3/m4a/...). */
+  filename: string;
+  /** ISO-639-1 код языка (ru/en/...). Подсказка модели. Опционально. */
+  language?: string;
+  /** Модель. Дефолт gpt-4o-transcribe — SOTA для русского. */
+  model?: string;
+  /** Подсказка контекста (имена, термины). Опционально, до 244 токенов. */
+  prompt?: string;
+}
+
+export interface TranscribeResult {
+  text: string;
+  language?: string;
+  duration?: number;
+}
+
+function getOpenAIKeyOrThrow(): string {
+  const k = process.env.OPENAI_API_KEY;
+  if (!k) {
+    throw new AIError(
+      "OPENAI_API_KEY is not set — голосовой ввод требует прямого OpenAI-ключа (см. .env.example)",
+      503,
+    );
+  }
+  return k;
+}
+
+export async function transcribeAudio(
+  opts: TranscribeOptions,
+  init?: { signal?: AbortSignal },
+): Promise<TranscribeResult> {
+  const key = getOpenAIKeyOrThrow();
+  const fd = new FormData();
+  fd.append("file", opts.audio, opts.filename);
+  fd.append("model", opts.model ?? "gpt-4o-transcribe");
+  if (opts.language) fd.append("language", opts.language);
+  if (opts.prompt) fd.append("prompt", opts.prompt);
+  // gpt-4o-transcribe возвращает только "json" — простой { text } объект.
+  fd.append("response_format", "json");
+
+  const resp = await fetch(`${OPENAI_BASE_URL}/audio/transcriptions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}` },
+    body: fd,
+    signal: init?.signal,
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new AIError(
+      `OpenAI transcribe ${resp.status} ${resp.statusText}`,
+      resp.status,
+      body || undefined,
+    );
+  }
+  const j = (await resp.json()) as { text?: string; language?: string; duration?: number };
+  if (typeof j.text !== "string") {
+    throw new AIError("OpenAI transcribe: missing text field", 502, JSON.stringify(j));
+  }
+  return { text: j.text, language: j.language, duration: j.duration };
+}
+
 export async function generateImage(
   opts: ImageGenOptions,
   init?: { signal?: AbortSignal },

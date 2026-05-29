@@ -44,6 +44,7 @@ const COLUMN_MIGRATIONS: ColumnAddition[] = [
   { table: "chat_sessions", column: "mode", ddl: "mode TEXT NOT NULL DEFAULT 'normal'" },
   { table: "chat_sessions", column: "model_override", ddl: "model_override TEXT" },
   { table: "chat_sessions", column: "category_override", ddl: "category_override TEXT" },
+  { table: "chat_sessions", column: "mode", ddl: "mode TEXT" },
   { table: "chat_messages", column: "duration_ms", ddl: "duration_ms INTEGER" },
   { table: "chat_messages", column: "route_meta", ddl: "route_meta TEXT" },
   // Подкаст-плеер для YouTube-переводов.

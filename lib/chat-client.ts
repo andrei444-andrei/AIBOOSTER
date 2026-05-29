@@ -220,6 +220,69 @@ export function isTaskCategory(v: unknown): v is TaskCategory {
   );
 }
 
+// ─── Режимы ответа (основная ось выбора для пользователя) ──────────
+//
+// Категории выше — внутренний сигнал классификатора (определяют
+// system_addon и формат). Пользователь видит эти режимы:
+//
+//   - thinking — дефолт. Sonar тянет факты из веба → gpt-5-mini reasoning
+//     синтезирует. Веб-поиск + средний reasoning. ~15-25с.
+//   - pro — то же самое, но gpt-5 reasoning=high. Веб-поиск + макс reasoning. ~30-50с.
+//   - judge — ансамбль 4 моделей + GPT-5 high судья. ~60-90с. Opt-in.
+//   - image — генерация картинок (отдельный пайплайн).
+//
+// Веб-поиск во всех текстовых режимах. Quick удалён («ниже thinking не нужно»).
+
+export type ChatMode = "thinking" | "pro" | "judge" | "image";
+
+export const CHAT_MODES: ChatMode[] = ["thinking", "pro", "judge", "image"];
+
+export interface ModeMeta {
+  id: ChatMode;
+  label: string;
+  icon: string;
+  hint: string;
+  /** Ожидаемая длительность для UI-индикатора. */
+  expectedSeconds: string;
+}
+
+export const MODE_META: Record<ChatMode, ModeMeta> = {
+  thinking: {
+    id: "thinking",
+    label: "Thinking",
+    icon: "💭",
+    hint: "Веб-поиск + gpt-5-mini reasoning. Дефолт для большинства вопросов.",
+    expectedSeconds: "~15-25с",
+  },
+  pro: {
+    id: "pro",
+    label: "Pro",
+    icon: "⚡",
+    hint: "Веб-поиск + gpt-5 reasoning=high. Когда нужно качество выше.",
+    expectedSeconds: "~30-50с",
+  },
+  judge: {
+    id: "judge",
+    label: "Judge",
+    icon: "⚖",
+    hint: "Ансамбль 4 моделей + судья. Максимум качества и сравнение перспектив.",
+    expectedSeconds: "~60-90с",
+  },
+  image: {
+    id: "image",
+    label: "Картинка",
+    icon: "🎨",
+    hint: "Сгенерировать изображение по описанию.",
+    expectedSeconds: "~10-20с",
+  },
+};
+
+export const DEFAULT_MODE: ChatMode = "thinking";
+
+export function isChatMode(v: unknown): v is ChatMode {
+  return v === "thinking" || v === "pro" || v === "judge" || v === "image";
+}
+
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
 export const REASONING_EFFORTS: ReasoningEffort[] = ["minimal", "low", "medium", "high"];
 export function isReasoningEffort(v: unknown): v is ReasoningEffort {
