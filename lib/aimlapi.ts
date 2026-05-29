@@ -107,10 +107,12 @@ export async function chatJson<T>(input: ChatJsonInput): Promise<ChatJsonResult<
 }
 
 // Сначала пробуем JSON.parse как есть. Если не вышло — снимаем markdown-fences
-// и пробуем снова. В последнюю очередь — regex по первому сбалансированному
-// {...} или [...]-блоку (нужно для Claude через aimlapi, который иногда
-// добавляет "Here is the JSON:" перед телом). Учитываем строки — внутри
-// "..."-литерала фигурные скобки не считаем за уровень вложенности.
+// и пробуем снова. Затем — jsonrepair (мощный библиотечный парсер, умеет
+// чинить незакрытые скобки, висящие строки, trailing commas, single-quotes
+// и т.п. — типичные косяки LLM-output'а, особенно при truncation на
+// max_tokens). В самом конце — наш фолбэк по balanced-braces.
+import { jsonrepair } from "jsonrepair";
+
 export function extractJsonObject(text: string): unknown | null {
   const t = text.trim();
   if (!t) return null;
@@ -133,7 +135,16 @@ export function extractJsonObject(text: string): unknown | null {
     }
   }
 
-  // Ищем первый '{' или '['.
+  // jsonrepair: спасает 95%+ случаев — обрезанный output, незакрытые
+  // строки, trailing commas, escape-проблемы.
+  try {
+    const repaired = jsonrepair(stripped);
+    return JSON.parse(repaired);
+  } catch {
+    /* fallthrough */
+  }
+
+  // Финальный фолбэк: ищем первый сбалансированный {...} или [...].
   let first = -1;
   let openCh = "{";
   let closeCh = "}";
@@ -151,60 +162,36 @@ export function extractJsonObject(text: string): unknown | null {
   let depth = 0;
   let inStr = false;
   let escape = false;
-  let stackTrace: string[] = []; // что открыли (для восстановления)
   for (let i = first; i < stripped.length; i++) {
     const ch = stripped[i];
     if (inStr) {
-      if (escape) {
-        escape = false;
-        continue;
-      }
-      if (ch === "\\") {
-        escape = true;
-        continue;
-      }
+      if (escape) { escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
       if (ch === '"') inStr = false;
       continue;
     }
-    if (ch === '"') {
-      inStr = true;
-      continue;
-    }
-    if (ch === "{" || ch === "[") {
-      depth++;
-      stackTrace.push(ch);
-    } else if (ch === "}" || ch === "]") {
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === openCh) depth++;
+    else if (ch === closeCh) {
       depth--;
-      stackTrace.pop();
       if (depth === 0) {
         const slice = stripped.slice(first, i + 1);
         try {
           return JSON.parse(slice);
         } catch {
-          return null;
+          try {
+            return JSON.parse(jsonrepair(slice));
+          } catch {
+            return null;
+          }
         }
       }
     }
   }
-  // ДОБАВКА: response был ОБРЕЗАН (depth > 0, дошли до конца). Пробуем
-  // спасти — закрываем строку и оставшиеся открытые скобки/массивы.
-  if (depth > 0) {
-    let salvage = stripped.slice(first);
-    if (inStr) salvage += '"'; // закрываем висящую строку
-    // Если последний символ — запятая или незавершённый ключ — обрежем до
-    // последней валидной запятой/значения.
-    salvage = salvage.replace(/,\s*$/, "");
-    salvage = salvage.replace(/"\s*:\s*$/, '": null');
-    salvage = salvage.replace(/:\s*$/, ": null");
-    // Закрываем стек в обратном порядке.
-    for (let i = stackTrace.length - 1; i >= 0; i--) {
-      salvage += stackTrace[i] === "{" ? "}" : "]";
-    }
-    try {
-      return JSON.parse(salvage);
-    } catch {
-      return null;
-    }
+  // Truncated: пробуем repair того что есть.
+  try {
+    return JSON.parse(jsonrepair(stripped.slice(first)));
+  } catch {
+    return null;
   }
-  return null;
 }
