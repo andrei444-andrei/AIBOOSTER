@@ -27,9 +27,11 @@ const SUGGEST_MODEL = "claude-sonnet-4-6";
 
 // Один запрос на ВЕСЬ профиль. Возвращает JSON-массив с 2-4 источниками
 // на тему. Если что-то не парсится — soft-fail, возвращаем пусто.
+// existingHosts — уже добавленные домены, чтобы модель не предлагала их повторно.
 export async function suggestSourcesForProfile(
   profile: InterestProfile,
   perTopic = 3,
+  existingHosts: string[] = [],
 ): Promise<SourceSuggestion[]> {
   const active = (profile.topics ?? []).filter((t): t is InterestTopic => (t.status ?? "active") === "active");
   if (active.length === 0) return [];
@@ -48,21 +50,31 @@ export async function suggestSourcesForProfile(
   void ensureEnglish; // оставлен импортом на случай возврата к Sonar
 
   const system =
-    `You are a news-feed curator. For a personal reader with the topics below, suggest the most ` +
-    `authoritative recurring news sources — primary outlets, expert blogs, Telegram channels, RSS feeds. ` +
-    `Avoid aggregators (Hacker News-style) UNLESS they're the standard for that field. Avoid dead, ` +
-    `paywalled-only, or low-signal sites. Mix English and Russian sources where appropriate.\n\n` +
-    `Return STRICT JSON (no markdown, no preamble) shaped like:\n` +
+    `You are a news-feed curator. For a personal reader with the topics below, suggest authoritative ` +
+    `recurring news sources — primary outlets, expert blogs, Telegram channels, RSS feeds, ` +
+    `Substacks. Mix popular and niche/underground sources. Avoid aggregators (Hacker News-style) ` +
+    `UNLESS they're the standard for that field. Avoid dead, paywalled-only, or low-signal sites.\n\n` +
+    `IMPORTANT: ` +
+    `(1) If user listed any "existing domains" — DO NOT suggest those hosts again, pick alternatives.\n` +
+    `(2) Don't suggest only the obvious top-3 outlets — include lesser-known but high-signal ` +
+    `experts (specific authors' Substack, Twitter list curators, niche Telegram channels).\n` +
+    `(3) Mix English and Russian where appropriate; for tech/AI English dominates, for Russian ` +
+    `startup market — Russian sources are valuable.\n\n` +
+    `Return STRICT JSON (no markdown, no preamble):\n` +
     `{ "suggestions": [\n` +
     `  { "topic_name": string,        // ровно одно из имён тем ниже\n` +
     `    "name": string,              // короткое имя источника для UI\n` +
     `    "url": string,               // прямая ссылка (https://t.me/CHANNEL, https://blog.../feed, https://site.com)\n` +
     `    "kind_hint": "telegram" | "rss" | "web",\n` +
-    `    "why": string                // 1 короткая фраза почему этот источник\n` +
+    `    "why": string                // 1 короткая фраза почему\n` +
     `  }\n` +
     `]}`;
 
-  const user = `TOPICS:\n${englishTopics}\n\nSuggest ${perTopic} sources per topic. Output JSON only.`;
+  const existingBlock = existingHosts.length > 0
+    ? `\n\nEXISTING DOMAINS (don't repeat — already in user's feed):\n${existingHosts.slice(0, 100).join(", ")}\n`
+    : "";
+
+  const user = `TOPICS:\n${englishTopics}${existingBlock}\n\nSuggest ${perTopic} sources per topic. Output JSON only.`;
 
   try {
     const { parsed, rawText } = await chatJson<{ suggestions?: unknown }>({

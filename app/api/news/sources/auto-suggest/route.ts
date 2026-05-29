@@ -31,7 +31,14 @@ export async function POST(req: Request) {
       );
     }
 
-    const suggestions = await suggestSourcesForProfile(profile, perTopic);
+    // Передаём список уже добавленных доменов чтобы модель не предлагала их снова.
+    const existing = await listSources();
+    const seenHosts: string[] = [];
+    for (const s of existing) {
+      const h = safeHost(s.url);
+      if (h) seenHosts.push(h);
+    }
+    const suggestions = await suggestSourcesForProfile(profile, perTopic, seenHosts);
     if (suggestions.length === 0) {
       return NextResponse.json({
         added: [],
@@ -41,13 +48,9 @@ export async function POST(req: Request) {
       });
     }
 
-    // Дедуп по хосту (включая существующие источники).
-    const existing = await listSources();
-    const seenHosts = new Set<string>();
-    for (const s of existing) {
-      const h = safeHost(s.url);
-      if (h) seenHosts.add(h);
-    }
+    // Дедуп по хосту (теперь Set из уже-собранных existing — но мы уже
+    // загрузили это выше, переиспользуем).
+    const seenSet = new Set<string>(seenHosts);
 
     const added: Array<{ url: string; name: string; kind: SourceKind; topic: string; why: string }> = [];
     const skipped: Array<{ url: string; reason: string; topic?: string; why?: string }> = [];
@@ -65,7 +68,7 @@ export async function POST(req: Request) {
           skipped.push({ url: s.url, reason: "невалидный URL", topic: s.topic_name });
           continue;
         }
-        if (seenHosts.has(host)) {
+        if (seenSet.has(host)) {
           skipped.push({ url: s.url, reason: "дубликат (уже есть из этого домена)", topic: s.topic_name });
           continue;
         }
@@ -96,7 +99,7 @@ export async function POST(req: Request) {
             name: s.name,
             fetch_interval_minutes: 60,
           });
-          seenHosts.add(host);
+          seenSet.add(host);
           added.push({ url: row.url, name: row.name, kind, topic: s.topic_name, why: s.why });
         } catch (err) {
           skipped.push({
