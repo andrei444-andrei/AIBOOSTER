@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 // Светящееся-серое оформление в стилистике /admin и app/page.tsx.
 const wrap: React.CSSProperties = { maxWidth: 1100, margin: "0 auto", padding: "32px 24px" };
@@ -90,7 +90,6 @@ const LIKE_REASONS = ["точно по теме", "практично/приме
 const DISLIKE_REASONS = ["не моя тема", "поверхностно", "уже видел", "кликбейт"];
 
 export default function NewsPage() {
-  const [token, setToken] = useState<string>("");
   const [tab, setTab] = useState<Tab>("feed");
   const [items, setItems] = useState<NewsItem[]>([]);
   const [skipped, setSkipped] = useState<NewsItem[]>([]);
@@ -99,43 +98,11 @@ export default function NewsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const u = new URL(window.location.href);
-    let t = u.searchParams.get("token") ?? "";
-    if (!t) {
-      try {
-        t = window.sessionStorage.getItem("aibooster_token") ?? "";
-      } catch {
-        /* ignore */
-      }
-    } else {
-      try {
-        window.sessionStorage.setItem("aibooster_token", t);
-      } catch {
-        /* ignore */
-      }
-      // Чистим ?token=... из URL: не попадает в history, в Referer, в логи.
-      u.searchParams.delete("token");
-      window.history.replaceState({}, "", u.toString());
-    }
-    setToken(t);
-  }, []);
-
-  const authHeader = useMemo<Record<string, string>>(
-    () => {
-      const h: Record<string, string> = {};
-      if (token) h.authorization = `Bearer ${token}`;
-      return h;
-    },
-    [token],
-  );
-
   const loadFeed = useCallback(async () => {
-    if (!token) return;
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch("/api/news/items?verdict=show&limit=100", { headers: authHeader });
+      const r = await fetch("/api/news/items?verdict=show&limit=100");
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       setItems(data.items ?? []);
@@ -144,14 +111,13 @@ export default function NewsPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, authHeader]);
+  }, []);
 
   const loadSkipped = useCallback(async () => {
-    if (!token) return;
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch("/api/news/items/skipped?limit=100", { headers: authHeader });
+      const r = await fetch("/api/news/items/skipped?limit=100");
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       setSkipped(data.items ?? []);
@@ -160,16 +126,15 @@ export default function NewsPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, authHeader]);
+  }, []);
 
   const loadDebug = useCallback(async () => {
-    if (!token) return;
     setLoading(true);
     setError(null);
     try {
       const [pr, dr] = await Promise.all([
-        fetch("/api/news/prompt", { headers: authHeader }),
-        fetch("/api/news/decisions?limit=50", { headers: authHeader }),
+        fetch("/api/news/prompt"),
+        fetch("/api/news/decisions?limit=50"),
       ]);
       const pd = await pr.json();
       const dd = await dr.json();
@@ -182,37 +147,33 @@ export default function NewsPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, authHeader]);
+  }, []);
 
   useEffect(() => {
-    if (!token) return;
     if (tab === "feed") void loadFeed();
     else if (tab === "skipped") void loadSkipped();
     else void loadDebug();
-  }, [token, tab, loadFeed, loadSkipped, loadDebug]);
+  }, [tab, loadFeed, loadSkipped, loadDebug]);
 
   const sendFeedback = async (item_id: string, signal: "like" | "dislike", reason?: string) => {
     try {
       await fetch("/api/news/feedback", {
         method: "POST",
-        headers: { "content-type": "application/json", ...authHeader },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ item_id, signal, reason_chip: reason ?? null }),
       });
     } catch (e) {
-      // soft-fail для UI: фидбэк опционален
       console.error("feedback failed", e);
     }
   };
 
   const promote = async (item_id: string) => {
-    // Оптимистично убираем из "Отсеяно" — пользователь видит результат сразу,
-    // не ждёт re-fetch'а. Если бэк ответит ошибкой — откатываем.
     const prev = skipped;
     setSkipped(skipped.filter((x) => x.id !== item_id));
     try {
       const r = await fetch("/api/news/items/promote", {
         method: "POST",
-        headers: { "content-type": "application/json", ...authHeader },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ item_id }),
       });
       if (!r.ok) {
@@ -226,17 +187,6 @@ export default function NewsPage() {
     }
   };
 
-  if (!token) {
-    return (
-      <main style={wrap}>
-        <h1>AIBOOSTER · /news</h1>
-        <div style={card}>
-          <p>Нужен ADMIN_TOKEN. Открой страницу с <code>?token=YOUR_TOKEN</code> в URL.</p>
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main style={wrap}>
       <header style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 16 }}>
@@ -244,7 +194,6 @@ export default function NewsPage() {
         <nav style={{ fontSize: 13, opacity: 0.7 }}>
           <a href="/news/sources" style={{ color: "#79b8ff", marginLeft: 12 }}>источники</a>
           <a href="/news/profile" style={{ color: "#79b8ff", marginLeft: 12 }}>профиль</a>
-          <a href={`/admin?token=${token}`} style={{ color: "#79b8ff", marginLeft: 12 }}>admin</a>
         </nav>
       </header>
 

@@ -1,20 +1,12 @@
 import { NextResponse } from "next/server";
-import { checkAdminToken } from "@/lib/auth";
 import { logServerError } from "@/lib/logger";
 import { promoteItem, getItem } from "@/lib/news";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// POST /api/news/items/promote { item_id }
-// Поднимает skipped → show вручную. Используется на странице "Отсеяно":
-// если валидатор ошибся и реально полезный пост отфильтровал — кнопка
-// "показать в ленте" возвращает его в feed.
+// POST /api/news/items/promote { item_id } — skipped → show.
 export async function POST(req: Request) {
-  const auth = checkAdminToken(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.reason }, { status: auth.status });
-  }
   let body: Record<string, unknown> = {};
   try {
     body = await req.json();

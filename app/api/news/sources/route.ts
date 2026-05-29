@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { checkAdminToken } from "@/lib/auth";
 import { logServerError } from "@/lib/logger";
 import {
   listSources,
@@ -12,11 +11,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // GET /api/news/sources — список всех источников.
-export async function GET(req: Request) {
-  const auth = checkAdminToken(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.reason }, { status: auth.status });
-  }
+export async function GET() {
   try {
     const rows = await listSources();
     return NextResponse.json({ count: rows.length, sources: rows });
@@ -28,10 +23,6 @@ export async function GET(req: Request) {
 
 // POST /api/news/sources { kind, url, name, fetch_interval_minutes? }
 export async function POST(req: Request) {
-  const auth = checkAdminToken(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.reason }, { status: auth.status });
-  }
   let body: Record<string, unknown> = {};
   try {
     body = await req.json();
@@ -79,10 +70,6 @@ export async function POST(req: Request) {
 
 // DELETE /api/news/sources?id=...
 export async function DELETE(req: Request) {
-  const auth = checkAdminToken(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.reason }, { status: auth.status });
-  }
   const u = new URL(req.url);
   const id = u.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });

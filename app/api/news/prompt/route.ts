@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { checkAdminToken } from "@/lib/auth";
 import { logServerError } from "@/lib/logger";
 import { getActiveProfile, getStats } from "@/lib/news";
 import { buildValidatorPrompt } from "@/lib/news-prompt";
@@ -9,12 +8,8 @@ export const runtime = "nodejs";
 
 // GET /api/news/prompt
 // Возвращает текущий профиль + собранный промт-шаблон для отладки.
-// Полезно перед смены формулировок промта — видишь ровно то, что улетит в LLM.
-export async function GET(req: Request) {
-  const auth = checkAdminToken(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.reason }, { status: auth.status });
-  }
+// Полезно перед сменой формулировок промта — видишь ровно то, что улетит в LLM.
+export async function GET() {
   try {
     const profile = await getActiveProfile();
     const sample = buildValidatorPrompt(profile, {

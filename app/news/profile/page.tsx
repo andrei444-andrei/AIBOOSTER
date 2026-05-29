@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 const wrap: React.CSSProperties = { maxWidth: 900, margin: "0 auto", padding: "32px 24px" };
 const card: React.CSSProperties = {
@@ -39,49 +39,17 @@ interface Topic {
 }
 
 export default function ProfilePage() {
-  const [token, setToken] = useState("");
   const [worldview, setWorldview] = useState("");
   const [topics, setTopics] = useState<Topic[]>([]);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const u = new URL(window.location.href);
-    let t = u.searchParams.get("token") ?? "";
-    if (!t) {
-      try {
-        t = window.sessionStorage.getItem("aibooster_token") ?? "";
-      } catch {
-        /* ignore */
-      }
-    } else {
-      try {
-        window.sessionStorage.setItem("aibooster_token", t);
-      } catch {
-        /* ignore */
-      }
-      u.searchParams.delete("token");
-      window.history.replaceState({}, "", u.toString());
-    }
-    setToken(t);
-  }, []);
-
-  const authHeader = useMemo<Record<string, string>>(
-    () => {
-      const h: Record<string, string> = {};
-      if (token) h.authorization = `Bearer ${token}`;
-      return h;
-    },
-    [token],
-  );
-
   const load = useCallback(async () => {
-    if (!token) return;
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch("/api/news/profile", { headers: authHeader });
+      const r = await fetch("/api/news/profile");
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       setWorldview(data.profile?.worldview_context ?? "");
@@ -91,7 +59,7 @@ export default function ProfilePage() {
     } finally {
       setLoading(false);
     }
-  }, [token, authHeader]);
+  }, []);
 
   useEffect(() => {
     load();
@@ -103,7 +71,7 @@ export default function ProfilePage() {
     try {
       const r = await fetch("/api/news/profile", {
         method: "PUT",
-        headers: { "content-type": "application/json", ...authHeader },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ worldview_context: worldview, topics }),
       });
       const data = await r.json();
@@ -125,15 +93,6 @@ export default function ProfilePage() {
   const removeTopic = (i: number) => {
     setTopics(topics.filter((_, idx) => idx !== i));
   };
-
-  if (!token) {
-    return (
-      <main style={wrap}>
-        <h1>AIBOOSTER · /news/profile</h1>
-        <div style={card}><p>Нужен ADMIN_TOKEN в URL.</p></div>
-      </main>
-    );
-  }
 
   return (
     <main style={wrap}>

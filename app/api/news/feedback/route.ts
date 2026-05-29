@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { checkAdminToken } from "@/lib/auth";
 import { logServerError } from "@/lib/logger";
 import { recordFeedback, getItem } from "@/lib/news";
 
@@ -17,10 +16,6 @@ const ALLOWED_REASONS = new Set([
 ]);
 
 export async function POST(req: Request) {
-  const auth = checkAdminToken(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.reason }, { status: auth.status });
-  }
   let body: Record<string, unknown> = {};
   try {
     body = await req.json();

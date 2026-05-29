@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 const wrap: React.CSSProperties = { maxWidth: 900, margin: "0 auto", padding: "32px 24px" };
 const card: React.CSSProperties = {
@@ -42,7 +42,6 @@ interface SourceRow {
 }
 
 export default function SourcesPage() {
-  const [token, setToken] = useState("");
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<"telegram" | "rss">("telegram");
@@ -51,48 +50,17 @@ export default function SourcesPage() {
   const [intervalMin, setIntervalMin] = useState(30);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    const u = new URL(window.location.href);
-    let t = u.searchParams.get("token") ?? "";
-    if (!t) {
-      try {
-        t = window.sessionStorage.getItem("aibooster_token") ?? "";
-      } catch {
-        /* ignore */
-      }
-    } else {
-      try {
-        window.sessionStorage.setItem("aibooster_token", t);
-      } catch {
-        /* ignore */
-      }
-      u.searchParams.delete("token");
-      window.history.replaceState({}, "", u.toString());
-    }
-    setToken(t);
-  }, []);
-
-  const authHeader = useMemo<Record<string, string>>(
-    () => {
-      const h: Record<string, string> = {};
-      if (token) h.authorization = `Bearer ${token}`;
-      return h;
-    },
-    [token],
-  );
-
   const load = useCallback(async () => {
-    if (!token) return;
     setError(null);
     try {
-      const r = await fetch("/api/news/sources", { headers: authHeader });
+      const r = await fetch("/api/news/sources");
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       setSources(data.sources ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [token, authHeader]);
+  }, []);
 
   useEffect(() => {
     load();
@@ -105,7 +73,7 @@ export default function SourcesPage() {
     try {
       const r = await fetch("/api/news/sources", {
         method: "POST",
-        headers: { "content-type": "application/json", ...authHeader },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ kind, url, name, fetch_interval_minutes: intervalMin }),
       });
       const data = await r.json();
@@ -124,21 +92,9 @@ export default function SourcesPage() {
     if (!confirm("Удалить источник? Уже собранные посты останутся в БД.")) return;
     await fetch(`/api/news/sources?id=${encodeURIComponent(id)}`, {
       method: "DELETE",
-      headers: authHeader,
     });
     await load();
   };
-
-  if (!token) {
-    return (
-      <main style={wrap}>
-        <h1>AIBOOSTER · /news/sources</h1>
-        <div style={card}>
-          <p>Нужен ADMIN_TOKEN в URL: <code>?token=YOUR_TOKEN</code></p>
-        </div>
-      </main>
-    );
-  }
 
   return (
     <main style={wrap}>

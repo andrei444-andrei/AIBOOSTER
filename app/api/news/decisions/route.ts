@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { checkAdminToken } from "@/lib/auth";
 import { logServerError } from "@/lib/logger";
 import { listDecisions } from "@/lib/news";
 import { serializeItem } from "@/lib/news-serialize";
@@ -7,14 +6,8 @@ import { serializeItem } from "@/lib/news-serialize";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// GET /api/news/decisions?limit=N
-// Полный трейс решений валидатора (validated + failed). Используется
-// отладочной панелью на /news?tab=debug.
+// GET /api/news/decisions?limit=N — трейс решений валидатора для отладочной панели.
 export async function GET(req: Request) {
-  const auth = checkAdminToken(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.reason }, { status: auth.status });
-  }
   const url = new URL(req.url);
   const limit = parseLimit(url.searchParams.get("limit"), 50);
   try {

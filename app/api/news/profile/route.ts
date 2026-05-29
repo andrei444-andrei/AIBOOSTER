@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { checkAdminToken } from "@/lib/auth";
 import { logServerError } from "@/lib/logger";
 import { getActiveProfile, upsertProfile } from "@/lib/news";
 import type { InterestTopic } from "@/lib/news-prompt";
@@ -7,11 +6,7 @@ import type { InterestTopic } from "@/lib/news-prompt";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET(req: Request) {
-  const auth = checkAdminToken(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.reason }, { status: auth.status });
-  }
+export async function GET() {
   try {
     const p = await getActiveProfile();
     return NextResponse.json({ profile: p });
@@ -23,10 +18,6 @@ export async function GET(req: Request) {
 
 // PUT /api/news/profile { worldview_context, topics: [{name, description?, what_bores_me?, priority?, status?}] }
 export async function PUT(req: Request) {
-  const auth = checkAdminToken(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.reason }, { status: auth.status });
-  }
   let body: Record<string, unknown> = {};
   try {
     body = await req.json();

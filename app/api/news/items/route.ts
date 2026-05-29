@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { checkAdminToken } from "@/lib/auth";
 import { logServerError } from "@/lib/logger";
 import { listItems, type NewsItemVerdict } from "@/lib/news";
 import { serializeItem } from "@/lib/news-serialize";
@@ -9,12 +8,8 @@ export const runtime = "nodejs";
 
 // GET /api/news/items?verdict=show|borderline|skip|all&limit=N
 // По умолчанию verdict=show, limit=50. Лента — валидированные посты.
+// Открыто: личный single-user продукт, токен не нужен.
 export async function GET(req: Request) {
-  const auth = checkAdminToken(req);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.reason }, { status: auth.status });
-  }
-
   const url = new URL(req.url);
   const verdictRaw = url.searchParams.get("verdict") ?? "show";
   const ALLOWED = new Set(["show", "borderline", "skip", "all"]);
