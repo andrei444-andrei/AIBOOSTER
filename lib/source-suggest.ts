@@ -67,16 +67,19 @@ export async function suggestSourcesForProfile(
       system,
       user,
       temperature: 0.3,
-      timeoutMs: 30_000,
+      timeoutMs: 45_000,
+      maxTokens: 8000,
     });
     const out = normalizeSuggestions(parsed, active);
     if (out.length === 0) {
-      // На отладку: пишу в console, чтобы было видно в Vercel logs.
-      console.log(`[source-suggest] empty result. raw preview: ${rawText.slice(0, 400)}`);
+      console.log(
+        `[source-suggest] empty result. rawText len=${rawText.length}. preview: ${rawText.slice(0, 800)}`,
+      );
     }
     return out;
   } catch (err) {
-    console.log(`[source-suggest] error: ${err instanceof Error ? err.message : String(err)}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`[source-suggest] error (model=${SUGGEST_MODEL}): ${msg.slice(0, 1000)}`);
     return [];
   }
 }
