@@ -20,7 +20,7 @@ import {
 import { chatStream, generateImage, AIError, type WebImage, type WebCitation } from "@/lib/ai";
 import { compactRecentHistory, routeRequest } from "@/lib/router";
 import { runEnsemble, ENSEMBLES } from "@/lib/ensemble";
-import { MODE_CONFIG, pickAutoMode, runPipeline } from "@/lib/pipeline";
+import { MODE_CONFIG, pickAutoMode, runPipeline, analyzeQuery, type QueryAnalysis } from "@/lib/pipeline";
 import type { ChatMode } from "@/lib/chat-client";
 import {
   createGeneration,
@@ -456,9 +456,17 @@ export async function POST(req: Request, ctx: Ctx) {
         const buildMessages = (modelId: string) =>
           buildMessagesForModel(systemPrompt, history, modelId);
 
-        // Дедупликация изображений/цитат для случая, если кто-то из кандидатов
-        // (Perplexity Sonar) их вернёт в стриме судьи. На текущей реализации
-        // судья — GPT-5 без поиска, так что обычно пусто.
+        // Web-intent для ансамбля: если запрос не требует свежих фактов
+        // (математика, чистый код, общая концепция) — выкидываем Sonar
+        // из списка кандидатов. Это убирает шум типа «бейсболки по номерам»
+        // на «3450*453». Если needsWeb — Sonar получит готовый english.
+        const analysis = await analyzeQuery(content).catch(() => null);
+        const effectiveEnsembleModels = analysis && !analysis.needsWeb
+          ? ensembleModels.filter((m) => !m.startsWith("perplexity/"))
+          : ensembleModels;
+
+        // Дедупликация изображений/цитат — в Judge mode Sonar может вернуть
+        // картинки/ссылки, фронт умеет их рендерить через web_images/citations.
         const seenImages = new Set<string>();
         const collectedImages: WebImage[] = [];
         const seenCitations = new Set<string>();
@@ -474,10 +482,11 @@ export async function POST(req: Request, ctx: Ctx) {
           const result = await runEnsemble(
             {
               category: decision.category,
-              models: ensembleModels,
+              models: effectiveEnsembleModels,
               buildMessages,
               originalUserText: content,
               candidateMaxTokens: decision.max_tokens,
+              precomputedAnalysis: analysis ?? undefined,
             },
             {
               onEnsembleStart: (models) => send("ensemble_start", { models }),
@@ -495,6 +504,7 @@ export async function POST(req: Request, ctx: Ctx) {
                 judgeUsageRef.current = u;
                 judgeTokens = u.completion_tokens;
               },
+              onStage: (stage) => send("stage", { stage }),
             },
           );
 
@@ -676,6 +686,7 @@ export async function POST(req: Request, ctx: Ctx) {
               webQuery: content,
             },
             {
+              onStage: (stage) => send("stage", { stage }),
               onDelta: (text) => {
                 accP += text;
                 send("delta", { text });

@@ -28,7 +28,7 @@ import {
 } from "./ai";
 import { getModelOption, type TaskCategory } from "./chat-client";
 import { logServerError } from "./logger";
-import { SONAR_ENGLISH_SYSTEM, translateQueryToEnglish } from "./pipeline";
+import { SONAR_ENGLISH_SYSTEM, translateQueryToEnglish, type QueryAnalysis } from "./pipeline";
 
 // ─── Конфигурация ансамблей ─────────────────────────────────────────
 
@@ -157,6 +157,8 @@ export interface EnsembleHandlers {
     completion_tokens: number;
     total_tokens: number;
   }) => void;
+  /** Этап ансамбля для UI (searching → synthesizing → writing). */
+  onStage?: (stage: "searching" | "synthesizing" | "writing") => void;
 }
 
 // ─── Опции ──────────────────────────────────────────────────────────
@@ -173,6 +175,9 @@ export interface RunEnsembleOptions {
   originalUserText: string;
   /** max_tokens для каждого кандидата — берём из route (chat_category_routing). */
   candidateMaxTokens: number;
+  /** Готовый анализ запроса (english + needsWeb). Если задан, Sonar-кандидат
+   *  не дёргает Flash повторно. */
+  precomputedAnalysis?: QueryAnalysis;
   signal?: AbortSignal;
 }
 
@@ -182,20 +187,21 @@ export async function runEnsemble(
   opts: RunEnsembleOptions,
   handlers: EnsembleHandlers = {},
 ): Promise<RunEnsembleResult> {
-  const { category, models, buildMessages, originalUserText, candidateMaxTokens, signal } = opts;
+  const { category, models, buildMessages, originalUserText, candidateMaxTokens, precomputedAnalysis, signal } = opts;
   if (models.length === 0) {
     throw new Error("ensemble: empty models list");
   }
 
   const t0 = Date.now();
   handlers.onEnsembleStart?.(models);
+  handlers.onStage?.("searching");
 
   // ── Параллельно дёргаем всех кандидатов через Promise.allSettled.
   //   AIMLAPI временами 500-ит на отдельных моделях — теряем кандидата, но
   //   не валим весь ансамбль. Если упали все — выкидываем allFailed.
   const candidates = await Promise.all(
     models.map((model) =>
-      runCandidate(model, buildMessages(model), originalUserText, candidateMaxTokens, signal, handlers),
+      runCandidate(model, buildMessages(model), originalUserText, candidateMaxTokens, signal, handlers, precomputedAnalysis),
     ),
   );
 
@@ -212,6 +218,7 @@ export async function runEnsemble(
 
   // ── Судья: стримом, чтобы клиент видел токены в реальном времени.
   handlers.onJudgeStart?.(JUDGE_MODEL);
+  handlers.onStage?.("synthesizing");
   const tj = Date.now();
   const judgeUser = buildJudgeUserMessage(originalUserText, alive);
   const judgeMessages: ChatMessage[] = [
@@ -226,10 +233,17 @@ export async function runEnsemble(
   };
 
   let judgeTokens = 0;
+  let firstJudgeDeltaSent = false;
   const judgeText = await chatStream(
     judgeOpts,
     {
-      onDelta: (t) => handlers.onJudgeDelta?.(t),
+      onDelta: (t) => {
+        if (!firstJudgeDeltaSent) {
+          firstJudgeDeltaSent = true;
+          handlers.onStage?.("writing");
+        }
+        handlers.onJudgeDelta?.(t);
+      },
       onUsage: (u) => {
         judgeTokens = u.completion_tokens;
         handlers.onJudgeUsage?.(u);
@@ -258,6 +272,7 @@ async function runCandidate(
   baseMaxTokens: number,
   signal: AbortSignal | undefined,
   handlers: EnsembleHandlers,
+  precomputedAnalysis: QueryAnalysis | undefined,
 ): Promise<CandidateResult> {
   const t = Date.now();
   try {
@@ -266,7 +281,9 @@ async function runCandidate(
     // придёт по-английски, дальше судья переведёт в язык пользователя.
     let actualMessages = messages;
     if (model.startsWith("perplexity/")) {
-      const { english } = await translateQueryToEnglish(originalUserText, signal);
+      const english = precomputedAnalysis
+        ? precomputedAnalysis.english
+        : (await translateQueryToEnglish(originalUserText, signal)).english;
       actualMessages = [
         { role: "system", content: SONAR_ENGLISH_SYSTEM },
         { role: "user", content: english },
