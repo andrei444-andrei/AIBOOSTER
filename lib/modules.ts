@@ -74,7 +74,6 @@ export const MODULES: ModuleEntry[] = [
     pinned: true,
     section: "main",
     icon: "◎",
-    requiresAdminToken: true,
   },
   {
     slug: "ux-kit",
