@@ -1,31 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { Card, Button, Input } from "@/components/ui";
 
-const wrap: React.CSSProperties = { maxWidth: 900, margin: "0 auto", padding: "32px 24px" };
-const card: React.CSSProperties = {
-  background: "#12161c",
-  border: "1px solid #232a33",
-  borderRadius: 10,
-  padding: 16,
-  marginBottom: 16,
-};
-const input: React.CSSProperties = {
-  padding: "8px 10px",
-  background: "#0b0d10",
-  border: "1px solid #232a33",
-  borderRadius: 6,
-  color: "#e6e8eb",
-  fontSize: 14,
-};
-const btn: React.CSSProperties = {
-  padding: "8px 14px",
-  background: "#2b6cb0",
-  border: 0,
-  borderRadius: 6,
-  color: "#fff",
-  cursor: "pointer",
-  fontSize: 14,
+const wrap: React.CSSProperties = {
+  maxWidth: 900,
+  margin: "0 auto",
+  padding: "48px 32px 64px",
 };
 
 interface SourceRow {
@@ -96,70 +78,84 @@ export default function SourcesPage() {
     await load();
   };
 
+  const selectStyle: React.CSSProperties = {
+    padding: "8px 10px",
+    background: "var(--surface)",
+    border: "1px solid var(--border-strong)",
+    borderRadius: "var(--radius-sm)",
+    color: "var(--text)",
+    fontSize: "var(--text-sm)",
+    fontFamily: "inherit",
+  };
+
   return (
     <main style={wrap}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16 }}>
-        <h1 style={{ margin: 0 }}>Источники новостей</h1>
-        <a href="/news" style={{ color: "#79b8ff", fontSize: 13 }}>← к ленте</a>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 24, gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 4px" }}>
+            Новости · Источники
+          </p>
+          <h1 style={{ fontSize: 28, lineHeight: 1.15, margin: 0 }}>Источники новостей</h1>
+        </div>
+        <Link href="/news" style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", textDecoration: "none", borderBottom: "1px solid var(--border)" }}>
+          ← к ленте
+        </Link>
       </header>
 
-      <div style={card}>
+      <Card padded style={{ marginBottom: 16 }}>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>Добавить источник</h2>
-        <form onSubmit={submit} style={{ display: "grid", gap: 8, gridTemplateColumns: "120px 1fr 1fr 90px auto" }}>
-          <select value={kind} onChange={(e) => setKind(e.target.value as "telegram" | "rss")} style={input}>
+        <form onSubmit={submit} style={{ display: "grid", gap: 10, gridTemplateColumns: "120px 1fr 1fr 90px auto", alignItems: "center" }}>
+          <select value={kind} onChange={(e) => setKind(e.target.value as "telegram" | "rss")} style={selectStyle} aria-label="Тип источника">
             <option value="telegram">telegram</option>
             <option value="rss">rss</option>
           </select>
-          <input
+          <Input
             placeholder={kind === "telegram" ? "https://t.me/CHANNEL" : "https://blog.example.com/rss"}
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            style={input}
             required
+            aria-label="URL"
           />
-          <input
+          <Input
             placeholder="имя для UI"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            style={input}
             required
+            aria-label="Имя"
           />
-          <input
+          <Input
             type="number"
             min={5}
             value={intervalMin}
             onChange={(e) => setIntervalMin(parseInt(e.target.value, 10) || 30)}
-            style={input}
             title="интервал в минутах"
-            aria-label="интервал в минутах"
+            aria-label="Интервал в минутах"
           />
-          <button type="submit" disabled={busy} style={btn}>добавить</button>
+          <Button type="submit" disabled={busy}>Добавить</Button>
         </form>
-        {error && <div style={{ color: "#ff7b72", marginTop: 8 }}>{error}</div>}
-      </div>
+        {error && <div style={{ color: "var(--danger)", marginTop: 10, fontSize: "var(--text-sm)" }}>{error}</div>}
+      </Card>
 
-      <div style={card}>
+      <Card padded>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>Активные источники ({sources.length})</h2>
-        {sources.length === 0 && <p style={{ opacity: 0.6 }}>Пусто. Cron-tick засеет дефолты при первом запуске.</p>}
+        {sources.length === 0 && <p style={{ color: "var(--text-muted)" }}>Пусто. Cron-tick засеет дефолты при первом запуске.</p>}
         {sources.map((s) => (
-          <div key={s.id} style={{ borderBottom: "1px solid #232a33", padding: "10px 0" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <div key={s.id} style={{ borderBottom: "1px solid var(--border)", padding: "12px 0", display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
               <div>
-                <span style={{ fontSize: 12, opacity: 0.5, marginRight: 8 }}>[{s.kind}]</span>
+                <span style={{ fontSize: 12, color: "var(--text-muted)", marginRight: 8, fontFamily: "var(--font-mono)" }}>[{s.kind}]</span>
                 <b>{s.name}</b>
-                <a href={s.url} target="_blank" rel="noreferrer" style={{ color: "#79b8ff", fontSize: 13, marginLeft: 10 }}>{s.url}</a>
+                <a href={s.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginLeft: 10, borderBottom: "1px solid var(--border)" }}>{s.url}</a>
               </div>
-              <button onClick={() => remove(s.id)} style={{ background: "transparent", border: "1px solid #7a2b2b", color: "#ff7b72", padding: "4px 8px", borderRadius: 4, cursor: "pointer", fontSize: 12 }}>
-                удалить
-              </button>
+              <Button variant="danger" size="sm" onClick={() => remove(s.id)}>удалить</Button>
             </div>
-            <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
               интервал: {s.fetch_interval_minutes} мин · последний фетч: {s.last_fetched_at ?? "никогда"}
               {s.apify_run_id && ` · apify: ${s.apify_run_status ?? "?"} (${s.apify_run_id})`}
             </div>
           </div>
         ))}
-      </div>
+      </Card>
     </main>
   );
 }

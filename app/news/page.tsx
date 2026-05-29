@@ -1,58 +1,50 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { Card, Button } from "@/components/ui";
 
-// Светящееся-серое оформление в стилистике /admin и app/page.tsx.
-const wrap: React.CSSProperties = { maxWidth: 1100, margin: "0 auto", padding: "32px 24px" };
-const card: React.CSSProperties = {
-  background: "#12161c",
-  border: "1px solid #232a33",
-  borderRadius: 10,
-  padding: 16,
-  marginBottom: 16,
+const wrap: React.CSSProperties = {
+  maxWidth: 1000,
+  margin: "0 auto",
+  padding: "48px 32px 64px",
 };
+
 const tabBtn = (active: boolean): React.CSSProperties => ({
   padding: "8px 14px",
-  background: active ? "#1f2933" : "transparent",
-  border: "1px solid #232a33",
+  background: active ? "var(--bg-subtle)" : "transparent",
+  border: "1px solid var(--border)",
   borderRight: "none",
-  color: active ? "#fff" : "#a0a8b0",
+  color: active ? "var(--text)" : "var(--text-secondary)",
   cursor: "pointer",
-  fontSize: 14,
+  fontSize: "var(--text-sm)",
+  fontFamily: "inherit",
 });
+
 const chip: React.CSSProperties = {
   display: "inline-block",
   fontSize: 12,
   padding: "2px 8px",
   borderRadius: 99,
-  background: "#1a1e24",
-  border: "1px solid #232a33",
+  background: "var(--bg-subtle)",
+  border: "1px solid var(--border)",
   marginRight: 6,
   marginTop: 4,
-  color: "#a0a8b0",
+  color: "var(--text-secondary)",
 };
-const chipBtn = (color: string): React.CSSProperties => ({
-  fontSize: 12,
-  padding: "4px 10px",
-  borderRadius: 99,
-  background: "transparent",
-  border: `1px solid ${color}`,
-  color,
-  cursor: "pointer",
-  marginRight: 6,
-  marginTop: 6,
-});
+
 const codeBox: React.CSSProperties = {
-  background: "#0b0d10",
-  border: "1px solid #232a33",
-  borderRadius: 6,
+  background: "var(--bg-subtle)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius-sm)",
   padding: 10,
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  fontFamily: "var(--font-mono)",
   fontSize: 12,
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
   maxHeight: 400,
   overflow: "auto",
+  color: "var(--text)",
 };
 
 type Tab = "feed" | "skipped" | "debug";
@@ -189,38 +181,39 @@ export default function NewsPage() {
 
   return (
     <main style={wrap}>
-      <header style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 16 }}>
-        <h1 style={{ margin: 0 }}>AIBOOSTER · /news</h1>
-        <nav style={{ fontSize: 13, opacity: 0.7 }}>
-          <a href="/news/sources" style={{ color: "#79b8ff", marginLeft: 12 }}>источники</a>
-          <a href="/news/profile" style={{ color: "#79b8ff", marginLeft: 12 }}>профиль</a>
+      <header style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 4px" }}>
+            Модуль · Новости
+          </p>
+          <h1 style={{ fontSize: 32, lineHeight: 1.15, margin: 0 }}>Персональная лента</h1>
+        </div>
+        <nav style={{ fontSize: "var(--text-sm)", display: "flex", gap: 16 }}>
+          <Link href="/news/sources" style={{ color: "var(--text-secondary)", textDecoration: "none", borderBottom: "1px solid var(--border)" }}>
+            источники →
+          </Link>
+          <Link href="/news/profile" style={{ color: "var(--text-secondary)", textDecoration: "none", borderBottom: "1px solid var(--border)" }}>
+            профиль →
+          </Link>
         </nav>
       </header>
 
-      <div style={{ display: "flex", marginBottom: 16 }}>
+      <div style={{ display: "flex", marginBottom: 24 }}>
         <button style={{ ...tabBtn(tab === "feed"), borderTopLeftRadius: 6, borderBottomLeftRadius: 6 }} onClick={() => setTab("feed")}>Лента</button>
         <button style={tabBtn(tab === "skipped")} onClick={() => setTab("skipped")}>Отсеяно</button>
-        <button style={{ ...tabBtn(tab === "debug"), borderRight: "1px solid #232a33", borderTopRightRadius: 6, borderBottomRightRadius: 6 }} onClick={() => setTab("debug")}>Отладка</button>
+        <button style={{ ...tabBtn(tab === "debug"), borderRight: "1px solid var(--border)", borderTopRightRadius: 6, borderBottomRightRadius: 6 }} onClick={() => setTab("debug")}>Отладка</button>
       </div>
 
       {error && (
-        <div style={{ ...card, borderColor: "#7a2b2b" }}>
-          Ошибка: {error}
-        </div>
+        <Card padded style={{ borderColor: "var(--danger)", marginBottom: 16 }}>
+          <span style={{ color: "var(--danger)" }}>Ошибка: {error}</span>
+        </Card>
       )}
-      {loading && <div style={{ opacity: 0.6, marginBottom: 12 }}>Загрузка…</div>}
+      {loading && <div style={{ color: "var(--text-muted)", marginBottom: 12 }}>Загрузка…</div>}
 
-      {tab === "feed" && (
-        <FeedList items={items} onFeedback={sendFeedback} />
-      )}
-
-      {tab === "skipped" && (
-        <SkippedList items={skipped} onPromote={promote} />
-      )}
-
-      {tab === "debug" && (
-        <DebugPanel prompt={promptData} decisions={decisions} />
-      )}
+      {tab === "feed" && <FeedList items={items} onFeedback={sendFeedback} />}
+      {tab === "skipped" && <SkippedList items={skipped} onPromote={promote} />}
+      {tab === "debug" && <DebugPanel prompt={promptData} decisions={decisions} />}
     </main>
   );
 }
@@ -228,63 +221,67 @@ export default function NewsPage() {
 function FeedList({ items, onFeedback }: { items: NewsItem[]; onFeedback: (id: string, s: "like" | "dislike", r?: string) => void }) {
   if (items.length === 0) {
     return (
-      <div style={card}>
+      <Card padded>
         <p style={{ marginTop: 0 }}>В ленте пусто.</p>
-        <p style={{ opacity: 0.7 }}>
-          Это нормально на чистой БД. Cron-tick запускается раз в 10 минут;
-          можно дёрнуть вручную:
+        <p style={{ color: "var(--text-secondary)" }}>
+          Это нормально на чистой БД. Cron-tick запускается раз в 10 минут.
+          Также все валидированные посты могут быть в «Отсеяно» — открой и посмотри.
         </p>
-        <pre style={codeBox}>{`curl -X POST $APP/api/news/cron/tick \\\n  -H "Authorization: Bearer $CRON_SECRET"`}</pre>
-      </div>
+        <pre style={codeBox}>{`curl -X POST $APP/api/news/cron/tick`}</pre>
+      </Card>
     );
   }
   return (
-    <>
-      {items.map((it) => (
-        <ItemCard key={it.id} item={it} onFeedback={onFeedback} />
-      ))}
-    </>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {items.map((it) => <ItemCard key={it.id} item={it} onFeedback={onFeedback} />)}
+    </div>
   );
 }
 
 function SkippedList({ items, onPromote }: { items: NewsItem[]; onPromote: (id: string) => void }) {
   if (items.length === 0) {
     return (
-      <div style={card}>
+      <Card padded>
         <p style={{ marginTop: 0 }}>Отсеянных нет.</p>
-      </div>
+      </Card>
     );
   }
   return (
-    <>
-      <p style={{ opacity: 0.6, fontSize: 13 }}>
-        Это посты, которые валидатор пометил как skip. Если что-то реально полезное здесь —
-        нажми «показать в ленте» (это сигнал для калибровки промта).
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <p style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
+        Посты, которые валидатор пометил как skip. Если что-то реально полезное здесь —
+        нажми «показать в ленте», это сигнал для калибровки промта.
       </p>
       {items.map((it) => (
-        <div key={it.id} style={card}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <Card key={it.id} padded>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
             <div style={{ fontWeight: 600 }}>{it.title || "(без заголовка)"}</div>
-            <div style={{ fontSize: 12, opacity: 0.6 }}>{it.source.name} · {it.relevance ?? "—"}/100</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+              {it.source.name} · {it.relevance ?? "—"}/100
+            </div>
           </div>
-          {it.summary && <div style={{ opacity: 0.8, fontSize: 14, marginTop: 6 }}>{it.summary}</div>}
+          {it.summary && <div style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginTop: 6 }}>{it.summary}</div>}
           {it.reasoning && (
-            <div style={{ fontSize: 13, opacity: 0.7, marginTop: 8, fontStyle: "italic" }}>
+            <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 8, fontStyle: "italic" }}>
               Причина: {it.reasoning}
             </div>
           )}
           <div style={{ marginTop: 8 }}>
             {(it.matched_topics ?? []).map((t) => <span key={t} style={chip}>{t}</span>)}
           </div>
-          <div style={{ marginTop: 8 }}>
-            {it.url && <a href={it.url} target="_blank" rel="noreferrer" style={{ color: "#79b8ff", fontSize: 13 }}>читать источник →</a>}
-            <button onClick={() => onPromote(it.id)} style={{ ...chipBtn("#3fb950"), marginLeft: 12 }}>
+          <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center" }}>
+            {it.url && (
+              <a href={it.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", borderBottom: "1px solid var(--border)" }}>
+                читать источник →
+              </a>
+            )}
+            <Button variant="secondary" size="sm" onClick={() => onPromote(it.id)}>
               показать в ленте
-            </button>
+            </Button>
           </div>
-        </div>
+        </Card>
       ))}
-    </>
+    </div>
   );
 }
 
@@ -294,7 +291,6 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
   const [inflight, setInflight] = useState(false);
 
   const handleQuick = (s: "like" | "dislike") => {
-    // sent блокирует и финальное состояние, и повторные клики после первого.
     if (sent || inflight) return;
     setInflight(true);
     setExpandedFeedback(s);
@@ -307,56 +303,56 @@ function ItemCard({ item, onFeedback }: { item: NewsItem; onFeedback: (id: strin
   };
 
   return (
-    <article style={card}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <div style={{ fontSize: 17, fontWeight: 600 }}>
+    <Card padded>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 17, fontWeight: 600, flex: 1 }}>
           {item.title || "(без заголовка)"}
         </div>
-        <div style={{ fontSize: 12, opacity: 0.55, marginLeft: 12, whiteSpace: "nowrap" }}>
+        <div style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
           {item.source.name} · {item.relevance ?? "—"}/100
         </div>
       </div>
       {item.summary && (
-        <div style={{ fontSize: 14, opacity: 0.85, marginTop: 8 }}>{item.summary}</div>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginTop: 8 }}>{item.summary}</div>
       )}
       {item.value_explanation && (
-        <div style={{ fontSize: 13, opacity: 0.7, marginTop: 8, paddingLeft: 12, borderLeft: "2px solid #2b6cb0" }}>
-          <b>Почему вам:</b> {item.value_explanation}
+        <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 10, paddingLeft: 12, borderLeft: "2px solid var(--info)" }}>
+          <b style={{ color: "var(--text)" }}>Почему вам:</b> {item.value_explanation}
         </div>
       )}
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: 10 }}>
         {(item.matched_topics ?? []).map((t) => <span key={t} style={chip}>{t}</span>)}
       </div>
-      <div style={{ marginTop: 10, display: "flex", alignItems: "center", flexWrap: "wrap" }}>
+      <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         {item.url && (
-          <a href={item.url} target="_blank" rel="noreferrer" style={{ color: "#79b8ff", fontSize: 13, marginRight: 16 }}>
+          <a href={item.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", borderBottom: "1px solid var(--border)", marginRight: 8 }}>
             читать источник →
           </a>
         )}
-        <button onClick={() => handleQuick("like")} disabled={sent || inflight} aria-label="Нравится" style={chipBtn(expandedFeedback === "like" ? "#3fb950" : "#a0a8b0")}>
+        <Button variant={expandedFeedback === "like" ? "primary" : "secondary"} size="sm" onClick={() => handleQuick("like")} disabled={sent || inflight} aria-label="Нравится">
           👍
-        </button>
-        <button onClick={() => handleQuick("dislike")} disabled={sent || inflight} aria-label="Не нравится" style={chipBtn(expandedFeedback === "dislike" ? "#ff7b72" : "#a0a8b0")}>
+        </Button>
+        <Button variant={expandedFeedback === "dislike" ? "primary" : "secondary"} size="sm" onClick={() => handleQuick("dislike")} disabled={sent || inflight} aria-label="Не нравится">
           👎
-        </button>
+        </Button>
         {item.verdict === "borderline" && (
-          <span style={{ ...chip, color: "#e3b341", borderColor: "#5a4717" }}>borderline</span>
+          <span style={{ ...chip, color: "var(--warning)", borderColor: "var(--warning)", background: "var(--warning-bg)" }}>borderline</span>
         )}
       </div>
       {expandedFeedback && !sent && (
-        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-          Почему? (опционально)
-          <div>
+        <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-muted)" }}>
+          <span>Почему? (опционально)</span>
+          <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
             {(expandedFeedback === "like" ? LIKE_REASONS : DISLIKE_REASONS).map((r) => (
-              <button key={r} onClick={() => handleReason(r)} style={chipBtn("#a0a8b0")}>{r}</button>
+              <Button key={r} variant="secondary" size="sm" onClick={() => handleReason(r)}>{r}</Button>
             ))}
           </div>
         </div>
       )}
       {sent && (
-        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>Спасибо за фидбэк.</div>
+        <div style={{ marginTop: 10, fontSize: 12, color: "var(--success)" }}>Спасибо за фидбэк.</div>
       )}
-    </article>
+    </Card>
   );
 }
 
@@ -369,55 +365,56 @@ function DebugPanel({ prompt, decisions }: { prompt: PromptData | null; decision
     setExpanded(s);
   };
   return (
-    <>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {prompt && (
         <>
-          <div style={card}>
+          <Card padded>
             <h2 style={{ marginTop: 0, fontSize: 16 }}>Статистика</h2>
             <pre style={codeBox}>{JSON.stringify(prompt.stats, null, 2)}</pre>
-            <div style={{ opacity: 0.6, fontSize: 12, marginTop: 6 }}>Модель валидатора: {prompt.model}</div>
-          </div>
-          <div style={card}>
+            <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 8 }}>Модель валидатора: {prompt.model}</div>
+          </Card>
+          <Card padded>
             <h2 style={{ marginTop: 0, fontSize: 16 }}>Текущий профиль</h2>
             <pre style={codeBox}>{JSON.stringify(prompt.profile, null, 2)}</pre>
-          </div>
-          <div style={card}>
+          </Card>
+          <Card padded>
             <h2 style={{ marginTop: 0, fontSize: 16 }}>Собранный промт (пример)</h2>
-            <div style={{ opacity: 0.6, fontSize: 12, marginBottom: 6 }}>SYSTEM:</div>
+            <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 6 }}>SYSTEM:</div>
             <pre style={codeBox}>{prompt.sample_prompt.system}</pre>
-            <div style={{ opacity: 0.6, fontSize: 12, margin: "10px 0 6px" }}>USER (на примере фейкового поста):</div>
+            <div style={{ color: "var(--text-muted)", fontSize: 12, margin: "10px 0 6px" }}>USER (на фейковом посте):</div>
             <pre style={codeBox}>{prompt.sample_prompt.user}</pre>
-          </div>
+          </Card>
         </>
       )}
-      <div style={card}>
+      <Card padded>
         <h2 style={{ marginTop: 0, fontSize: 16 }}>Последние решения валидатора ({decisions.length})</h2>
-        {decisions.length === 0 && <p style={{ opacity: 0.6 }}>Пока пусто.</p>}
+        {decisions.length === 0 && <p style={{ color: "var(--text-muted)" }}>Пока пусто.</p>}
         {decisions.map((d) => (
-          <div key={d.id} style={{ borderBottom: "1px solid #232a33", paddingBottom: 10, marginBottom: 10 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <div key={d.id} style={{ borderBottom: "1px solid var(--border)", paddingBottom: 12, marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
               <div style={{ fontSize: 13 }}>
-                <b>{verdictLabel(d.verdict, d.status)}</b> · {d.source.name} · {d.relevance ?? "—"}/100
+                <b>{verdictLabel(d.verdict, d.status)}</b>
+                <span style={{ color: "var(--text-muted)" }}> · {d.source.name} · {d.relevance ?? "—"}/100</span>
               </div>
-              <button onClick={() => toggle(d.id)} style={{ fontSize: 12, background: "transparent", border: "1px solid #232a33", color: "#a0a8b0", padding: "2px 8px", borderRadius: 4, cursor: "pointer" }}>
+              <Button variant="secondary" size="sm" onClick={() => toggle(d.id)}>
                 {expanded.has(d.id) ? "свернуть" : "развернуть"}
-              </button>
+              </Button>
             </div>
-            <div style={{ fontSize: 13, opacity: 0.7, marginTop: 4 }}>{d.title || "(без заголовка)"}</div>
-            {d.reasoning && <div style={{ fontSize: 12, opacity: 0.6, fontStyle: "italic", marginTop: 4 }}>{d.reasoning}</div>}
-            {d.validation_error && <div style={{ fontSize: 12, color: "#ff7b72", marginTop: 4 }}>ошибка: {d.validation_error}</div>}
+            <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>{d.title || "(без заголовка)"}</div>
+            {d.reasoning && <div style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic", marginTop: 4 }}>{d.reasoning}</div>}
+            {d.validation_error && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 4 }}>ошибка: {d.validation_error}</div>}
             {expanded.has(d.id) && (
               <>
-                <div style={{ opacity: 0.6, fontSize: 12, margin: "8px 0 4px" }}>INPUT:</div>
+                <div style={{ color: "var(--text-muted)", fontSize: 12, margin: "8px 0 4px" }}>INPUT:</div>
                 <pre style={codeBox}>{d.validation_input ?? "—"}</pre>
-                <div style={{ opacity: 0.6, fontSize: 12, margin: "8px 0 4px" }}>OUTPUT:</div>
+                <div style={{ color: "var(--text-muted)", fontSize: 12, margin: "8px 0 4px" }}>OUTPUT:</div>
                 <pre style={codeBox}>{d.validation_output_json ?? "—"}</pre>
               </>
             )}
           </div>
         ))}
-      </div>
-    </>
+      </Card>
+    </div>
   );
 }
 
