@@ -10,14 +10,12 @@ import {
   type EnsembleJudge,
 } from "./EnsembleCandidates";
 import {
-  MODEL_OPTIONS,
-  CATEGORY_META,
-  TASK_CATEGORIES,
+  MODE_META,
+  CHAT_MODES,
   getModelOption,
-  isTaskCategory,
-  isKnownModel,
+  isChatMode,
+  type ChatMode,
   type TaskCategory,
-  type ModelOption,
 } from "@/lib/chat-client";
 import styles from "./ChatApp.module.css";
 
@@ -27,6 +25,7 @@ interface SessionRow {
   id: string;
   title: string;
   model: string;
+  mode: ChatMode | null;
   model_override: string | null;
   category_override: TaskCategory | null;
   updated_at: string;
@@ -45,13 +44,23 @@ interface Attachment {
 }
 
 interface RouteMeta {
+  /** Какой режим был использован — для UI-индикатора и истории. */
+  mode?: ChatMode;
   category: string;
   complexity: string;
-  source: "override-model" | "override-category" | "auto" | "fallback";
+  source: "override-model" | "override-category" | "override-mode" | "auto" | "fallback";
   reason: string;
   reasoning_effort?: string | null;
   uncertain?: boolean;
   routing_latency_ms?: number;
+  /** Шаг веб-поиска (Thinking/Pro/Judge): что нашёл Sonar/Perplexity до основной модели. */
+  web_step?: {
+    model: string;
+    duration_ms: number;
+    tokens?: number;
+    citations_count?: number;
+    images_count?: number;
+  };
   // Ensemble + Judge: бэкенд шлёт это в `done`-событии, если категория
   // прошла через ансамбль. UI разворачивает кандидатов в коллапсибл.
   ensemble?: boolean;
@@ -75,37 +84,48 @@ interface Message {
   route_meta?: RouteMeta | null;
   liveRoute?: RouteMeta | null;
   liveEnsemble?: EnsembleLive | null;
+  /** ID активной (или завершённой) генерации — для reconnect через
+   *  /generations/[id]/stream при reload или переключении чата. */
+  generation_id?: string | null;
+}
+
+interface ActiveGeneration {
+  id: string;
+  status: "running" | "done" | "error" | "cancelled";
+  mode: ChatMode | null;
+  content: string;
+  user_message_id: string | null;
+  created_at: string;
 }
 
 // ─── Selection: что пользователь выбрал в селекторе ──────────────────
+//
+// Простая модель: Auto (роутер решает) либо явный режим (Thinking/Pro/Judge/Image).
+// Категории/конкретная модель больше не показываются в UI — это legacy power-user
+// овэрайды, переехавшие в /admin/chat. Из БД они тоже игнорируются для отображения:
+// чтобы переключиться в новый mode-only UI, пользователь должен явно выбрать режим
+// либо оставить Auto.
 
 type Selection =
   | { type: "auto" }
-  | { type: "category"; value: TaskCategory }
-  | { type: "model"; value: string };
+  | { type: "mode"; value: ChatMode };
 
 const AUTO_VALUE = "auto";
 function encodeSelection(s: Selection): string {
   if (s.type === "auto") return AUTO_VALUE;
-  if (s.type === "category") return `cat:${s.value}`;
-  return `model:${s.value}`;
+  return `mode:${s.value}`;
 }
 function decodeSelection(v: string): Selection {
   if (v === AUTO_VALUE) return { type: "auto" };
-  if (v.startsWith("cat:")) {
-    const cat = v.slice(4);
-    if (isTaskCategory(cat)) return { type: "category", value: cat };
-  }
-  if (v.startsWith("model:")) {
-    const m = v.slice(6);
-    if (isKnownModel(m)) return { type: "model", value: m };
+  if (v.startsWith("mode:")) {
+    const m = v.slice(5);
+    if (isChatMode(m)) return { type: "mode", value: m };
   }
   return { type: "auto" };
 }
 function sessionToSelection(s: SessionRow | null): Selection {
   if (!s) return { type: "auto" };
-  if (s.model_override) return { type: "model", value: s.model_override };
-  if (s.category_override) return { type: "category", value: s.category_override };
+  if (s.mode) return { type: "mode", value: s.mode };
   return { type: "auto" };
 }
 
@@ -144,6 +164,45 @@ function classifyFile(file: File): "text" | "image" | null {
   return null;
 }
 
+// ─── SSE helpers ─────────────────────────────────────────────────────
+
+/** Парсит SSE-стрим из ReadableStream и зовёт callback на каждое событие. */
+async function readSseStream(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (event: string, payload: unknown) => void,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const flushEvents = (chunk: string) => {
+    buffer += chunk;
+    let idx: number;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const block = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      let event = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (!dataLines.length) continue;
+      let payload: unknown;
+      try {
+        payload = JSON.parse(dataLines.join("\n"));
+      } catch {
+        continue;
+      }
+      onEvent(event, payload);
+    }
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    flushEvents(decoder.decode(value, { stream: true }));
+  }
+}
+
 function readAsText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -177,11 +236,6 @@ function formatDuration(ms?: number | null): string | null {
   return `${m}м ${s}с`;
 }
 
-function categoryLabel(c?: string | null): string | null {
-  if (!c) return null;
-  return CATEGORY_META[c as TaskCategory]?.label ?? c;
-}
-
 // ─── Компонент ───────────────────────────────────────────────────────
 
 export function ChatApp({ initialUid }: { initialUid?: string }) {
@@ -197,6 +251,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const reconnectAbortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // ID сессии, для которой нужно пропустить ближайший loadMessages —
@@ -243,7 +298,26 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           return;
         }
         const loaded = (data.messages ?? []) as Message[];
-        setMessages(loaded);
+        const active = data.active_generation as ActiveGeneration | null | undefined;
+        // Если есть незавершённая генерация — добавляем placeholder для assistant
+        // и тут же реконнектимся через SSE-стрим, чтобы дописать остаток.
+        const messagesToShow: Message[] =
+          active && active.status === "running"
+            ? [
+                ...loaded,
+                {
+                  id: `local-reconnect-${active.id}`,
+                  role: "assistant",
+                  content: "",
+                  created_at: active.created_at,
+                  streaming: true,
+                  model: null,
+                  generation_id: active.id,
+                  liveRoute: null,
+                },
+              ]
+            : loaded;
+        setMessages(messagesToShow);
         if (data.session) {
           setSelection(sessionToSelection(data.session as SessionRow));
         }
@@ -254,6 +328,10 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
           if (!el) return;
           el.scrollTop = loaded.length > 0 ? el.scrollHeight : 0;
         });
+        if (active && active.status === "running") {
+          // Реконнект к идущей генерации в фоне. Не блокирует UI.
+          reconnectToGenerationRef.current?.(sessionId, active.id);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -263,7 +341,56 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     [uid],
   );
 
+  // Реконнект к идущей генерации через /generations/[id]/stream.
+  // Лежит в ref, чтобы loadMessages мог его звать без циклической зависимости.
+  const reconnectToGenerationRef = useRef<((sessionId: string, genId: string) => Promise<void>) | null>(null);
+  const reconnectToGeneration = useCallback(
+    async (sessionId: string, genId: string) => {
+      if (!uid) return;
+      const placeholderId = `local-reconnect-${genId}`;
+      const controller = new AbortController();
+      reconnectAbortRef.current = controller;
+      try {
+        const r = await fetch(
+          `/api/chat/sessions/${sessionId}/generations/${genId}/stream`,
+          { headers: { "x-chat-uid": uid }, signal: controller.signal },
+        );
+        if (!r.ok || !r.body) {
+          setMessages((arr) =>
+            arr.map((m) =>
+              m.id === placeholderId ? { ...m, streaming: false, error: "Не удалось подключиться" } : m,
+            ),
+          );
+          return;
+        }
+        await readSseStream(r.body, (event, payload) => {
+          handleSseEvent(event, payload, placeholderId);
+        });
+      } catch (err) {
+        if ((err as { name?: string }).name === "AbortError") return;
+        const msg = err instanceof Error ? err.message : String(err);
+        setMessages((arr) =>
+          arr.map((m) => (m.id === placeholderId ? { ...m, streaming: false, error: msg } : m)),
+        );
+      } finally {
+        if (reconnectAbortRef.current === controller) reconnectAbortRef.current = null;
+      }
+    },
+    // handleSseEvent объявлен ниже — берём его через ref, чтобы не было цикла.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [uid],
+  );
   useEffect(() => {
+    reconnectToGenerationRef.current = reconnectToGeneration;
+  }, [reconnectToGeneration]);
+
+  useEffect(() => {
+    // При переключении чата рвём активный reconnect-SSE предыдущего чата,
+    // иначе будут писаться чужие события в неактивную сессию.
+    if (reconnectAbortRef.current) {
+      reconnectAbortRef.current.abort();
+      reconnectAbortRef.current = null;
+    }
     if (activeId) loadMessages(activeId);
     else setMessages([]);
   }, [activeId, loadMessages]);
@@ -351,11 +478,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       setSelection(next);
       if (activeId && uid) {
         const body: Record<string, unknown> =
-          next.type === "auto"
-            ? { reset: true }
-            : next.type === "category"
-              ? { categoryOverride: next.value }
-              : { modelOverride: next.value };
+          next.type === "auto" ? { reset: true } : { mode: next.value };
         try {
           await fetch(`/api/chat/sessions/${activeId}`, {
             method: "PATCH",
@@ -429,11 +552,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     if (!sid) {
       try {
         const initBody: Record<string, unknown> =
-          selection.type === "category"
-            ? { categoryOverride: selection.value }
-            : selection.type === "model"
-              ? { modelOverride: selection.value }
-              : {};
+          selection.type === "mode" ? { mode: selection.value } : {};
         const r = await fetch("/api/chat/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-chat-uid": uid },
@@ -470,8 +589,9 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
       content: "",
       created_at: new Date().toISOString(),
       streaming: true,
-      model: selection.type === "model" ? selection.value : null,
+      model: null,
       liveRoute: null,
+      generation_id: null,
     };
     setMessages((m) => [...m, userMsgLocal, assistantLocal]);
     setInput("");
@@ -482,13 +602,8 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const overrideBody: Record<string, unknown> = {};
-    if (selection.type === "model") overrideBody.modelOverride = selection.value;
-    else if (selection.type === "category") overrideBody.categoryOverride = selection.value;
-    else {
-      overrideBody.modelOverride = null;
-      overrideBody.categoryOverride = null;
-    }
+    const modeBody: Record<string, unknown> =
+      selection.type === "mode" ? { mode: selection.value } : {};
 
     try {
       const r = await fetch(`/api/chat/sessions/${sid}/messages`, {
@@ -497,7 +612,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
         headers: { "Content-Type": "application/json", "x-chat-uid": uid },
         body: JSON.stringify({
           content: text,
-          ...overrideBody,
+          ...modeBody,
           attachments: userAttachments,
         }),
       });
@@ -511,38 +626,9 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
         return;
       }
 
-      const reader = r.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      const flushEvents = (chunk: string) => {
-        buffer += chunk;
-        let idx: number;
-        while ((idx = buffer.indexOf("\n\n")) !== -1) {
-          const block = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          let event = "message";
-          const dataLines: string[] = [];
-          for (const line of block.split("\n")) {
-            if (line.startsWith("event:")) event = line.slice(6).trim();
-            else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-          }
-          if (!dataLines.length) continue;
-          let payload: unknown;
-          try {
-            payload = JSON.parse(dataLines.join("\n"));
-          } catch {
-            continue;
-          }
-          handleSseEvent(event, payload, assistantLocal.id);
-        }
-      };
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        flushEvents(decoder.decode(value, { stream: true }));
-      }
+      await readSseStream(r.body, (event, payload) => {
+        handleSseEvent(event, payload, assistantLocal.id);
+      });
     } catch (err) {
       if ((err as { name?: string }).name === "AbortError") {
         setMessages((arr) =>
@@ -576,6 +662,49 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
             ? { ...m, id: p.id }
             : m,
         ),
+      );
+    } else if (event === "generation_start") {
+      // Бэкенд создал генерацию и сообщил её id. Сохраняем на streaming-сообщении,
+      // чтобы при reload или переключении чата можно было реконнектиться по
+      // /generations/[id]/stream.
+      const p = payload as { id: string };
+      setMessages((arr) =>
+        arr.map((m) => (m.id === assistantLocalId ? { ...m, generation_id: p.id } : m)),
+      );
+    } else if (event === "resume") {
+      // Реконнект к идущей или завершённой генерации (после reload).
+      // Приходит первым на /generations/[id]/stream с накопленным состоянием.
+      const p = payload as {
+        id: string;
+        content: string;
+        status: "running" | "done" | "error" | "cancelled";
+        model?: string;
+        mode?: ChatMode;
+        route?: RouteMeta;
+        web_images?: Array<{ image_url: string; title?: string }>;
+      };
+      setMessages((arr) =>
+        arr.map((m) => {
+          if (m.id !== assistantLocalId) return m;
+          const webImgs = (p.web_images ?? [])
+            .filter((img) => img.image_url)
+            .map((img) => ({
+              filename: img.title ? img.title.slice(0, 100) : "web image",
+              mime_type: "image/*",
+              size: 0,
+              kind: "image_url" as const,
+              content_text: img.image_url,
+            }));
+          return {
+            ...m,
+            content: p.content,
+            model: p.model ?? m.model,
+            liveRoute: p.route ?? m.liveRoute,
+            generation_id: p.id,
+            streaming: p.status === "running",
+            attachments: webImgs.length > 0 ? [...(m.attachments ?? []), ...webImgs] : m.attachments,
+          };
+        }),
       );
     } else if (event === "route") {
       const p = payload as RouteMeta & { model: string };
@@ -850,7 +979,7 @@ export function ChatApp({ initialUid }: { initialUid?: string }) {
 
 // ─── Селектор моделей ────────────────────────────────────────────────
 
-function ModelSelector({
+function ModeSelector({
   value,
   onChange,
   disabled,
@@ -859,54 +988,47 @@ function ModelSelector({
   onChange: (v: string) => void;
   disabled: boolean;
 }) {
-  // Группируем модели по vendor для optgroup'ов внутри секции «Модели».
-  const byVendor = useMemo(() => {
-    const map = new Map<string, ModelOption[]>();
-    for (const m of MODEL_OPTIONS) {
-      const arr = map.get(m.vendor) ?? [];
-      arr.push(m);
-      map.set(m.vendor, arr);
-    }
-    return Array.from(map.entries());
-  }, []);
-
-  let title: string;
-  if (value === AUTO_VALUE) title = "Auto: роутер сам выбирает модель под задачу";
-  else if (value.startsWith("cat:")) {
-    const cat = value.slice(4) as TaskCategory;
-    title = `Пресет «${CATEGORY_META[cat]?.label ?? cat}» — модель из настроек /admin/chat`;
-  } else if (value.startsWith("model:")) {
-    title = `Принудительно выбрана модель: ${getModelOption(value.slice(6)).label}`;
-  } else {
-    title = "Выбор модели";
-  }
+  // value: "auto" | "mode:thinking" | "mode:pro" | "mode:judge" | "mode:image"
+  const currentMode: ChatMode | null =
+    value.startsWith("mode:") && isChatMode(value.slice(5)) ? (value.slice(5) as ChatMode) : null;
+  const isAuto = value === AUTO_VALUE;
 
   return (
-    <select
-      className={styles.modelSelect}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={disabled}
-      title={title}
-    >
-      <option value={AUTO_VALUE}>⚡ Auto — роутер выбирает</option>
-      <optgroup label="── Категории ──">
-        {TASK_CATEGORIES.map((cat) => (
-          <option key={cat} value={`cat:${cat}`}>
-            {CATEGORY_META[cat].icon} {CATEGORY_META[cat].label}
-          </option>
-        ))}
-      </optgroup>
-      {byVendor.map(([vendor, models]) => (
-        <optgroup key={vendor} label={`── ${vendor} ──`}>
-          {models.map((m) => (
-            <option key={m.id} value={`model:${m.id}`}>
-              {m.label}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
+    <div className={styles.modeBar} role="radiogroup" aria-label="Режим ответа">
+      <button
+        type="button"
+        role="radio"
+        aria-checked={isAuto}
+        className={styles.modeChip}
+        data-active={isAuto}
+        disabled={disabled}
+        onClick={() => onChange(AUTO_VALUE)}
+        title="Auto: бэкенд сам подберёт режим по сложности вопроса"
+      >
+        <span className={styles.modeIcon} aria-hidden>⚡</span>
+        <span className={styles.modeLabel}>Auto</span>
+      </button>
+      {CHAT_MODES.map((m) => {
+        const meta = MODE_META[m];
+        const isActive = currentMode === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={isActive}
+            className={styles.modeChip}
+            data-active={isActive}
+            disabled={disabled}
+            onClick={() => onChange(`mode:${m}`)}
+            title={`${meta.hint} ${meta.expectedSeconds}`}
+          >
+            <span className={styles.modeIcon} aria-hidden>{meta.icon}</span>
+            <span className={styles.modeLabel}>{meta.label}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -932,7 +1054,12 @@ function MessageBlock({ message }: { message: Message }) {
   const live = message.liveRoute;
   const ensembleLive = message.liveEnsemble;
   const hasAttachments = (message.attachments?.length ?? 0) > 0;
-  const isImageCategory = message.route_meta?.category === "image" || live?.category === "image";
+  // Image-режим — у бэкенда отдельный пайплайн, отображаем как раньше: крупные картинки.
+  const isImageCategory =
+    message.route_meta?.mode === "image" ||
+    live?.mode === "image" ||
+    message.route_meta?.category === "image" ||
+    live?.category === "image";
   // Пока стримим:
   // - текстовая категория: показываем "thinking" пока нет content
   // - image-категория: показываем "Рисую…" пока нет attachments
@@ -1016,20 +1143,21 @@ function MessageBlock({ message }: { message: Message }) {
 
 function routeLabel(route: RouteMeta, model: string | null | undefined): string {
   const modelLabel = model ? getModelOption(model).label : "Маршрутизирую";
-  const cat = categoryLabel(route.category);
-  return cat ? `${modelLabel} · ${cat.toLowerCase()}` : modelLabel;
+  const modeMeta = route.mode ? MODE_META[route.mode] : null;
+  return modeMeta ? `${modelLabel} · ${modeMeta.label.toLowerCase()}` : modelLabel;
 }
 
 function MessageMeta({ message }: { message: Message }) {
   const modelOption = message.model ? getModelOption(message.model) : null;
   const route = message.route_meta;
   const duration = formatDuration(message.duration_ms);
-  const cat = categoryLabel(route?.category);
+  const modeMeta = route?.mode ? MODE_META[route.mode] : null;
   const tokensIn = message.tokens_prompt;
   const tokensOut = message.tokens_completion;
   const sourceLabel: Record<string, string> = {
     auto: "⚡ auto",
     fallback: "эвристика",
+    "override-mode": "вручную режим",
     "override-model": "вручную модель",
     "override-category": "вручную категория",
   };
@@ -1045,10 +1173,24 @@ function MessageMeta({ message }: { message: Message }) {
           {modelOption.label}
         </span>
       )}
-      {route?.source && <span className={styles.metaChip}>{sourceLabel[route.source] ?? route.source}</span>}
-      {cat && <span className={styles.metaChip}>{cat}</span>}
+      {modeMeta && (
+        <span className={styles.metaChip} title={modeMeta.hint}>
+          {modeMeta.icon} {modeMeta.label}
+        </span>
+      )}
+      {route?.source && route.source !== "override-mode" && (
+        <span className={styles.metaChip}>{sourceLabel[route.source] ?? route.source}</span>
+      )}
       {route?.reasoning_effort && (
         <span className={styles.metaChip}>think: {route.reasoning_effort}</span>
+      )}
+      {route?.web_step && (
+        <span
+          className={styles.metaChip}
+          title={`Веб-поиск: ${getModelOption(route.web_step.model).label} · ${formatDuration(route.web_step.duration_ms)}`}
+        >
+          🔍 {route.web_step.citations_count ?? 0} источ.
+        </span>
       )}
       {duration && <span className={styles.metaChip}>⏱ {duration}</span>}
       {tokensIn != null && tokensOut != null && (
@@ -1218,7 +1360,7 @@ function Composer({
             }}
           />
 
-          <ModelSelector value={selectionValue} onChange={onChangeSelection} disabled={sending} />
+          <ModeSelector value={selectionValue} onChange={onChangeSelection} disabled={sending} />
 
           <div className={styles.toolsSpacer} />
 

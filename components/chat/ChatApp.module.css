@@ -169,29 +169,64 @@
   color: var(--text);
 }
 
-.modelSelect {
-  height: 34px;
-  padding: 0 10px;
-  background: var(--surface);
-  border: var(--hairline-w) solid var(--border-strong);
-  border-radius: var(--radius);
-  color: var(--text);
+/* ─── Селектор режима (Auto + Thinking/Pro/Judge/Image) ─────────── */
+
+.modeBar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-subtle);
+  border: var(--hairline-w) solid var(--border);
+  border-radius: 999px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.modeBar::-webkit-scrollbar {
+  display: none;
+}
+
+.modeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
   font-family: inherit;
   font-size: var(--text-sm);
+  font-weight: 500;
   cursor: pointer;
-  max-width: 280px;
-  transition: border-color 120ms var(--ease), background 120ms var(--ease);
+  white-space: nowrap;
+  transition: all 160ms var(--ease);
 }
-.modelSelect:hover:not(:disabled) {
-  background: var(--bg-subtle);
+
+.modeChip:hover:not(:disabled):not([data-active="true"]) {
+  background: var(--bg-hover);
+  color: var(--text);
 }
-.modelSelect:focus {
-  outline: none;
-  border-color: var(--text);
+
+.modeChip[data-active="true"] {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
-.modelSelect:disabled {
-  opacity: 0.6;
+
+.modeChip:disabled {
+  opacity: 0.5;
   cursor: not-allowed;
+}
+
+.modeIcon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.modeLabel {
+  font-size: var(--text-sm);
 }
 
 /* ─── Сообщения ─────────────────────────────────────────────────── */
@@ -735,7 +770,11 @@
     padding-left: 16px;
     padding-right: 16px;
   }
-  .modelSelect {
-    max-width: 180px;
+  /* На мобильных селектор может скроллиться горизонтально — не теснит композер. */
+  .modeBar {
+    max-width: 100%;
+  }
+  .modeChip {
+    padding: 6px 10px;
   }
 }
