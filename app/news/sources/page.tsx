@@ -26,11 +26,13 @@ interface SourceRow {
 export default function SourcesPage() {
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [kind, setKind] = useState<"telegram" | "rss">("telegram");
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [intervalMin, setIntervalMin] = useState(30);
   const [busy, setBusy] = useState(false);
+  const [fetchingId, setFetchingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -48,10 +50,15 @@ export default function SourcesPage() {
     load();
   }, [load]);
 
+  // Submit оптимистичен: бекенд отдаёт вставленную строку, мы добавляем её
+  // в локальный state без второго GET. Парсинг новых постов из этого
+  // источника пользователь триггерит отдельной кнопкой «Запустить сейчас».
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const r = await fetch("/api/news/sources", {
         method: "POST",
@@ -60,9 +67,12 @@ export default function SourcesPage() {
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      if (data.source) {
+        setSources((cur) => [data.source as SourceRow, ...cur]);
+      }
       setUrl("");
       setName("");
-      await load();
+      setNotice(`добавлено · «Запустить сейчас» — чтобы спарсить посты`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -72,10 +82,48 @@ export default function SourcesPage() {
 
   const remove = async (id: string) => {
     if (!confirm("Удалить источник? Уже собранные посты останутся в БД.")) return;
-    await fetch(`/api/news/sources?id=${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    });
-    await load();
+    const prev = sources;
+    setSources((cur) => cur.filter((s) => s.id !== id));
+    try {
+      const r = await fetch(`/api/news/sources?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!r.ok) {
+        setSources(prev);
+        const d = await r.json().catch(() => ({}));
+        setError(`удалить не получилось: ${d.error ?? r.status}`);
+      }
+    } catch (e) {
+      setSources(prev);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const fetchNow = async (id: string) => {
+    if (fetchingId) return;
+    setFetchingId(id);
+    setError(null);
+    setNotice(null);
+    try {
+      const r = await fetch("/api/news/sources/fetch-one", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      const inserted = typeof data.inserted === "number" ? data.inserted : 0;
+      setNotice(
+        inserted === 0
+          ? `новых постов не нашлось · валидация — на ближайшем cron-тике`
+          : `найдено ${inserted} новых · валидация — на ближайшем cron-тике`,
+      );
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFetchingId(null);
+    }
   };
 
   const selectStyle: React.CSSProperties = {
@@ -134,6 +182,7 @@ export default function SourcesPage() {
           <Button type="submit" disabled={busy}>Добавить</Button>
         </form>
         {error && <div style={{ color: "var(--danger)", marginTop: 10, fontSize: "var(--text-sm)" }}>{error}</div>}
+        {notice && <div style={{ color: "var(--success)", marginTop: 10, fontSize: "var(--text-sm)" }}>{notice}</div>}
       </Card>
 
       <Card padded>
@@ -147,11 +196,20 @@ export default function SourcesPage() {
                 <b>{s.name}</b>
                 <a href={s.url} target="_blank" rel="noreferrer" style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)", marginLeft: 10, borderBottom: "1px solid var(--border)" }}>{s.url}</a>
               </div>
-              <Button variant="danger" size="sm" onClick={() => remove(s.id)}>удалить</Button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => fetchNow(s.id)}
+                  disabled={fetchingId === s.id}
+                >
+                  {fetchingId === s.id ? "тяну…" : "запустить сейчас"}
+                </Button>
+                <Button variant="danger" size="sm" onClick={() => remove(s.id)}>удалить</Button>
+              </div>
             </div>
             <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
               интервал: {s.fetch_interval_minutes} мин · последний фетч: {s.last_fetched_at ?? "никогда"}
-              {s.apify_run_id && ` · apify: ${s.apify_run_status ?? "?"} (${s.apify_run_id})`}
             </div>
           </div>
         ))}

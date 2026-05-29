@@ -216,6 +216,36 @@ export async function runTick(workerId: string): Promise<TickStats> {
 // (публичный web-preview, не требует Apify/MTProto/токена). За один tick:
 // fetch → parse → insert. Это покрывает 95% MVP-кейса (публичные новостные
 // каналы). Для приватных/чатов потребовался бы MTProto — пока вне scope.
+// Парсит один source синхронно — без cron'a, без claim'а. Используется
+// ручной кнопкой «Запустить сейчас» на /news/sources. Сразу обновляет
+// last_fetched_at, чтобы следующий cron не дёрнул его повторно.
+export async function processSourceNow(
+  source: NewsSourceRow,
+): Promise<{ action: string; inserted: number; warnings: string[] }> {
+  const stats: TickStats = {
+    seeded_profile: false,
+    seeded_sources: 0,
+    source_processed: source.name,
+    source_action: null,
+    items_inserted: 0,
+    validated: 0,
+    validated_show: 0,
+    validated_skip: 0,
+    validation_failed: 0,
+    warnings: [],
+    errors: [],
+  };
+  let action: string;
+  if (source.kind === "telegram") {
+    action = await processTelegramSource(source, stats);
+  } else if (source.kind === "rss") {
+    action = await processRssSource(source, stats);
+  } else {
+    throw new Error(`unknown source kind: ${source.kind}`);
+  }
+  return { action, inserted: stats.items_inserted, warnings: stats.warnings };
+}
+
 async function processTelegramSource(
   source: NewsSourceRow,
   stats: TickStats,
