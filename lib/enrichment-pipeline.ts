@@ -231,25 +231,37 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     }),
   );
 
-  // ── Шаг D++: Apify article-extractor для первоисточника, если он
-  //    всё ещё пустой (paywall/JS-SPA, sonar тоже не справился). Только
-  //    для was_original — слишком дорого для остальных.
+  // ── Шаг D++: Apify article-extractor для ЛЮБЫХ источников, у которых
+  //    после HTML+Sonar всё ещё пустой text. Это уровень «героя»: Apify
+  //    рендерит JS, обходит большинство paywall/Cloudflare-блоков. Кап на
+  //    2 вызова — Apify дорогой (~$0.05-0.10 за run), и в большинстве
+  //    случаев 1-2 хороших источника достаточно для Opus.
   let extraApifyCost = 0;
-  if (process.env.APIFY_TOKEN) {
-    const originalEmpty = related.find((r) => r.was_original && (!r.text || r.text.length < 200));
-    if (originalEmpty) {
+  const APIFY_BUDGET = 2;
+  if (!process.env.APIFY_TOKEN) {
+    console.log(`[news/enrich] APIFY_TOKEN not set — skipping Apify fallback`);
+  } else {
+    // Сортируем приоритет: was_original вперёд, затем обычные.
+    const apifyTargets = related
+      .map((r, idx) => ({ r, idx }))
+      .filter(({ r }) => !r.text || r.text.length < 200)
+      .sort((a, b) => Number(b.r.was_original ?? false) - Number(a.r.was_original ?? false))
+      .slice(0, APIFY_BUDGET);
+
+    for (const { r, idx } of apifyTargets) {
       try {
-        const apify = await fetchArticleViaApify(originalEmpty.url, { timeoutMs: 30_000 });
+        const apify = await fetchArticleViaApify(r.url, { timeoutMs: 30_000 });
         if (apify.text && apify.text.length >= 200) {
-          const idx = related.indexOf(originalEmpty);
           related[idx] = {
-            ...originalEmpty,
+            ...r,
             text: apify.text,
-            title: originalEmpty.title || apify.title,
-            published_at: originalEmpty.published_at || apify.published_at,
+            title: r.title || apify.title,
+            published_at: r.published_at || apify.published_at,
           };
           extraApifyCost += apify.cost_cents;
-          console.log(`[news/enrich] apify article OK for ${originalEmpty.url} (${apify.text.length} chars)`);
+          console.log(`[news/enrich] apify OK for ${r.url} (${apify.text.length} chars, ${apify.cost_cents}¢)`);
+        } else {
+          console.log(`[news/enrich] apify empty for ${r.url}`);
         }
       } catch (err) {
         await logError({
@@ -257,7 +269,7 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
           source: "server",
           route: "news/enrich:apify_article",
           message: err instanceof Error ? err.message : String(err),
-          meta: { url: originalEmpty.url, enrichmentId: job.id },
+          meta: { url: r.url, enrichmentId: job.id },
         });
       }
     }

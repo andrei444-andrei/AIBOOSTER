@@ -34,6 +34,7 @@ import { fetchRss, stripHtml } from "./rss";
 import { fetchWebHeadlines } from "./web-scrape";
 import { extractArticle } from "./article-extract";
 import { sonarUrlRead } from "./perplexity-search";
+import { fetchArticleViaApify } from "./apify-article";
 import { chatJson } from "./aimlapi";
 import {
   buildValidatorPrompt,
@@ -455,12 +456,15 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-// Дотягивание body перед валидацией. Сперва пробуем дешёвый HTML-scrape,
-// потом Sonar URL-read как fallback. Soft-fail на всё — возвращаем
-// исходный body если ничего не получилось.
+// Дотягивание body перед валидацией. Каскад:
+//   1. article-extract (HTML, ~5s) — для обычных страниц
+//   2. sonarUrlRead (~10s, ~$0.005) — для paywall/SPA, у Perplexity
+//      свой crawler с data-deals.
+//   3. Apify article-extractor (~15s, ~$0.05) — последний герой для
+//      JS-SPA и Cloudflare-блока. Только если есть APIFY_TOKEN.
+// Soft-fail на каждый шаг — возвращаем лучшее что удалось.
 async function tryEnrichBody(url: string, existing: string): Promise<string> {
   let best = existing;
-  // Phase 1: HTML scrape с нашим article-extract (~5-10s).
   try {
     const art = await extractArticle(url);
     if (art.text && art.text.length > best.length && art.text.length >= 300) {
@@ -470,14 +474,25 @@ async function tryEnrichBody(url: string, existing: string): Promise<string> {
   } catch {
     /* soft */
   }
-  // Phase 2: Sonar URL-read — у Perplexity свой crawler с paywall-данными.
   try {
     const read = await sonarUrlRead(url, { timeoutMs: 10_000 });
     if (read.text && read.text.length > best.length) {
       best = read.text;
+      if (best.length >= 1500) return best;
     }
   } catch {
     /* soft */
+  }
+  if (best.length < 800 && process.env.APIFY_TOKEN) {
+    try {
+      const apify = await fetchArticleViaApify(url, { timeoutMs: 25_000 });
+      if (apify.text && apify.text.length > best.length) {
+        best = apify.text;
+        console.log(`[news/validate] apify rescued ${url} (${apify.text.length} chars)`);
+      }
+    } catch (err) {
+      console.log(`[news/validate] apify failed for ${url}: ${err instanceof Error ? err.message.slice(0,100) : "?"}`);
+    }
   }
   return best;
 }
