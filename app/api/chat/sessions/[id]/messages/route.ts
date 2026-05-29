@@ -6,18 +6,22 @@ import {
   getSettings,
   isKnownModel,
   isTaskCategory,
+  isChatMode,
   listMessages,
   renameSession,
   setSessionLastModel,
   setSessionCategoryOverride,
   setSessionModelOverride,
+  setSessionMode,
   clearSessionOverride,
   type RouteMeta,
   type CreateAttachmentInput,
 } from "@/lib/chat";
 import { chatStream, generateImage, AIError, type WebImage, type WebCitation } from "@/lib/ai";
 import { compactRecentHistory, routeRequest } from "@/lib/router";
-import { ENSEMBLES, runEnsemble } from "@/lib/ensemble";
+import { runEnsemble, ENSEMBLES } from "@/lib/ensemble";
+import { MODE_CONFIG, pickAutoMode, runPipeline } from "@/lib/pipeline";
+import type { ChatMode } from "@/lib/chat-client";
 import { logServerError } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -45,8 +49,11 @@ interface IncomingAttachment {
 
 interface IncomingBody {
   content: string;
-  /** Если переданы — обновляем выбор сессии перед роутингом. null = сбросить в Auto. */
+  /** Режим: thinking/pro/judge/image. null = Auto (роутер сам выбирает thinking/pro). */
+  mode?: ChatMode | null;
+  /** Legacy: конкретная модель. */
   modelOverride?: string | null;
+  /** Legacy: категория-пресет. Не используется в новой логике, но принимается для совместимости. */
   categoryOverride?: string | null;
   attachments?: IncomingAttachment[];
 }
@@ -164,12 +171,26 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
 
-  // Принимаем точечные изменения выбора сессии из тела запроса — это даёт UI право
-  // отправить сообщение и одновременно зафиксировать выбор без отдельного PATCH.
-  // Правила: model и category взаимоисключающие; null = сброс в Auto.
+  // Принимаем точечные изменения выбора сессии из тела запроса.
+  // Новая логика: основная ось — mode (thinking/pro/judge/image).
+  // mode и modelOverride/categoryOverride взаимоисключающие.
+  let currentMode: ChatMode | null = session.mode;
   let currentModelOverride = session.model_override;
   let currentCategoryOverride = session.category_override;
-  if ("modelOverride" in body) {
+
+  if ("mode" in body) {
+    if (body.mode === null) {
+      if (currentMode !== null) {
+        currentMode = null;
+        await setSessionMode(id, uid, null);
+      }
+    } else if (isChatMode(body.mode) && body.mode !== currentMode) {
+      currentMode = body.mode;
+      currentModelOverride = null;
+      currentCategoryOverride = null;
+      await setSessionMode(id, uid, body.mode);
+    }
+  } else if ("modelOverride" in body) {
     if (body.modelOverride === null) {
       if (currentModelOverride !== null) {
         currentModelOverride = null;
@@ -181,7 +202,8 @@ export async function POST(req: Request, ctx: Ctx) {
       body.modelOverride !== currentModelOverride
     ) {
       currentModelOverride = body.modelOverride;
-      currentCategoryOverride = null; // взаимоисключающие
+      currentCategoryOverride = null;
+      currentMode = null;
       await setSessionModelOverride(id, uid, currentModelOverride);
     }
   } else if ("categoryOverride" in body) {
@@ -197,16 +219,19 @@ export async function POST(req: Request, ctx: Ctx) {
     ) {
       currentCategoryOverride = body.categoryOverride;
       currentModelOverride = null;
+      currentMode = null;
       await setSessionCategoryOverride(id, uid, currentCategoryOverride);
     }
   }
 
-  // Авто-режим (оба null) — если в body передан reset, явно очищаем (хотя setSessionModelOverride
-  // уже это делает выше). Дополнительной обработки не требуется.
-  if (currentModelOverride === null && currentCategoryOverride === null && session.model_override === null && session.category_override === null) {
-    // No-op: уже в Auto.
-  } else if (body.modelOverride === null && body.categoryOverride === null) {
+  // Полный сброс в Auto если оба override null.
+  if (
+    "mode" in body && body.mode === null &&
+    "modelOverride" in body && body.modelOverride === null &&
+    "categoryOverride" in body && body.categoryOverride === null
+  ) {
     await clearSessionOverride(id, uid);
+    currentMode = null;
     currentModelOverride = null;
     currentCategoryOverride = null;
   }
@@ -235,11 +260,44 @@ export async function POST(req: Request, ctx: Ctx) {
       history.slice(-5).map((m) => ({ role: m.role, content: m.content })),
     ),
   });
-  const chosenModel = decision.model;
+
+  // Решаем эффективный режим. Категория `image` от классификатора всегда даёт image,
+  // даже если пользователь в thinking — иначе «нарисуй кота» в thinking уйдёт в текст.
+  let effectiveMode: "image" | "judge" | "thinking" | "pro" | "single-model";
+  if (decision.category === "image" || currentMode === "image") {
+    effectiveMode = "image";
+  } else if (currentMode === "judge") {
+    effectiveMode = "judge";
+  } else if (currentMode === "thinking" || currentMode === "pro") {
+    effectiveMode = currentMode;
+  } else if (currentModelOverride) {
+    // Legacy: пользователь явно зафиксировал конкретную модель — без веб-пайплайна
+    effectiveMode = "single-model";
+  } else {
+    // Auto: thinking для low/medium, pro для high. Judge никогда не auto.
+    effectiveMode = pickAutoMode(decision.complexity);
+  }
+
+  // chosenModel для дисплея и для legacy/image веток. Для thinking/pro он будет
+  // перезаписан на synth-модель из MODE_CONFIG ниже.
+  const chosenModel =
+    effectiveMode === "thinking" || effectiveMode === "pro"
+      ? MODE_CONFIG[effectiveMode].synthModel
+      : decision.model;
 
   const settings = await getSettings();
   const systemPrompt = buildSystemPrompt(settings, { addon: decision.system_addon });
   const aiMessages = buildMessagesForModel(systemPrompt, history, chosenModel);
+
+  // Источник решения для UI/диагностики. Mode-override и legacy перекрывают auto.
+  const decisionSource: RouteMeta["source"] =
+    currentMode !== null
+      ? "override-mode"
+      : currentModelOverride
+        ? "override-model"
+        : currentCategoryOverride
+          ? "override-category"
+          : decision.source;
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -251,9 +309,10 @@ export async function POST(req: Request, ctx: Ctx) {
       send("user_message", { id: userMsg.id, created_at: userMsg.created_at });
       send("route", {
         model: chosenModel,
+        mode: effectiveMode,
         category: decision.category,
         complexity: decision.complexity,
-        source: decision.source,
+        source: decisionSource,
         reason: decision.reason,
         reasoning_effort: decision.reasoning_effort,
         routing_latency_ms: decision.routing_latency_ms,
@@ -261,7 +320,7 @@ export async function POST(req: Request, ctx: Ctx) {
       });
 
       // ── Ветка image: вызываем images/generations, сохраняем картинку как attachment
-      if (decision.category === "image") {
+      if (effectiveMode === "image") {
         const t0 = Date.now();
         try {
           const images = await generateImage({
@@ -283,9 +342,10 @@ export async function POST(req: Request, ctx: Ctx) {
             model: chosenModel,
             durationMs,
             routeMeta: {
+              mode: "image",
               category: decision.category,
               complexity: decision.complexity,
-              source: decision.source,
+              source: decisionSource,
               reason: decision.reason,
               reasoning_effort: decision.reasoning_effort,
               uncertain: decision.uncertain ?? false,
@@ -309,9 +369,10 @@ export async function POST(req: Request, ctx: Ctx) {
             usage: null,
             duration_ms: durationMs,
             route: {
+              mode: "image",
               category: decision.category,
               complexity: decision.complexity,
-              source: decision.source,
+              source: decisionSource,
               reason: decision.reason,
               reasoning_effort: decision.reasoning_effort,
               uncertain: decision.uncertain ?? false,
@@ -340,15 +401,17 @@ export async function POST(req: Request, ctx: Ctx) {
         return;
       }
 
-      // ── Ветка ансамбля: для research/code/analyze/strategy запускаем
-      //   2-3 модели параллельно и судью (GPT-5 high). Пропускаем, если
-      //   пользователь явно зафиксировал модель — override-model значит
-      //   «хочу именно эту модель», а не «синтезированный микс».
-      const ensembleModels = ENSEMBLES[decision.category];
+      // ── Ветка ансамбля (Judge mode): 4 модели + GPT-5 high судья.
+      //   Activates только при mode=judge (или legacy override-category, но это
+      //   уже не основной путь). Для thinking/pro используется runPipeline ниже.
+      //   Берём ансамбль по auto-классифицированной категории — research/code/etc
+      //   определяют конкретный набор моделей.
+      const ensembleCategory = decision.category;
+      const ensembleModels = ENSEMBLES[ensembleCategory];
       const shouldEnsemble =
+        effectiveMode === "judge" &&
         ensembleModels !== null &&
-        ensembleModels.length > 1 &&
-        decision.source !== "override-model";
+        ensembleModels.length > 1;
 
       if (shouldEnsemble) {
         const t0 = Date.now();
@@ -454,9 +517,10 @@ export async function POST(req: Request, ctx: Ctx) {
           }
 
           const routeMeta: RouteMeta = {
+            mode: "judge",
             category: decision.category,
             complexity: decision.complexity,
-            source: decision.source,
+            source: decisionSource,
             reason: decision.reason,
             reasoning_effort: decision.reasoning_effort,
             uncertain: decision.uncertain ?? false,
@@ -536,7 +600,140 @@ export async function POST(req: Request, ctx: Ctx) {
         }
       }
 
-      // ── Ветка текстовая (chatStream) — одна модель
+      // ── Ветка Thinking / Pro — двухшаговый Sonar → GPT пайплайн.
+      //   Шаг 1 (Sonar) скрыт от пользователя как отдельное SSE-событие, но его
+      //   результаты идут через web_images / citations + сохраняются в route_meta.
+      if (effectiveMode === "thinking" || effectiveMode === "pro") {
+        const tPipe = Date.now();
+        const seenImagesP = new Set<string>();
+        const collectedImagesP: WebImage[] = [];
+        const seenCitsP = new Set<string>();
+        const collectedCitsP: WebCitation[] = [];
+        let accP = "";
+        const usageRefP: { current: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null } = { current: null };
+        let webStepMeta: NonNullable<RouteMeta["web_step"]> | null = null;
+
+        try {
+          await runPipeline(
+            {
+              mode: effectiveMode,
+              synthMessages: aiMessages,
+              webQuery: content,
+            },
+            {
+              onDelta: (text) => {
+                accP += text;
+                send("delta", { text });
+              },
+              onUsage: (u) => {
+                usageRefP.current = u;
+              },
+              onWebImages: (imgs) => {
+                const fresh: WebImage[] = [];
+                for (const img of imgs) {
+                  if (seenImagesP.has(img.image_url)) continue;
+                  seenImagesP.add(img.image_url);
+                  collectedImagesP.push(img);
+                  fresh.push(img);
+                }
+                if (fresh.length) send("web_images", { images: fresh });
+              },
+              onCitations: (cits) => {
+                const fresh: WebCitation[] = [];
+                for (const c of cits) {
+                  if (seenCitsP.has(c.url)) continue;
+                  seenCitsP.add(c.url);
+                  collectedCitsP.push(c);
+                  fresh.push(c);
+                }
+                if (fresh.length) send("citations", { citations: fresh });
+              },
+              onWebStepDone: (step) => {
+                webStepMeta = step;
+              },
+            },
+          );
+        } catch (err) {
+          let message = "Pipeline failed";
+          let status: number | undefined;
+          if (err instanceof AIError) {
+            message = err.message;
+            status = err.status;
+          } else if (err instanceof Error) {
+            message = err.message;
+          }
+          const error_id = await logServerError(err, "/api/chat/sessions/[id]/messages pipeline", {
+            session_id: id,
+            mode: effectiveMode,
+            status,
+          });
+          send("error", { message, error_id });
+          controller.close();
+          return;
+        }
+
+        const durationMs = Date.now() - tPipe;
+        if (!accP.trim()) {
+          const error_id = await logServerError(
+            new Error("pipeline: synth returned empty content"),
+            "/api/chat/sessions/[id]/messages pipeline",
+            { session_id: id, mode: effectiveMode },
+          );
+          send("error", { message: "Модель вернула пустой ответ.", error_id });
+          controller.close();
+          return;
+        }
+
+        const routeMeta: RouteMeta = {
+          mode: effectiveMode,
+          category: decision.category,
+          complexity: decision.complexity,
+          source: decisionSource,
+          reason: decision.reason,
+          reasoning_effort: MODE_CONFIG[effectiveMode].synthReasoning,
+          uncertain: decision.uncertain ?? false,
+          routing_latency_ms: decision.routing_latency_ms,
+          web_step: webStepMeta ?? undefined,
+        };
+
+        const webImageAttachmentsP = collectedImagesP.slice(0, 8).map((img, i) => ({
+          filename: img.title ? img.title.slice(0, 100) : `web-image-${i + 1}`,
+          mime_type: "image/*",
+          size: 0,
+          kind: "image_url" as const,
+          content_text: img.image_url,
+        }));
+
+        const assistantMsg = await appendMessage(id, "assistant", accP, {
+          model: chosenModel,
+          tokensPrompt: usageRefP.current?.prompt_tokens ?? null,
+          tokensCompletion: usageRefP.current?.completion_tokens ?? null,
+          durationMs,
+          routeMeta,
+          attachments: webImageAttachmentsP.length ? webImageAttachmentsP : undefined,
+        }).catch(async (err) => {
+          await logServerError(err, "/api/chat/sessions/[id]/messages save pipeline", { session_id: id });
+          return null;
+        });
+
+        await setSessionLastModel(id, uid, chosenModel).catch(() => {});
+
+        send("done", {
+          id: assistantMsg?.id ?? null,
+          created_at: assistantMsg?.created_at ?? new Date().toISOString(),
+          model: chosenModel,
+          usage: usageRefP.current,
+          duration_ms: durationMs,
+          route: routeMeta,
+          web_images: collectedImagesP.slice(0, 8),
+          citations: collectedCitsP.slice(0, 20),
+        });
+        controller.close();
+        return;
+      }
+
+      // ── Ветка legacy single-model: пользователь явно зафиксировал модель через
+      //   model_override (без mode). Без веб-поиска, простой chatStream одной моделью.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const aimlOpts: any = {
         model: chosenModel,
@@ -633,7 +830,7 @@ export async function POST(req: Request, ctx: Ctx) {
       const routeMeta: RouteMeta = {
         category: decision.category,
         complexity: decision.complexity,
-        source: decision.source,
+        source: decisionSource,
         reason: decision.reason,
         reasoning_effort: decision.reasoning_effort,
         uncertain: decision.uncertain ?? false,
