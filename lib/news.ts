@@ -748,6 +748,120 @@ export async function recordFeedback(input: {
   });
 }
 
+// ---------- user reports (жалобы на конкретные карточки) ----------
+
+export type ReportStatus = "open" | "reviewing" | "resolved" | "wontfix";
+
+export interface NewsUserReportRow {
+  id: string;
+  item_id: string;
+  enrichment_id: string | null;
+  text: string;
+  status: ReportStatus;
+  resolution: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export async function createUserReport(input: {
+  item_id: string;
+  enrichment_id?: string | null;
+  text: string;
+}): Promise<NewsUserReportRow> {
+  await ensureSchema();
+  const db = getDb();
+  const id = randomUUID();
+  const cleanText = input.text.trim().slice(0, 5000);
+  if (!cleanText) throw new Error("report text is empty");
+  await db.execute({
+    sql: `INSERT INTO news_user_reports (id, item_id, enrichment_id, text, status)
+          VALUES (?, ?, ?, ?, 'open')`,
+    args: [id, input.item_id, input.enrichment_id ?? null, cleanText],
+  });
+  const row = await db.execute({
+    sql: `SELECT * FROM news_user_reports WHERE id = ?`,
+    args: [id],
+  });
+  return row.rows[0] as unknown as NewsUserReportRow;
+}
+
+export interface NewsUserReportWithItem extends NewsUserReportRow {
+  item_title: string | null;
+  item_url: string | null;
+  source_name: string;
+  article_body: string | null;
+  synthesis_output_json: string | null;
+}
+
+export async function listUserReports(opts: {
+  status?: ReportStatus | "all";
+  limit?: number;
+}): Promise<NewsUserReportWithItem[]> {
+  await ensureSchema();
+  const db = getDb();
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  const where: string[] = [];
+  const args: (string | number)[] = [];
+  if (opts.status && opts.status !== "all") {
+    where.push(`r.status = ?`);
+    args.push(opts.status);
+  }
+  args.push(limit);
+  const sql = `
+    SELECT r.*,
+           i.title AS item_title,
+           i.url AS item_url,
+           s.name AS source_name,
+           e.synthesized_summary AS article_body,
+           e.synthesis_output_json AS synthesis_output_json
+    FROM news_user_reports r
+    LEFT JOIN news_items i ON i.id = r.item_id
+    LEFT JOIN news_sources s ON s.id = i.source_id
+    LEFT JOIN news_enrichments e ON e.item_id = r.item_id
+    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY r.created_at DESC
+    LIMIT ?
+  `;
+  const res = await db.execute({ sql, args });
+  return res.rows as unknown as NewsUserReportWithItem[];
+}
+
+export async function updateUserReportStatus(
+  id: string,
+  status: ReportStatus,
+  resolution?: string | null,
+): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const isClosed = status === "resolved" || status === "wontfix";
+  await db.execute({
+    sql: `UPDATE news_user_reports
+          SET status = ?,
+              resolution = ?,
+              resolved_at = CASE WHEN ? THEN datetime('now') ELSE NULL END
+          WHERE id = ?`,
+    args: [status, resolution ?? null, isClosed ? 1 : 0, id],
+  });
+}
+
+export async function getReportsCountByItem(itemIds: string[]): Promise<Map<string, number>> {
+  if (itemIds.length === 0) return new Map();
+  await ensureSchema();
+  const db = getDb();
+  const placeholders = itemIds.map(() => "?").join(",");
+  const res = await db.execute({
+    sql: `SELECT item_id, COUNT(*) AS n FROM news_user_reports
+          WHERE item_id IN (${placeholders}) AND status IN ('open', 'reviewing')
+          GROUP BY item_id`,
+    args: itemIds,
+  });
+  const map = new Map<string, number>();
+  for (const row of res.rows as unknown as Array<{ item_id: string; n: number }>) {
+    map.set(row.item_id, Number(row.n));
+  }
+  return map;
+}
+
 // ---------- enrichment ----------
 
 export type EnrichmentStatus = "pending" | "running" | "done" | "failed";

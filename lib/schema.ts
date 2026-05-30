@@ -878,6 +878,31 @@ export const TABLES: TableDef[] = [
       { name: "completed_at", description: "Когда done/failed." },
     ],
   },
+  {
+    name: "news_user_reports",
+    description:
+      "Пользовательские репорты на конкретные карточки ленты: «здесь ошибка/неточность/притянуто». Отдельная сущность от app_errors — там стектрейсы системы, а тут продуктовая обратная связь по содержимому статьи. status позволяет вести их как очередь задач: open → reviewing → resolved/wontfix.",
+    ddl: `CREATE TABLE IF NOT EXISTS news_user_reports (
+      id TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL,
+      enrichment_id TEXT,
+      text TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      resolution TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT
+    )`,
+    columns: [
+      { name: "id", description: "UUID репорта." },
+      { name: "item_id", description: "FK на news_items.id — на какую карточку жалоба." },
+      { name: "enrichment_id", description: "FK на news_enrichments.id (если жалоба на конкретный синтез)." },
+      { name: "text", description: "Свободный текст пользователя — что не так." },
+      { name: "status", description: "'open' = ждёт разбора, 'reviewing' = в работе, 'resolved' = исправлено, 'wontfix' = не будем чинить." },
+      { name: "resolution", description: "Заметка при закрытии — что сделано или почему wontfix." },
+      { name: "created_at", description: "Когда репорт оставлен." },
+      { name: "resolved_at", description: "Когда статус ушёл из 'open'/'reviewing'." },
+    ],
+  },
 ];
 
 // Индексы для быстрого чтения.
@@ -923,4 +948,6 @@ export const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_news_enrich_pending ON news_enrichments (status, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_maintenance_runs_started ON maintenance_runs (started_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_maintenance_actions_target ON maintenance_actions (action_type, target_id, applied_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_news_user_reports_status ON news_user_reports (status, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_news_user_reports_item ON news_user_reports (item_id, created_at DESC)`,
 ];

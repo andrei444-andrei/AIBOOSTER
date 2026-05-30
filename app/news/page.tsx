@@ -243,6 +243,7 @@ export default function NewsPage() {
           <nav style={{ display: "flex", gap: 14, fontSize: 13 }}>
             <Link href="/news/sources" style={{ color: "var(--text-secondary)" }}>источники</Link>
             <Link href="/news/profile" style={{ color: "var(--text-secondary)" }}>профиль</Link>
+            <Link href="/news/reports" style={{ color: "var(--text-secondary)" }}>репорты</Link>
             <Link href="/news/agent-log" style={{ color: "var(--text-secondary)" }}>агент 🤖</Link>
           </nav>
         </div>
@@ -322,6 +323,37 @@ function Story({
   // В «прочитанном» статью открываем сразу: пользователь её уже отметил, нет
   // смысла прятать под compact-видом.
   const [fullOpen, setFullOpen] = useState(!!readView);
+  // Репорт об ошибке в статье — открывается inline. После отправки UI
+  // показывает «отправлено» без F5.
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportText, setReportText] = useState("");
+  const [reportSent, setReportSent] = useState(false);
+  const [reportSending, setReportSending] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+
+  const submitReport = async () => {
+    const t = reportText.trim();
+    if (!t || reportSending) return;
+    setReportSending(true);
+    setReportError(null);
+    try {
+      const r = await fetch("/api/news/reports", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ item_id: item.id, text: t }),
+      });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${r.status}`);
+      }
+      setReportSent(true);
+      setReportText("");
+    } catch (e) {
+      setReportError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReportSending(false);
+    }
+  };
 
   const e = item.enrichment;
   const hasBody = !!e?.article_body;
@@ -586,6 +618,93 @@ function Story({
             {e.cost_cents != null && ` · ${(e.cost_cents / 100).toFixed(2)}¢`}
             {e.latency_ms != null && ` · ${(e.latency_ms / 1000).toFixed(1)}s`}
             {synth.quality_note && ` · ${synth.quality_note}`}
+          </div>
+
+          {/* REPORT — пожаловаться на содержимое статьи */}
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+            {!reportOpen && !reportSent && (
+              <button
+                onClick={() => setReportOpen(true)}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-secondary)",
+                  borderRadius: 6,
+                  padding: "6px 12px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                ⚠ сообщить об ошибке в статье
+              </button>
+            )}
+            {reportOpen && !reportSent && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+                  Что не так в статье? Источник нерелевантен, факты искажены, обобщения, выдумка — опиши коротко.
+                </div>
+                <textarea
+                  value={reportText}
+                  onChange={(ev) => setReportText(ev.target.value)}
+                  placeholder="Напр.: «Ted Cruz Archives притянут за уши, к теме TensorZero не относится»"
+                  rows={3}
+                  style={{
+                    width: "100%",
+                    resize: "vertical",
+                    padding: 8,
+                    fontFamily: "inherit",
+                    fontSize: 13,
+                    border: "1px solid var(--border)",
+                    borderRadius: 6,
+                    background: "var(--bg-subtle)",
+                    color: "var(--text)",
+                  }}
+                />
+                {reportError && (
+                  <div style={{ fontSize: 12, color: "var(--danger)" }}>Ошибка: {reportError}</div>
+                )}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={submitReport}
+                    disabled={reportSending || !reportText.trim()}
+                    style={{
+                      background: "var(--text)",
+                      color: "var(--text-on-accent)",
+                      border: "none",
+                      borderRadius: 6,
+                      padding: "6px 14px",
+                      fontSize: 13,
+                      cursor: reportSending || !reportText.trim() ? "default" : "pointer",
+                      fontFamily: "inherit",
+                      opacity: reportSending || !reportText.trim() ? 0.6 : 1,
+                    }}
+                  >
+                    {reportSending ? "отправляю…" : "отправить репорт"}
+                  </button>
+                  <button
+                    onClick={() => { setReportOpen(false); setReportText(""); setReportError(null); }}
+                    style={{
+                      background: "transparent",
+                      border: "1px solid var(--border)",
+                      color: "var(--text-secondary)",
+                      borderRadius: 6,
+                      padding: "6px 14px",
+                      fontSize: 13,
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    отмена
+                  </button>
+                </div>
+              </div>
+            )}
+            {reportSent && (
+              <div style={{ fontSize: 13, color: "var(--success)" }}>
+                ✓ Репорт сохранён. Смотри в <Link href="/news/reports" style={{ color: "var(--success)", borderBottom: "1px solid var(--success)" }}>/news/reports</Link>.
+              </div>
+            )}
           </div>
         </>
       )}
