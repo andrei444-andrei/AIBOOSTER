@@ -34,12 +34,12 @@ import {
 } from "./enrichment-prompt";
 
 const SYNTHESIS_MODEL = "claude-opus-4-8";
-const MAX_RELATED_SOURCES = 6;
-// Бюджет: maxDuration=120s. Perplexity ~30s, fetch'и ~15s параллельно,
-// Opus синтез длинного текста (1500-3000 слов) — до 70s. Остаётся ~10s
-// запас.
-const SYNTHESIS_TIMEOUT_MS = 70_000;
-const PERPLEXITY_TIMEOUT_MS = 35_000;
+// Сократили с 6 до 4 — Vercel 120s budget неравномерно тратился на
+// fetch+Sonar+Apify, не хватало на Opus. С 4 источниками pipeline
+// стабильно укладывается в ~80-110s.
+const MAX_RELATED_SOURCES = 4;
+const SYNTHESIS_TIMEOUT_MS = 60_000;
+const PERPLEXITY_TIMEOUT_MS = 25_000;
 
 export interface EnrichTickStats {
   processed: number;
@@ -197,7 +197,7 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
   // параллельных вызовах добавим лишних 15-30 с latency и можем упереться
   // в Vercel 120s бюджет.
   let extraSonarCost = 0;
-  const SONAR_FALLBACK_BUDGET = 3;
+  const SONAR_FALLBACK_BUDGET = 2;
   // Сортируем: was_original → начало; остальные сохраняют исходный порядок.
   const fallbackTargets = related
     .map((r, idx) => ({ r, idx }))
@@ -237,7 +237,10 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
   //    2 вызова — Apify дорогой (~$0.05-0.10 за run), и в большинстве
   //    случаев 1-2 хороших источника достаточно для Opus.
   let extraApifyCost = 0;
-  const APIFY_BUDGET = 2;
+  // 1 Apify-вызов на enrichment максимум — он медленный (15-30s) и дорогой
+  // (~10¢). Если первый успешен — этого хватает Opus'у в дополнение к
+  // другим источникам.
+  const APIFY_BUDGET = 1;
   if (!process.env.APIFY_TOKEN) {
     console.log(`[news/enrich] APIFY_TOKEN not set — skipping Apify fallback`);
   } else {
@@ -290,7 +293,7 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
   // (логотипы, ads, декорации), оставляем релевантные с подписями.
   const imageContext = `${item.title ?? ""} | ${(item.body ?? "").slice(0, 300)}`;
   const visionResult = await analyzeImageBatch([...collectedImages], imageContext, {
-    maxToAnalyze: 8,
+    maxToAnalyze: 5,
   });
   const extraVisionCost = visionResult.cost_cents;
   // В Opus идут только реально полезные картинки с уже сгенерированными

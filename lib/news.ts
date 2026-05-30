@@ -687,7 +687,9 @@ export async function enqueueEnrichment(itemId: string, searchQuery: string): Pr
   return true;
 }
 
-// Атомарно забирает один pending enrichment под лок. Аналог claimDueSource.
+// Атомарно забирает один pending enrichment под лок. Также подбирает
+// stale-running (Vercel function timed out, статус остался running, но
+// lock истёк) — иначе они навсегда застрянут.
 export async function claimPendingEnrichment(
   lockMinutes = 5,
 ): Promise<NewsEnrichmentRow | null> {
@@ -699,8 +701,7 @@ export async function claimPendingEnrichment(
     const lockUntilIso = new Date(now.getTime() + lockMinutes * 60_000).toISOString();
     const pick = await db.execute({
       sql: `SELECT id FROM news_enrichments
-            WHERE status = 'pending'
-              AND (locked_until IS NULL OR locked_until < ?)
+            WHERE (status = 'pending' OR (status = 'running' AND (locked_until IS NULL OR locked_until < ?)))
             ORDER BY created_at ASC
             LIMIT 1`,
       args: [nowIso],
@@ -710,8 +711,8 @@ export async function claimPendingEnrichment(
     const upd = await db.execute({
       sql: `UPDATE news_enrichments
             SET status = 'running', locked_until = ?
-            WHERE id = ? AND status = 'pending'
-              AND (locked_until IS NULL OR locked_until < ?)`,
+            WHERE id = ?
+              AND (status = 'pending' OR (status = 'running' AND (locked_until IS NULL OR locked_until < ?)))`,
       args: [lockUntilIso, id, nowIso],
     });
     if (upd.rowsAffected > 0) {
