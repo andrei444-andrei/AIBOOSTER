@@ -60,6 +60,12 @@ const COLUMN_MIGRATIONS: ColumnAddition[] = [
   // News enrichments v1.5: первоисточник, картинки, расширенный синтез.
   { table: "news_enrichments", column: "original_source_url", ddl: "original_source_url TEXT" },
   { table: "news_enrichments", column: "images_json", ddl: "images_json TEXT" },
+  // v1.8: maintenance-агент трекает попытки retry на enrichment, чтобы
+  // не зацикливаться на одном и том же battered item'е.
+  { table: "news_enrichments", column: "retry_count", ddl: "retry_count INTEGER NOT NULL DEFAULT 0" },
+  // v1.8: archived — флаг чтобы скрывать items из ленты (failed по
+  // нескольким попыткам, агент пометил как «безнадёжный»).
+  { table: "news_items", column: "archived", ddl: "archived INTEGER NOT NULL DEFAULT 0" },
 ];
 
 async function hasColumn(table: string, column: string): Promise<boolean> {

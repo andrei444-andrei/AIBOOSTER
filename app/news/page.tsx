@@ -208,6 +208,7 @@ export default function NewsPage() {
           <nav style={{ display: "flex", gap: 14, fontSize: 13 }}>
             <Link href="/news/sources" style={{ color: "var(--text-secondary)" }}>источники</Link>
             <Link href="/news/profile" style={{ color: "var(--text-secondary)" }}>профиль</Link>
+            <Link href="/news/agent-log" style={{ color: "var(--text-secondary)" }}>агент 🤖</Link>
           </nav>
         </div>
         <div style={{ display: "flex", gap: 6 }}>

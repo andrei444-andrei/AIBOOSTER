@@ -774,6 +774,62 @@ export const TABLES: TableDef[] = [
     ],
   },
   {
+    name: "maintenance_runs",
+    description:
+      "Аудит-runs LLM-агента, который анализирует ошибки системы и применяет фиксы через whitelist tools (retry/deactivate/rediscover/archive). История нужна для прозрачности и анти-loop'ов.",
+    ddl: `CREATE TABLE IF NOT EXISTS maintenance_runs (
+      id TEXT PRIMARY KEY,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT,
+      status TEXT NOT NULL DEFAULT 'running',
+      signals_json TEXT,
+      agent_reasoning TEXT,
+      action_plan_json TEXT,
+      cost_cents INTEGER,
+      latency_ms INTEGER,
+      error TEXT,
+      summary TEXT
+    )`,
+    columns: [
+      { name: "id", description: "UUID запуска." },
+      { name: "started_at", description: "Когда запустили audit." },
+      { name: "finished_at", description: "Когда финализировали (done/error)." },
+      { name: "status", description: "'running' | 'done' | 'error'." },
+      { name: "signals_json", description: "Свёрнутая картина состояния, отправленная в Opus." },
+      { name: "agent_reasoning", description: "Reasoning от Opus — категоризация ошибок и обоснование действий." },
+      { name: "action_plan_json", description: "JSON-план действий от Opus до выполнения (для отладки)." },
+      { name: "cost_cents", description: "Стоимость Opus-вызова в центах." },
+      { name: "latency_ms", description: "Сколько занял audit (мс)." },
+      { name: "error", description: "Сообщение об ошибке (если status='error')." },
+      { name: "summary", description: "Короткая итоговая сводка для UI." },
+    ],
+  },
+  {
+    name: "maintenance_actions",
+    description:
+      "Конкретные действия, применённые агентом в рамках audit-run. По одной строке на действие. Используется для анти-loop'а (делал ли я это для этого target за 24ч?) и для отладочной страницы.",
+    ddl: `CREATE TABLE IF NOT EXISTS maintenance_actions (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      target_id TEXT,
+      reason TEXT,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+      result TEXT NOT NULL DEFAULT 'ok',
+      error TEXT
+    )`,
+    columns: [
+      { name: "id", description: "UUID действия." },
+      { name: "run_id", description: "FK на maintenance_runs.id." },
+      { name: "action_type", description: "'retry_enrichment' | 'deactivate_source' | 'rediscover_source' | 'archive_item' | 'note_finding'." },
+      { name: "target_id", description: "ID целевого объекта (item_id / source_id). Null для note_finding." },
+      { name: "reason", description: "Обоснование от агента." },
+      { name: "applied_at", description: "Когда выполнено." },
+      { name: "result", description: "'ok' | 'skipped' (anti-loop) | 'error'." },
+      { name: "error", description: "Сообщение об ошибке (если result='error')." },
+    ],
+  },
+  {
     name: "news_enrichments",
     description:
       "Углублённые карточки для постов с verdict='show'. Pipeline: ищет первоисточник (через body-regex + Perplexity) → парсит полные статьи (5-8 источников) → собирает картинки (og:image и большие img) → Opus синтезирует ПОЛНУЮ СТАТЬЮ на русском (5-15 параграфов, факты, цитаты, таймлайн). UNIQUE(item_id) — один enrichment на пост.",
@@ -865,4 +921,6 @@ export const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_news_sources_due ON news_sources (active, last_fetched_at)`,
   `CREATE INDEX IF NOT EXISTS idx_news_feedback_item ON news_feedback (item_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_news_enrich_pending ON news_enrichments (status, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_maintenance_runs_started ON maintenance_runs (started_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_maintenance_actions_target ON maintenance_actions (action_type, target_id, applied_at DESC)`,
 ];

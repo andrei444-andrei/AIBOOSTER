@@ -264,6 +264,33 @@ export async function deleteSource(id: string): Promise<void> {
   });
 }
 
+export async function setSourceActive(id: string, active: boolean): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE news_sources SET active = ? WHERE id = ?`,
+    args: [active ? 1 : 0, id],
+  });
+}
+
+export async function updateSourceUrl(id: string, newUrl: string, newKind?: SourceKind): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  if (newKind) {
+    await db.execute({
+      sql: `UPDATE news_sources
+            SET url = ?, kind = ?, apify_run_id = NULL, apify_run_status = NULL, apify_run_started_at = NULL
+            WHERE id = ?`,
+      args: [newUrl, newKind, id],
+    });
+  } else {
+    await db.execute({
+      sql: `UPDATE news_sources SET url = ? WHERE id = ?`,
+      args: [newUrl, id],
+    });
+  }
+}
+
 export async function seedSourcesIfEmpty(): Promise<number> {
   await ensureSchema();
   const db = getDb();
@@ -519,6 +546,10 @@ export interface ItemWithSource extends NewsItemRow {
 export async function listItems(opts: {
   verdict?: NewsItemVerdict | "all";
   limit?: number;
+  /** Включать ли archived items (по умолчанию — нет, скрываем из основной ленты). */
+  includeArchived?: boolean;
+  /** Включать ли items с failed enrichment (по умолчанию — нет в основной ленте). */
+  includeFailedEnrichment?: boolean;
 }): Promise<ItemWithSource[]> {
   await ensureSchema();
   const db = getDb();
@@ -529,6 +560,12 @@ export async function listItems(opts: {
   if (opts.verdict && opts.verdict !== "all") {
     where.push(`i.verdict = ?`);
     args.push(opts.verdict);
+  }
+  if (!opts.includeArchived) {
+    where.push(`COALESCE(i.archived, 0) = 0`);
+  }
+  if (!opts.includeFailedEnrichment) {
+    where.push(`NOT EXISTS (SELECT 1 FROM news_enrichments e WHERE e.item_id = i.id AND e.status = 'failed')`);
   }
   args.push(limit);
   const res = await db.execute({
@@ -541,6 +578,34 @@ export async function listItems(opts: {
     args,
   });
   return res.rows as unknown as ItemWithSource[];
+}
+
+/** Items, скрытые из ленты: archived ИЛИ с failed enrichment. Для /news/agent-log. */
+export async function listFailedOrArchivedItems(limit = 50): Promise<ItemWithSource[]> {
+  await ensureSchema();
+  const db = getDb();
+  const safe = Math.min(Math.max(limit, 1), 200);
+  const res = await db.execute({
+    sql: `SELECT i.*, s.name AS source_name, s.kind AS source_kind, s.url AS source_url
+          FROM news_items i
+          JOIN news_sources s ON s.id = i.source_id
+          WHERE i.status = 'validated' AND i.verdict = 'show'
+            AND (COALESCE(i.archived, 0) = 1
+                 OR EXISTS (SELECT 1 FROM news_enrichments e WHERE e.item_id = i.id AND e.status = 'failed'))
+          ORDER BY i.validated_at DESC, i.created_at DESC
+          LIMIT ?`,
+    args: [safe],
+  });
+  return res.rows as unknown as ItemWithSource[];
+}
+
+export async function setItemArchived(itemId: string, archived: boolean): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE news_items SET archived = ? WHERE id = ?`,
+    args: [archived ? 1 : 0, itemId],
+  });
 }
 
 export async function listDecisions(limit: number): Promise<ItemWithSource[]> {
