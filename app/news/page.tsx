@@ -32,7 +32,7 @@ interface Enrichment {
   article_body: string | null;
   key_facts: string[];
   sources_used: Array<{ url: string; title: string; role?: string; why_relevant: string }>;
-  images: Array<{ url: string; caption: string; source_url: string }>;
+  images: Array<{ url: string; caption: string; meaning?: string; source_url: string }>;
   original_source_url: string | null;
   synthesis_output_json: string | null;
   model_used: string | null;
@@ -40,6 +40,16 @@ interface Enrichment {
   latency_ms: number | null;
   completed_at: string | null;
   synthesis_error: string | null;
+}
+
+interface ConcreteExample {
+  title: string;
+  who: string;
+  what: string;
+  when: string;
+  numbers: string;
+  source_url: string;
+  lessons: string;
 }
 
 interface NewsItem {
@@ -343,7 +353,7 @@ function Story({
         </div>
       )}
 
-      {/* HERO IMAGE — большая, при наличии */}
+      {/* HERO IMAGE — большая, первая релевантная */}
       {(isDone || isRefreshing) && heroImg && (
         <figure className={s.hero}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -352,8 +362,15 @@ function Story({
             alt={heroImg.caption || ""}
             onError={(ev) => { (ev.target as HTMLImageElement).style.display = "none"; }}
           />
-          {heroImg.caption && (
-            <figcaption className={s.heroCaption}>{heroImg.caption}</figcaption>
+          {(heroImg.caption || heroImg.meaning) && (
+            <figcaption className={s.heroCaption}>
+              {heroImg.caption}
+              {heroImg.meaning && (
+                <div style={{ marginTop: 4, color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.4 }}>
+                  {heroImg.meaning}
+                </div>
+              )}
+            </figcaption>
           )}
         </figure>
       )}
@@ -367,6 +384,69 @@ function Story({
               <li key={i}>{f}</li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* CONCRETE EXAMPLES — живые кейсы из источников */}
+      {(isDone || isRefreshing) && synth.concrete_examples.length > 0 && (
+        <div className={s.keyFacts} style={{ borderLeft: "3px solid var(--info)", background: "var(--info-bg)" }}>
+          <div className={s.keyFactsLabel}>Живые кейсы ({synth.concrete_examples.length})</div>
+          <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 12 }}>
+            {(fullOpen ? synth.concrete_examples : synth.concrete_examples.slice(0, 3)).map((c, i) => (
+              <li key={i} style={{ borderBottom: i === (fullOpen ? synth.concrete_examples.length : Math.min(3, synth.concrete_examples.length)) - 1 ? "none" : "1px solid var(--border)", paddingBottom: 12 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: "var(--text)", marginBottom: 2 }}>
+                  {c.who}
+                  {c.when && <span style={{ color: "var(--text-muted)", fontWeight: 400, fontSize: 12, marginLeft: 6 }}>· {c.when}</span>}
+                </div>
+                <div style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.5 }}>{c.what}</div>
+                {c.numbers && (
+                  <div style={{ fontSize: 13, color: "var(--info)", marginTop: 4, fontWeight: 500 }}>📊 {c.numbers}</div>
+                )}
+                {c.lessons && (
+                  <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4, fontStyle: "italic" }}>
+                    → {c.lessons}
+                  </div>
+                )}
+                {c.source_url && (
+                  <a href={c.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4, display: "inline-block", borderBottom: "1px solid var(--border)" }}>
+                    источник ↗
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* IMAGE GALLERY — несколько картинок с meaning, если есть >1 */}
+      {(isDone || isRefreshing) && e!.images.length > 1 && (
+        <div>
+          <div className={s.keyFactsLabel} style={{ marginBottom: 8 }}>
+            Все картинки ({e!.images.length})
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+            {(fullOpen ? e!.images : e!.images.slice(0, 4)).map((img, i) => (
+              <figure key={i} style={{ margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={img.url}
+                  alt={img.caption}
+                  style={{ width: "100%", height: 140, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)" }}
+                  onError={(ev) => { (ev.target as HTMLImageElement).parentElement!.style.display = "none"; }}
+                />
+                {img.caption && (
+                  <figcaption style={{ fontSize: 12, color: "var(--text)", fontWeight: 500, lineHeight: 1.3 }}>
+                    {img.caption}
+                  </figcaption>
+                )}
+                {img.meaning && (
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
+                    {img.meaning}
+                  </div>
+                )}
+              </figure>
+            ))}
+          </div>
         </div>
       )}
 
@@ -642,9 +722,10 @@ interface SynthFields {
   quotes: Array<{ text: string; attribution: string; source_url?: string }>;
   timeline: Array<{ date: string; event: string }>;
   quality_note: string | null;
+  concrete_examples: ConcreteExample[];
 }
 function parseSynthesis(json: string | null): SynthFields {
-  const empty: SynthFields = { headline: null, lead: null, implications: null, quotes: [], timeline: [], quality_note: null };
+  const empty: SynthFields = { headline: null, lead: null, implications: null, quotes: [], timeline: [], quality_note: null, concrete_examples: [] };
   if (!json) return empty;
   try {
     const j = JSON.parse(json) as Record<string, unknown>;
@@ -655,6 +736,7 @@ function parseSynthesis(json: string | null): SynthFields {
       quotes: Array.isArray(j.quotes) ? (j.quotes as Array<{ text: string; attribution: string; source_url?: string }>) : [],
       timeline: Array.isArray(j.timeline) ? (j.timeline as Array<{ date: string; event: string }>) : [],
       quality_note: typeof j.quality_note === "string" ? j.quality_note : null,
+      concrete_examples: Array.isArray(j.concrete_examples) ? (j.concrete_examples as ConcreteExample[]) : [],
     };
   } catch {
     return empty;

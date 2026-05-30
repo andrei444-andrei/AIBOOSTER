@@ -293,18 +293,19 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
   // (логотипы, ads, декорации), оставляем релевантные с подписями.
   const imageContext = `${item.title ?? ""} | ${(item.body ?? "").slice(0, 300)}`;
   const visionResult = await analyzeImageBatch([...collectedImages], imageContext, {
-    maxToAnalyze: 5,
+    maxToAnalyze: 8,
   });
   const extraVisionCost = visionResult.cost_cents;
   // В Opus идут только реально полезные картинки с уже сгенерированными
-  // подписями, плюс data_extracted для чартов/скриншотов.
+  // подписями, meaning, и data_extracted для чартов/скриншотов.
   const annotatedImages = visionResult.analyses
     .filter((a) => a.is_relevant && a.category !== "logo" && a.category !== "ad" && a.category !== "decoration")
-    .slice(0, 6);
+    .slice(0, 8);
   const annotatedImageBlock = annotatedImages
     .map((a, i) => {
       const data = a.data_extracted ? `\n   ВЫЖИМКА ДАННЫХ: ${a.data_extracted}` : "";
-      return `${i + 1}. URL: ${a.url}\n   ТИП: ${a.category}\n   ПОДПИСЬ: ${a.caption}${data}`;
+      const meaning = a.meaning ? `\n   СМЫСЛ: ${a.meaning}` : "";
+      return `${i + 1}. URL: ${a.url}\n   ТИП: ${a.category}\n   ПОДПИСЬ: ${a.caption}${meaning}${data}`;
     })
     .join("\n");
   console.log(`[news/enrich] vision: ${visionResult.analyses.length} analyzed, ${annotatedImages.length} kept`);
@@ -363,10 +364,11 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
   // забыл секцию images.
   let finalImages = parsed.images;
   if (finalImages.length === 0) {
-    finalImages = annotatedImages.slice(0, 4).map((a) => ({
+    finalImages = annotatedImages.slice(0, 6).map((a) => ({
       url: a.url,
       caption: a.caption,
-      source_url: "", // источник не явный для vision-картинки
+      meaning: a.meaning,
+      source_url: "",
     }));
   }
 

@@ -26,7 +26,8 @@ export interface ImageAnalysis {
   caption: string;
   category: ImageCategory;
   is_relevant: boolean;
-  data_extracted: string | null; // для чартов/скриншотов — выжимка данных
+  meaning: string; // 2-3 предложения: что именно на картинке, кто/что изображено, почему это важно для статьи
+  data_extracted: string | null; // для чартов/скриншотов — выжимка цифр, лейблов, UI-элементов
   cost_cents: number;
   latency_ms: number;
 }
@@ -43,24 +44,26 @@ export async function analyzeImage(
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   const system =
-    "You analyze a news article image and return STRICT JSON. " +
-    "Classify the image and write a one-sentence caption in Russian. " +
+    "You analyze a news article image and return STRICT JSON in Russian. " +
+    "Classify the image, write a caption, AND extract the semantic MEANING — what the reader " +
+    "gets from this image, who/what is shown, what concrete data it conveys. " +
     "Skip logos, ads, decorative photos that don't help the reader.";
 
   const user = [
     {
       type: "text",
       text:
-        `Context of the article (Russian/English mix is fine): ${articleContext.slice(0, 500)}\n\n` +
-        `Analyze the image at the given URL. Return JSON ONLY:\n` +
+        `Контекст статьи: ${articleContext.slice(0, 500)}\n\n` +
+        `Проанализируй изображение по URL. Верни JSON ОНЛИ:\n` +
         `{\n` +
-        `  "caption": string,                              // одно предложение по-русски, что на картинке и почему она тут уместна\n` +
+        `  "caption": string,                              // 1 предложение — что на картинке\n` +
         `  "category": "photo"|"chart"|"screenshot"|"diagram"|"logo"|"decoration"|"ad"|"unclear",\n` +
-        `  "is_relevant": boolean,                         // true если картинка несёт информацию по теме статьи\n` +
-        `  "data_extracted": string|null                   // для chart/screenshot/diagram — выжимка ключевых данных, цифр, имён. null для остального.\n` +
+        `  "is_relevant": boolean,                         // true только если картинка несёт смысловую нагрузку по теме статьи\n` +
+        `  "meaning": string,                              // 2-3 предложения: КТО на картинке (имена, компании, продукты), ЧТО происходит, ЧТО конкретно изображение даёт читателю по теме. Никаких "красивая иллюстрация" — только смысл.\n` +
+        `  "data_extracted": string|null                   // для chart/screenshot/diagram — выжимка ВСЕХ цифр, лейблов, UI-элементов в одну строку (X axis: ..., Y axis: ..., тренд: ..., точки: ...). null для остального.\n` +
         `}\n` +
-        `Examples of NOT-relevant: site logo, sidebar ad, social-share icon, generic stock photo unrelated to the actual story.\n` +
-        `Examples of relevant: чарт с цифрами, скриншот продукта/таблицы, фото вовлечённого человека, реальный продакт-шот.`,
+        `Примеры релевантного: чарт с реальными данными (выудить цифры), скриншот продукта (что показано в UI), фото CEO/основателя в новости о компании (имя), реальный продакт-шот.\n` +
+        `Примеры НЕрелевантного: логотип сайта, sidebar ad, social-share иконка, generic stock фото не связанное с историей, абстракция.`,
     },
     {
       type: "image_url",
@@ -134,6 +137,7 @@ export async function analyzeImage(
     caption: typeof r.caption === "string" ? r.caption.slice(0, 400) : "",
     category: cat,
     is_relevant: r.is_relevant === true,
+    meaning: typeof r.meaning === "string" ? r.meaning.slice(0, 1500) : "",
     data_extracted: typeof r.data_extracted === "string" && r.data_extracted.trim() ? r.data_extracted.slice(0, 1500) : null,
     cost_cents,
     latency_ms: latencyMs,
