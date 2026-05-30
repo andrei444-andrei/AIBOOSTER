@@ -353,8 +353,9 @@ function Story({
         </div>
       )}
 
-      {/* HERO IMAGE — большая, первая релевантная */}
-      {(isDone || isRefreshing) && heroImg && (
+      {/* HERO IMAGE — только в compact view. В полной статье картинки уже
+          встроены в article_body через markdown ![]() — hero бы дублировал. */}
+      {(isDone || isRefreshing) && heroImg && !fullOpen && (
         <figure className={s.hero}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -418,37 +419,9 @@ function Story({
         </div>
       )}
 
-      {/* IMAGE GALLERY — несколько картинок с meaning, если есть >1 */}
-      {(isDone || isRefreshing) && e!.images.length > 1 && (
-        <div>
-          <div className={s.keyFactsLabel} style={{ marginBottom: 8 }}>
-            Все картинки ({e!.images.length})
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
-            {(fullOpen ? e!.images : e!.images.slice(0, 4)).map((img, i) => (
-              <figure key={i} style={{ margin: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={img.url}
-                  alt={img.caption}
-                  style={{ width: "100%", height: 140, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)" }}
-                  onError={(ev) => { (ev.target as HTMLImageElement).parentElement!.style.display = "none"; }}
-                />
-                {img.caption && (
-                  <figcaption style={{ fontSize: 12, color: "var(--text)", fontWeight: 500, lineHeight: 1.3 }}>
-                    {img.caption}
-                  </figcaption>
-                )}
-                {img.meaning && (
-                  <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
-                    {img.meaning}
-                  </div>
-                )}
-              </figure>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Картинки теперь встроены прямо в article_body через markdown ![](),
+          поэтому отдельной галереи нет. Hero показываем только при compact view —
+          в полной статье hero дублирует первое изображение и выглядит лишним. */}
 
       {/* PENDING — нет body */}
       {isPending && (
@@ -469,7 +442,45 @@ function Story({
       {fullOpen && (isDone || isRefreshing) && e?.article_body && (
         <>
           <div className={s.body}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{e.article_body}</ReactMarkdown>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                // Inline-картинки идут внутри ![alt](url). Рендерим как figure с
+                // caption (alt-текст), чтобы visually читалась подпись.
+                img: ({ src, alt }) => {
+                  if (!src) return null;
+                  return (
+                    <figure style={{ margin: "28px 0 8px" }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={typeof src === "string" ? src : ""}
+                        alt={alt || ""}
+                        onError={(ev) => {
+                          const fig = (ev.target as HTMLImageElement).parentElement;
+                          if (fig) fig.style.display = "none";
+                        }}
+                      />
+                      {alt && (
+                        <figcaption
+                          style={{
+                            fontSize: 13,
+                            color: "var(--text-secondary)",
+                            lineHeight: 1.4,
+                            marginTop: 6,
+                            textAlign: "center",
+                            fontStyle: "italic",
+                          }}
+                        >
+                          {alt}
+                        </figcaption>
+                      )}
+                    </figure>
+                  );
+                },
+              }}
+            >
+              {e.article_body}
+            </ReactMarkdown>
           </div>
 
           {synth.quotes.length > 0 && (

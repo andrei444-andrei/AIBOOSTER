@@ -24,6 +24,10 @@
     {
       "path": "/api/news/agent-audit/tick",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/news/discovery/tick",
+      "schedule": "0 */6 * * *"
     }
   ]
 }

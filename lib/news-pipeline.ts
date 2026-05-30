@@ -25,6 +25,7 @@ import {
   getActiveProfile,
   seedProfileIfEmpty,
   seedSourcesIfEmpty,
+  seedExtraSourcesIfMissing,
   enqueueEnrichment,
   type NewsSourceRow,
   type NewsItemRow,
@@ -100,6 +101,17 @@ export async function runTick(workerId: string): Promise<TickStats> {
   } catch (err) {
     await logServerError(err, "news/cron/tick:seed_sources");
     stats.errors.push(`seed_sources: ${errMsg(err)}`);
+  }
+  // Extra-seed: Reddit/arXiv добавляем всегда, если URL ещё нет. Идемпотентно.
+  try {
+    const extra = await seedExtraSourcesIfMissing();
+    if (extra > 0) {
+      stats.seeded_sources += extra;
+      console.log(`[news/tick] seed_extra=${extra} t=${Date.now() - tickStarted}ms`);
+    }
+  } catch (err) {
+    await logServerError(err, "news/cron/tick:seed_extra");
+    stats.errors.push(`seed_extra: ${errMsg(err)}`);
   }
 
   // Фаза 1: фетч одного due-источника.

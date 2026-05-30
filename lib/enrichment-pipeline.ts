@@ -327,6 +327,9 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     temperature: 0.3,
     timeoutMs: SYNTHESIS_TIMEOUT_MS,
     requestId: job.id,
+    // Статьи 1500-2500 слов на русском (~15-25К символов) плюс остальные поля
+    // JSON. 20К токенов — с запасом, чтобы Opus не урезал концовку.
+    maxTokens: 20_000,
   });
 
   const parsed = validateEnrichmentOutput(syn.parsed);
@@ -335,7 +338,7 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     related_sources_json: JSON.stringify(related.map((r) => ({ url: r.url, title: r.title, was_original: r.was_original }))),
     original_source_url: originalSourceUrl,
     synthesis_input: inputDump,
-    synthesis_output_json: syn.rawText.slice(0, 32_000),
+    synthesis_output_json: syn.rawText.slice(0, 80_000),
     model_used: syn.model,
     cost_cents:
       search.cost_cents +

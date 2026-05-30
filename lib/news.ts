@@ -142,6 +142,46 @@ export const DEFAULT_SOURCES: Array<{
   },
 ];
 
+// Дополнительный сидинг: Reddit + arXiv. В отличие от DEFAULT_SOURCES (которые
+// заливаются только при пустой таблице), эти добавляются всегда при tick'е,
+// если соответствующего URL ещё нет. Идемпотентно. Дёшево: только RSS.
+//
+// Reddit /r/X.rss — открытый, не требует ключей, отдаёт топ-постов саба.
+// arXiv /rss/X — свежие препринты по теме.
+export const EXTRA_RSS_SOURCES: Array<{
+  url: string;
+  name: string;
+}> = [
+  { url: "https://www.reddit.com/r/MachineLearning/.rss", name: "r/MachineLearning" },
+  { url: "https://www.reddit.com/r/LocalLLaMA/.rss", name: "r/LocalLLaMA" },
+  { url: "https://www.reddit.com/r/SaaS/.rss", name: "r/SaaS" },
+  { url: "https://www.reddit.com/r/startups/.rss", name: "r/startups" },
+  { url: "http://export.arxiv.org/rss/cs.AI", name: "arXiv cs.AI" },
+  { url: "http://export.arxiv.org/rss/cs.LG", name: "arXiv cs.LG" },
+];
+
+/** Идемпотентно сидим EXTRA_RSS_SOURCES — только те, чьего URL ещё нет. */
+export async function seedExtraSourcesIfMissing(): Promise<number> {
+  await ensureSchema();
+  const db = getDb();
+  const existing = await db.execute(`SELECT url FROM news_sources`);
+  const have = new Set(
+    (existing.rows as unknown as Array<{ url: string }>).map((r) => r.url),
+  );
+  let added = 0;
+  for (const s of EXTRA_RSS_SOURCES) {
+    if (have.has(s.url)) continue;
+    try {
+      await createSource({ kind: "rss", url: s.url, name: s.name });
+      added++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/UNIQUE|constraint/i.test(msg)) throw err;
+    }
+  }
+  return added;
+}
+
 // ---------- profile ----------
 
 export async function getActiveProfile(): Promise<InterestProfile> {

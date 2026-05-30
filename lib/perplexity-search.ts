@@ -10,9 +10,17 @@
 
 const BASE = process.env.AIMLAPI_BASE || "https://api.aimlapi.com/v1";
 
+export interface SonarSearchHit {
+  url: string;
+  title?: string;
+  snippet?: string;
+  published_at?: string;
+}
+
 export interface PerplexitySearchResult {
   answer: string;
   citations: string[];
+  search_hits: SonarSearchHit[];
   raw: unknown;
   cost_cents: number;
   latency_ms: number;
@@ -77,26 +85,34 @@ export async function perplexitySearch(
   const data = (await res.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
     citations?: string[];
-    search_results?: Array<{ url?: string }>;
+    search_results?: Array<{ url?: string; title?: string; snippet?: string; date?: string }>;
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
 
   const answer = data.choices?.[0]?.message?.content ?? "";
 
-  // Достаём цитаты: возможные форматы — top-level `citations`, или
-  // top-level `search_results` (массив {url, title, ...}).
+  // search_results — богатые, с title/snippet. Citations — только URL'ы.
+  const search_hits: SonarSearchHit[] = Array.isArray(data.search_results)
+    ? data.search_results
+        .filter((r): r is { url: string; title?: string; snippet?: string; date?: string } =>
+          typeof r?.url === "string",
+        )
+        .map((r) => ({
+          url: r.url,
+          title: typeof r.title === "string" ? r.title : undefined,
+          snippet: typeof r.snippet === "string" ? r.snippet : undefined,
+          published_at: typeof r.date === "string" ? r.date : undefined,
+        }))
+    : [];
+
   let citations: string[] = [];
   if (Array.isArray(data.citations)) {
     citations = data.citations.filter((s): s is string => typeof s === "string");
-  } else if (Array.isArray(data.search_results)) {
-    citations = data.search_results
-      .map((r) => r.url)
-      .filter((s): s is string => typeof s === "string");
+  } else if (search_hits.length > 0) {
+    citations = search_hits.map((h) => h.url);
   } else {
-    // Fallback: вытаскиваем URL из текста (Markdown ссылки + сырые https://).
     citations = extractUrlsFromText(answer);
   }
-  // Дедуп и нормализация.
   citations = [...new Set(citations.map((u) => u.trim()))].filter((u) => u.startsWith("http"));
 
   // Грубая оценка стоимости. Sonar-pro: ~$3/1M input + $15/1M output (актуально на 2026).
@@ -104,7 +120,7 @@ export async function perplexitySearch(
   const outT = data.usage?.completion_tokens ?? 0;
   const cost_cents = Math.ceil((inT * 0.0003 + outT * 0.0015) * 100);
 
-  return { answer, citations, raw: data, cost_cents, latency_ms: latencyMs };
+  return { answer, citations, search_hits, raw: data, cost_cents, latency_ms: latencyMs };
 }
 
 function extractUrlsFromText(text: string): string[] {
