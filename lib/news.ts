@@ -590,6 +590,9 @@ export async function listItems(opts: {
   includeArchived?: boolean;
   /** Включать ли items с failed enrichment (по умолчанию — нет в основной ленте). */
   includeFailedEnrichment?: boolean;
+  /** Исключать ли items, по которым уже есть feedback (like/dislike/hide).
+   *  Это работает как «прочитано»: после реакции карточка уходит из ленты. */
+  excludeRead?: boolean;
 }): Promise<ItemWithSource[]> {
   await ensureSchema();
   const db = getDb();
@@ -607,6 +610,9 @@ export async function listItems(opts: {
   if (!opts.includeFailedEnrichment) {
     where.push(`NOT EXISTS (SELECT 1 FROM news_enrichments e WHERE e.item_id = i.id AND e.status = 'failed')`);
   }
+  if (opts.excludeRead) {
+    where.push(`NOT EXISTS (SELECT 1 FROM news_feedback f WHERE f.item_id = i.id)`);
+  }
   args.push(limit);
   const res = await db.execute({
     sql: `SELECT i.*, s.name AS source_name, s.kind AS source_kind, s.url AS source_url
@@ -618,6 +624,33 @@ export async function listItems(opts: {
     args,
   });
   return res.rows as unknown as ItemWithSource[];
+}
+
+/** Items, по которым ЕСТЬ feedback — для вкладки «прочитанное».
+ *  Сортируем по времени последнего фидбэка (свежие сверху). */
+export async function listReadItems(limit = 100): Promise<
+  Array<ItemWithSource & { feedback_signal: "like" | "dislike" | "hide"; feedback_at: string }>
+> {
+  await ensureSchema();
+  const db = getDb();
+  const lim = Math.min(Math.max(limit, 1), 500);
+  const res = await db.execute({
+    sql: `SELECT i.*, s.name AS source_name, s.kind AS source_kind, s.url AS source_url,
+                 (SELECT signal FROM news_feedback f WHERE f.item_id = i.id
+                   ORDER BY f.created_at DESC LIMIT 1) AS feedback_signal,
+                 (SELECT MAX(created_at) FROM news_feedback f WHERE f.item_id = i.id) AS feedback_at
+          FROM news_items i
+          JOIN news_sources s ON s.id = i.source_id
+          WHERE i.status = 'validated'
+            AND COALESCE(i.archived, 0) = 0
+            AND EXISTS (SELECT 1 FROM news_feedback f WHERE f.item_id = i.id)
+          ORDER BY feedback_at DESC
+          LIMIT ?`,
+    args: [lim],
+  });
+  return res.rows as unknown as Array<
+    ItemWithSource & { feedback_signal: "like" | "dislike" | "hide"; feedback_at: string }
+  >;
 }
 
 /** Items, скрытые из ленты: archived ИЛИ с failed enrichment. Для /news/agent-log. */

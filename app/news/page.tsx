@@ -25,7 +25,7 @@ const tabBtn = (active: boolean): React.CSSProperties => ({
   fontWeight: 500,
 });
 
-type Tab = "feed" | "skipped" | "debug";
+type Tab = "feed" | "read" | "skipped" | "debug";
 
 interface Enrichment {
   status: "pending" | "running" | "done" | "failed";
@@ -73,6 +73,7 @@ interface NewsItem {
   validation_output_json: string | null;
   validation_error: string | null;
   enrichment: Enrichment | null;
+  feedback_signal?: "like" | "dislike" | "hide" | null;
 }
 
 interface PromptData {
@@ -88,6 +89,7 @@ const DISLIKE_REASONS = ["не моя тема", "поверхностно", "у
 export default function NewsPage() {
   const [tab, setTab] = useState<Tab>("feed");
   const [items, setItems] = useState<NewsItem[]>([]);
+  const [readItems, setReadItems] = useState<NewsItem[]>([]);
   const [skipped, setSkipped] = useState<NewsItem[]>([]);
   const [decisions, setDecisions] = useState<NewsItem[]>([]);
   const [promptData, setPromptData] = useState<PromptData | null>(null);
@@ -102,6 +104,21 @@ export default function NewsPage() {
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       setItems(data.items ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadRead = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/news/items/read?limit=100");
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      setReadItems(data.items ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -147,9 +164,10 @@ export default function NewsPage() {
 
   useEffect(() => {
     if (tab === "feed") void loadFeed();
+    else if (tab === "read") void loadRead();
     else if (tab === "skipped") void loadSkipped();
     else void loadDebug();
-  }, [tab, loadFeed, loadSkipped, loadDebug]);
+  }, [tab, loadFeed, loadRead, loadSkipped, loadDebug]);
 
   // Auto-poll каждые 25 сек: pending/running enrichments сами подтянутся.
   useEffect(() => {
@@ -185,6 +203,13 @@ export default function NewsPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ item_id, signal, reason_chip: reason ?? null }),
       });
+      // После реакции карточка уходит из ленты — переносим её локально во
+      // «прочитанное», чтобы UI не дёргался ожиданием refetch'а.
+      const moved = items.find((x) => x.id === item_id);
+      if (moved) {
+        setItems((prev) => prev.filter((x) => x.id !== item_id));
+        setReadItems((prev) => [moved, ...prev.filter((x) => x.id !== item_id)]);
+      }
     } catch (e) {
       console.error("feedback failed", e);
     }
@@ -223,6 +248,7 @@ export default function NewsPage() {
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button style={tabBtn(tab === "feed")} onClick={() => setTab("feed")}>лента</button>
+          <button style={tabBtn(tab === "read")} onClick={() => setTab("read")}>прочитанное</button>
           <button style={tabBtn(tab === "skipped")} onClick={() => setTab("skipped")}>отсеяно</button>
           <button style={tabBtn(tab === "debug")} onClick={() => setTab("debug")}>отладка</button>
         </div>
@@ -237,6 +263,7 @@ export default function NewsPage() {
       {tab === "feed" && (
         <FeedList items={items} loading={loading} onFeedback={sendFeedback} />
       )}
+      {tab === "read" && <FeedList items={readItems} loading={loading} onFeedback={sendFeedback} readView />}
       {tab === "skipped" && <SkippedList items={skipped} loading={loading} onPromote={promote} />}
       {tab === "debug" && <DebugPanel prompt={promptData} decisions={decisions} loading={loading} />}
     </main>
@@ -247,10 +274,12 @@ function FeedList({
   items,
   loading,
   onFeedback,
+  readView,
 }: {
   items: NewsItem[];
   loading: boolean;
   onFeedback: (id: string, s: "like" | "dislike", r?: string) => void;
+  readView?: boolean;
 }) {
   if (loading && items.length === 0) {
     return <div style={{ textAlign: "center", padding: 40, color: "var(--text-muted)" }}>Загрузка…</div>;
@@ -258,17 +287,21 @@ function FeedList({
   if (items.length === 0) {
     return (
       <Card padded>
-        <p style={{ marginTop: 0 }}>В ленте пусто.</p>
-        <p style={{ color: "var(--text-secondary)" }}>
-          Cron-tick запускается раз в 10 минут. Можно дёрнуть руками или подождать.
+        <p style={{ marginTop: 0 }}>
+          {readView ? "Пока ничего не отмечено." : "В ленте пусто."}
         </p>
+        {!readView && (
+          <p style={{ color: "var(--text-secondary)" }}>
+            Cron-tick запускается раз в 10 минут. Можно дёрнуть руками или подождать.
+          </p>
+        )}
       </Card>
     );
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
       {items.map((it) => (
-        <Story key={it.id} item={it} onFeedback={onFeedback} />
+        <Story key={it.id} item={it} onFeedback={onFeedback} readView={readView} />
       ))}
     </div>
   );
@@ -277,14 +310,18 @@ function FeedList({
 function Story({
   item,
   onFeedback,
+  readView,
 }: {
   item: NewsItem;
   onFeedback: (id: string, s: "like" | "dislike", r?: string) => void;
+  readView?: boolean;
 }) {
   const [expanded, setExpanded] = useState<null | "like" | "dislike">(null);
   const [sent, setSent] = useState(false);
   const [inflight, setInflight] = useState(false);
-  const [fullOpen, setFullOpen] = useState(false);
+  // В «прочитанном» статью открываем сразу: пользователь её уже отметил, нет
+  // смысла прятать под compact-видом.
+  const [fullOpen, setFullOpen] = useState(!!readView);
 
   const e = item.enrichment;
   const hasBody = !!e?.article_body;
@@ -556,6 +593,12 @@ function Story({
       {/* FOOTER: feedback + expand toggle */}
       <div className={s.footer}>
         <div className={s.feedbackLine}>
+          {readView && item.feedback_signal ? (
+            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+              {item.feedback_signal === "like" ? "👍 отмечено как полезное" : item.feedback_signal === "dislike" ? "👎 не понравилось" : "скрыто"}
+            </span>
+          ) : (
+            <>
           <span className={s.feedbackLabel}>Полезно?</span>
           <button
             className={`${s.feedbackBtn} ${expanded === "like" ? s.feedbackBtnActive : ""}`}
@@ -580,6 +623,8 @@ function Story({
           )}
           {sent && (
             <span style={{ fontSize: 12, color: "var(--success)" }}>Спасибо.</span>
+          )}
+            </>
           )}
         </div>
         {(isDone || isRefreshing) && e?.article_body && (

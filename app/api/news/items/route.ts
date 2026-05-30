@@ -26,9 +26,12 @@ export async function GET(req: Request) {
   }
   const verdict = verdictRaw as NewsItemVerdict | "all";
   const limit = parseLimit(url.searchParams.get("limit"), 50);
+  // По умолчанию исключаем прочитанные — после like/dislike карточка уходит
+  // во вкладку «прочитанное». Можно отключить через ?include_read=1.
+  const excludeRead = url.searchParams.get("include_read") !== "1";
 
   try {
-    const items = await listItems({ verdict, limit });
+    const items = await listItems({ verdict, limit, excludeRead });
     const itemIds = items.map((it) => it.id);
 
     // Auto-enqueue для show-постов без enrichment-записи. Идемпотентно.
