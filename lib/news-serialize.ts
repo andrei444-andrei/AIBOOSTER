@@ -22,6 +22,7 @@ export function serializeItem(it: ItemWithSource) {
     validation_input: it.validation_input,
     validation_output_json: it.validation_output_json,
     validation_error: it.validation_error,
+    cluster_id: it.cluster_id ?? null,
   };
 }
 

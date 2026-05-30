@@ -7,6 +7,7 @@ import {
   type NewsItemVerdict,
 } from "@/lib/news";
 import { serializeItem } from "@/lib/news-serialize";
+import { backfillDedupForItems, groupByCluster } from "@/lib/news-dedup";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -48,10 +49,42 @@ export async function GET(req: Request) {
       }
     }
 
+    // Бэкфилл embedding'ов + cluster_id для дедупликации. Идемпотентно:
+    // пропускаются items, у которых уже есть title_embedding. После апдейта
+    // перечитываем cluster_id одним запросом.
+    try {
+      await backfillDedupForItems(itemIds);
+    } catch (err) {
+      await logServerError(err, "/api/news/items:dedup_backfill");
+    }
+    // Перечитаем cluster_id для каждого item — это нужно потому что
+    // listItems его взял ДО бэкфилла.
+    if (itemIds.length > 0) {
+      const { getDb } = await import("@/lib/db");
+      const db = getDb();
+      const placeholders = itemIds.map(() => "?").join(",");
+      const cidRes = await db.execute({
+        sql: `SELECT id, cluster_id FROM news_items WHERE id IN (${placeholders})`,
+        args: itemIds,
+      });
+      const cidMap = new Map<string, string | null>();
+      for (const row of cidRes.rows as unknown as Array<{ id: string; cluster_id: string | null }>) {
+        cidMap.set(row.id, row.cluster_id);
+      }
+      for (const it of items) {
+        it.cluster_id = cidMap.get(it.id) ?? null;
+      }
+    }
+
     const enrichments = await listEnrichmentsForItems(itemIds);
+
+    // Группируем по cluster_id: первый item в каждом кластере становится
+    // каноническим (он самый свежий — items уже отсортированы по дате).
+    const clusters = groupByCluster(items);
     return NextResponse.json({
-      count: items.length,
-      items: items.map((it) => {
+      count: clusters.length,
+      items: clusters.map((c) => {
+        const it = c.canonical;
         const e = enrichments.get(it.id);
         return {
           ...serializeItem(it),
@@ -71,6 +104,14 @@ export async function GET(req: Request) {
                 synthesis_output_json: e.synthesis_output_json,
               }
             : null,
+          related: c.related.map((r) => ({
+            id: r.id,
+            title: r.title,
+            url: r.url,
+            source_name: r.source_name,
+            published_at: r.published_at,
+            relevance: r.relevance,
+          })),
         };
       }),
     });

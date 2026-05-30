@@ -51,6 +51,7 @@ export interface NewsItemRow {
   reasoning: string | null;
   validated_at: string | null;
   created_at: string;
+  cluster_id?: string | null;
 }
 
 export interface NewsFeedbackRow {

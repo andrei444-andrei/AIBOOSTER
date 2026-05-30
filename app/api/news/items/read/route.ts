@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { logServerError } from "@/lib/logger";
 import { listReadItems, listEnrichmentsForItems } from "@/lib/news";
 import { serializeItem } from "@/lib/news-serialize";
+import { backfillDedupForItems } from "@/lib/news-dedup";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,7 +15,15 @@ export async function GET(req: Request) {
   const limit = parseLimit(url.searchParams.get("limit"), 100);
   try {
     const items = await listReadItems(limit);
-    const enrichments = await listEnrichmentsForItems(items.map((it) => it.id));
+    const itemIds = items.map((it) => it.id);
+    // Бэкфилл — на случай если в read попало что-то без embedding'а.
+    // Не критично, лучшее-effort.
+    try {
+      await backfillDedupForItems(itemIds);
+    } catch (err) {
+      await logServerError(err, "/api/news/items/read:dedup_backfill");
+    }
+    const enrichments = await listEnrichmentsForItems(itemIds);
     return NextResponse.json({
       count: items.length,
       items: items.map((it) => {

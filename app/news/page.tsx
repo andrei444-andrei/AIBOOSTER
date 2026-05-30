@@ -52,6 +52,15 @@ interface ConcreteExample {
   lessons: string;
 }
 
+interface RelatedItem {
+  id: string;
+  title: string | null;
+  url: string | null;
+  source_name: string;
+  published_at: string | null;
+  relevance: number | null;
+}
+
 interface NewsItem {
   id: string;
   source: { id: string; name: string; kind: string; url: string };
@@ -74,6 +83,7 @@ interface NewsItem {
   validation_error: string | null;
   enrichment: Enrichment | null;
   feedback_signal?: "like" | "dislike" | "hide" | null;
+  related?: RelatedItem[];
 }
 
 interface PromptData {
@@ -383,6 +393,9 @@ function Story({
   const readingMin =
     e?.article_body ? Math.max(2, Math.round(e.article_body.length / 1500)) : null;
 
+  const related = item.related ?? [];
+  const [relatedOpen, setRelatedOpen] = useState(false);
+
   // Final display data
   const displayHeadline = (synth.headline || item.title || "").trim();
   const displayLead = synth.lead || item.summary || item.value_explanation || "";
@@ -414,6 +427,48 @@ function Story({
 
       {/* LEAD */}
       {displayLead && <p className={s.lead}>{displayLead}</p>}
+
+      {/* RELATED CLUSTER — N других источников про ту же историю */}
+      {related.length > 0 && (
+        <div style={{ marginTop: 8, marginBottom: 12 }}>
+          <button
+            onClick={() => setRelatedOpen(!relatedOpen)}
+            style={{
+              background: "var(--info-bg)",
+              color: "var(--info)",
+              border: "1px solid var(--info)",
+              borderRadius: 999,
+              padding: "3px 10px",
+              fontSize: 12,
+              cursor: "pointer",
+              fontFamily: "inherit",
+              fontWeight: 500,
+            }}
+            title="Те же события писали другие источники"
+          >
+            ⌘ +{related.length} {related.length === 1 ? "похожая статья" : related.length < 5 ? "похожие статьи" : "похожих статей"} {relatedOpen ? "▲" : "▼"}
+          </button>
+          {relatedOpen && (
+            <ul style={{ listStyle: "none", padding: 0, margin: "10px 0 0", display: "flex", flexDirection: "column", gap: 6 }}>
+              {related.map((r) => (
+                <li key={r.id} style={{ fontSize: 13, color: "var(--text-secondary)", paddingLeft: 12, borderLeft: "2px solid var(--border)" }}>
+                  <span style={{ color: "var(--text-muted)" }}>{r.source_name}:</span>{" "}
+                  {r.url ? (
+                    <a href={r.url} target="_blank" rel="noreferrer" style={{ color: "var(--text)", borderBottom: "1px solid var(--border)" }}>
+                      {r.title || "(без заголовка)"}
+                    </a>
+                  ) : (
+                    <span>{r.title || "(без заголовка)"}</span>
+                  )}
+                  {r.published_at && (
+                    <span style={{ color: "var(--text-muted)", marginLeft: 6, fontSize: 11 }}>· {relativeTime(r.published_at)}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Refresh indicator */}
       {isRefreshing && (
