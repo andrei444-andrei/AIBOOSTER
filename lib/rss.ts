@@ -147,7 +147,7 @@ export function parseRss(xml: string, limit = 20): NormalizedRssItem[] {
 // Шаги: (1) всегда снимаем ведущую дату «Apr 2, 2026», (2) если итог всё ещё
 // > 140 chars — режем на первом ярком разделителе (`:`, `. `, `—`); излишки
 // доливаем в body (если оно пустое или короче overflow).
-function normalizeRssItem(item: NormalizedRssItem): NormalizedRssItem {
+export function normalizeRssItem(item: NormalizedRssItem): NormalizedRssItem {
   const t = item.title?.trim();
   if (!t) return item;
   // Снять ведущую дату: «Apr 2, 2026 », «May 31, 2026 ». Регулярка с group
