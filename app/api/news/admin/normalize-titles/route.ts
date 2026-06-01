@@ -16,7 +16,7 @@ async function handle() {
     const db = getDb();
     const res = await db.execute(`
       SELECT id, title, body FROM news_items
-      WHERE title IS NOT NULL AND length(title) > 160
+      WHERE title IS NOT NULL AND length(title) > 140
       LIMIT 500
     `);
     const rows = res.rows as unknown as Array<{ id: string; title: string; body: string | null }>;
