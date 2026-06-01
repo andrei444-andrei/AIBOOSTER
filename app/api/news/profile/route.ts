@@ -37,6 +37,7 @@ export async function PUT(req: Request) {
       name: r.name.trim().slice(0, 200),
       description: typeof r.description === "string" ? r.description.slice(0, 2000) : undefined,
       what_bores_me: typeof r.what_bores_me === "string" ? r.what_bores_me.slice(0, 2000) : undefined,
+      negative_examples: typeof r.negative_examples === "string" ? r.negative_examples.slice(0, 2000) : undefined,
       priority: prio === "low" || prio === "medium" || prio === "high" ? prio : "medium",
       status: stat === "active" || stat === "muted" ? stat : "active",
     });

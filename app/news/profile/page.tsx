@@ -14,6 +14,7 @@ interface Topic {
   name: string;
   description?: string;
   what_bores_me?: string;
+  negative_examples?: string;
   priority?: "low" | "medium" | "high";
   status?: "active" | "muted";
 }
@@ -63,7 +64,7 @@ export default function ProfilePage() {
   };
 
   const addTopic = () => {
-    setTopics([...topics, { name: "новая тема", description: "", what_bores_me: "", priority: "medium", status: "active" }]);
+    setTopics([...topics, { name: "новая тема", description: "", what_bores_me: "", negative_examples: "", priority: "medium", status: "active" }]);
   };
 
   const updateTopic = (i: number, patch: Partial<Topic>) => {
@@ -146,6 +147,12 @@ export default function ProfilePage() {
               placeholder="что НЕ интересно (опционально)"
               value={t.what_bores_me ?? ""}
               onChange={(e) => updateTopic(i, { what_bores_me: e.target.value })}
+              rows={2}
+            />
+            <Textarea
+              placeholder="anti-examples: «вот ЭТО под темой НЕ попадает» — например, для «инвестиции» написать «макроэкономика стран, китайский биотек, опционы»"
+              value={t.negative_examples ?? ""}
+              onChange={(e) => updateTopic(i, { negative_examples: e.target.value })}
               rows={2}
             />
           </div>

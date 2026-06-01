@@ -135,10 +135,48 @@ export function parseRss(xml: string, limit = 20): NormalizedRssItem[] {
   const out: NormalizedRssItem[] = [];
   for (const block of blocks) {
     const item = isAtom ? parseAtomEntry(block) : parseRssItem(block);
-    if (item) out.push(item);
+    if (item) out.push(normalizeRssItem(item));
     if (out.length >= limit) break;
   }
   return out;
+}
+
+// Некоторые ленты (Letta blog, Substack-конверсии) кладут в <title> склейку
+// «дата + название + первое предложение тела». Получается title в 200-500 chars
+// без разделителей.
+// Шаги: (1) всегда снимаем ведущую дату «Apr 2, 2026», (2) если итог всё ещё
+// > 140 chars — режем на первом ярком разделителе (`:`, `. `, `—`); излишки
+// доливаем в body (если оно пустое или короче overflow).
+function normalizeRssItem(item: NormalizedRssItem): NormalizedRssItem {
+  const t = item.title?.trim();
+  if (!t) return item;
+  // Снять ведущую дату: «Apr 2, 2026 », «May 31, 2026 ». Регулярка с group
+  // (?:...) чтобы не плодить capturing groups.
+  const stripped = t.replace(
+    /^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\s+/i,
+    "",
+  );
+  if (stripped.length <= 140) {
+    // дата ушла, длина нормальная — возвращаем с обновлённым title.
+    if (stripped === t) return item;
+    return { ...item, title: stripped };
+  }
+  // Длинный — попробуем разрезать.
+  const splitMatch = stripped.match(/^(.{20,140}?)(?:[.!?]\s+|\s—\s|\s-\s|:\s+)(.+)$/);
+  let newTitle: string;
+  let overflow: string;
+  if (splitMatch) {
+    newTitle = splitMatch[1].trim();
+    overflow = splitMatch[2].trim();
+  } else {
+    newTitle = stripped.slice(0, 140).trim();
+    overflow = stripped.slice(140).trim();
+  }
+  const existingBody = (item.body || "").trim();
+  const newBody = existingBody.length >= overflow.length
+    ? existingBody
+    : overflow + (existingBody ? "\n\n" + existingBody : "");
+  return { ...item, title: newTitle, body: newBody };
 }
 
 function parseRssItem(block: string): NormalizedRssItem | null {

@@ -163,7 +163,11 @@ export function buildEnrichmentPrompt(
     .map((s, i) => {
       const flags = s.was_original ? " [ПЕРВОИСТОЧНИК]" : "";
       const dateLine = `ДАТА: ${s.published_at ?? "(не определена)"}`;
-      const head = `### Источник ${i + 1}${flags}\nURL: ${s.url}\n${dateLine}\nЗАГОЛОВОК: ${s.title ?? "(нет)"}${s.hero_image ? `\nГЛАВНОЕ ФОТО: ${s.hero_image}` : ""}\n\n${truncate(s.text || "(нет текста — возможно paywall, см. ответ Perplexity)", 6000)}`;
+      // Первоисточник — полный текст до 30K chars (длинная аналитика типа
+      // Verdad/HBR не должна резаться). Подтверждающие/контекстные источники —
+      // до 10K, этого хватает на сверку и контекст.
+      const cap = s.was_original ? 30_000 : 10_000;
+      const head = `### Источник ${i + 1}${flags}\nURL: ${s.url}\n${dateLine}\nЗАГОЛОВОК: ${s.title ?? "(нет)"}${s.hero_image ? `\nГЛАВНОЕ ФОТО: ${s.hero_image}` : ""}\n\n${truncate(s.text || "(нет текста — возможно paywall, см. ответ Perplexity)", cap)}`;
       return head;
     })
     .join("\n\n---\n\n");
@@ -182,8 +186,8 @@ export function buildEnrichmentPrompt(
     `Дата публикации: ${original.published_at ?? "(не определена)"}\n` +
     `Темы по нашему классификатору: ${original.matched_topics.join(", ") || "—"}\n` +
     `ЗАГОЛОВОК: ${original.title ?? "(нет)"}\n` +
-    `ТЕКСТ:\n${truncate(original.body, 4000)}\n\n` +
-    `## ОТВЕТ PERPLEXITY (английский веб-поиск, предварительный синтез + найденные ссылки)\n${truncate(perplexityAnswer, 4500)}\n\n` +
+    `ТЕКСТ:\n${truncate(original.body, 15_000)}\n\n` +
+    `## ОТВЕТ PERPLEXITY (английский веб-поиск, предварительный синтез + найденные ссылки)\n${truncate(perplexityAnswer, 8_000)}\n\n` +
     `## ИСТОЧНИКИ С ПОЛНЫМ ТЕКСТОМ (с датами публикаций)\n${sourcesBlock || "(источники не дотянулись)"}` +
     imagesBlock +
     `\n</UNTRUSTED_INPUT>\n\n` +
@@ -226,7 +230,7 @@ export interface EnrichmentOutput {
 export function validateEnrichmentOutput(raw: unknown): EnrichmentOutput | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
-  const article_body = typeof r.article_body === "string" ? r.article_body.slice(0, 50_000) : null;
+  const article_body = typeof r.article_body === "string" ? r.article_body.slice(0, 100_000) : null;
   if (!article_body || article_body.length < 200) return null;
   const headline = typeof r.headline === "string" ? r.headline.slice(0, 300) : "";
   const lead = typeof r.lead === "string" ? r.lead.slice(0, 2000) : "";
