@@ -1,0 +1,27 @@
+# XcodeGen output — regenerated locally, never committed
+*.xcodeproj/
+*.xcworkspace/
+
+# Xcode user-specific state
+xcuserdata/
+*.xcuserstate
+*.xcscheme
+
+# Build artifacts
+build/
+DerivedData/
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Package.resolved
+
+# CocoaPods (defensive — not used)
+Pods/
+
+# macOS
+.DS_Store
+
+# Local overrides (signing team IDs, dev API URLs, etc.)
+*.xcconfig.local
+Secrets.swift
