@@ -300,3 +300,85 @@ export interface TranscribeResponse {
   language?: string;
   duration?: number;
 }
+
+// =====================================================================
+// English dialogues — app/api/english-dialogues/*.
+// Generate an English dialogue/monologue on a topic → audio (R2) + a
+// bilingual transcript (EN + optional RU) with speaker labels. Open
+// routes, flat `{ error, error_id }`. Mirrors the youtube-translate jobs.
+// =====================================================================
+
+export type DialogueKind = "dialogue" | "monologue";
+export type DialogueStatus = "queued" | "running" | "done" | "error" | "cancelled";
+export type DialogueStage = "script" | "tts" | "mux";
+export type DialogueWatchStatus = "to_watch" | "watched";
+
+export interface DialogueJobSummary {
+  id: string;
+  topic: string;
+  title: string | null;
+  kind: DialogueKind;
+  duration_min: number;
+  with_translation: number; // 0 | 1
+  status: DialogueStatus;
+  stage: DialogueStage | null;
+  progress: number;
+  audio_url: string | null;
+  duration_sec: number | null;
+  watch_status: DialogueWatchStatus;
+  last_position_sec: number;
+  created_at: string;
+}
+
+export interface DialogueJobDetail {
+  id: string;
+  topic: string;
+  title: string | null;
+  kind: DialogueKind;
+  duration_min: number;
+  with_translation: number;
+  status: DialogueStatus;
+  stage: DialogueStage | null;
+  progress: number;
+  error_message: string | null;
+  error_id: string | null;
+  audio_url: string | null;
+  duration_sec: number | null;
+  watch_status: DialogueWatchStatus;
+  last_position_sec: number;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+export interface DialogueSegment {
+  idx: number;
+  start_ms: number;
+  end_ms: number;
+  speaker: string | null;
+  en_text: string;
+  ru_text: string | null;
+}
+
+/** GET /api/english-dialogues */
+export interface DialoguesListResponse {
+  jobs: DialogueJobSummary[];
+}
+
+/** GET /api/english-dialogues/[id] */
+export interface DialogueDetailResponse {
+  job: DialogueJobDetail;
+  segments: DialogueSegment[];
+}
+
+/** POST /api/english-dialogues */
+export interface CreateDialogueRequest {
+  topic: string;
+  duration_min: number; // 3..10
+  kind: DialogueKind;
+  with_translation: boolean;
+}
+
+export interface CreateDialogueResponse {
+  job_id: string;
+}

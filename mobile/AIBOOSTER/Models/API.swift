@@ -423,4 +423,118 @@ enum API {
         let language: String?
         let duration: Double?
     }
+
+    // MARK: English dialogues — /api/english-dialogues
+
+    struct EnglishDialogueSummary: Decodable, Identifiable {
+        let id: String
+        let topic: String
+        let title: String?
+        let kind: String
+        let durationMin: Int
+        let withTranslation: Int
+        let status: String
+        let stage: String?
+        let progress: Int
+        let audioURL: String?
+        let durationSec: Double?
+        let watchStatus: String
+        let lastPositionSec: Double
+        let createdAt: String
+
+        enum CodingKeys: String, CodingKey {
+            case id, topic, title, kind
+            case durationMin = "duration_min"
+            case withTranslation = "with_translation"
+            case status, stage, progress
+            case audioURL = "audio_url"
+            case durationSec = "duration_sec"
+            case watchStatus = "watch_status"
+            case lastPositionSec = "last_position_sec"
+            case createdAt = "created_at"
+        }
+    }
+
+    struct EnglishDialoguesResponse: Decodable {
+        let jobs: [EnglishDialogueSummary]
+    }
+
+    struct EnglishDialogueDetail: Decodable, Identifiable {
+        let id: String
+        let topic: String
+        let title: String?
+        let kind: String
+        let durationMin: Int
+        let withTranslation: Int
+        let status: String
+        let stage: String?
+        let progress: Int
+        let errorMessage: String?
+        let audioURL: String?
+        let durationSec: Double?
+        let watchStatus: String
+        let lastPositionSec: Double
+        let createdAt: String
+        let finishedAt: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, topic, title, kind
+            case durationMin = "duration_min"
+            case withTranslation = "with_translation"
+            case status, stage, progress
+            case errorMessage = "error_message"
+            case audioURL = "audio_url"
+            case durationSec = "duration_sec"
+            case watchStatus = "watch_status"
+            case lastPositionSec = "last_position_sec"
+            case createdAt = "created_at"
+            case finishedAt = "finished_at"
+        }
+    }
+
+    struct EnglishSegment: Decodable, Identifiable {
+        let idx: Int
+        let startMs: Int
+        let endMs: Int
+        let speaker: String?
+        let enText: String
+        let ruText: String?
+        var id: Int { idx }
+
+        enum CodingKeys: String, CodingKey {
+            case idx
+            case startMs = "start_ms"
+            case endMs = "end_ms"
+            case speaker
+            case enText = "en_text"
+            case ruText = "ru_text"
+        }
+    }
+
+    struct EnglishDialogueDetailResponse: Decodable {
+        let job: EnglishDialogueDetail
+        let segments: [EnglishSegment]
+    }
+
+    struct CreateDialogueRequest: Encodable {
+        let topic: String
+        let durationMin: Int
+        let kind: String
+        let withTranslation: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case topic
+            case durationMin = "duration_min"
+            case kind
+            case withTranslation = "with_translation"
+        }
+    }
+
+    struct CreateDialogueResponse: Decodable {
+        let jobId: String
+
+        enum CodingKeys: String, CodingKey {
+            case jobId = "job_id"
+        }
+    }
 }

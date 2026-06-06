@@ -61,6 +61,7 @@ struct HomeView: View {
             case .youtubePodcasts: YouTubePodcastsView()
             case .news: NewsView()
             case .chat: ChatSessionsView()
+            case .english: EnglishView()
             }
         }
         .onAppear { appeared = true }

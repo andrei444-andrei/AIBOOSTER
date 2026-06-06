@@ -18,11 +18,12 @@ enum Route: Hashable {
     case youtubePodcasts
     case news
     case chat
+    case english
 }
 
 extension Feature {
     /// Live features — rendered as full-width hero cards.
-    static let available: [Feature] = [youtubePodcasts, news, chat]
+    static let available: [Feature] = [youtubePodcasts, news, chat, english]
 
     static let youtubePodcasts = Feature(
         id: "youtube-podcasts",
@@ -49,6 +50,15 @@ extension Feature {
         systemImage: "bubble.left.and.bubble.right.fill",
         tint: Theme.accent,
         route: .chat
+    )
+
+    static let english = Feature(
+        id: "english",
+        title: "Английский",
+        subtitle: "Диалоги и монологи с аудио и переводом — слушай и читай",
+        systemImage: "text.bubble.fill",
+        tint: Theme.success,
+        route: .english
     )
 
     /// Roadmap tiles — mirror real web features, shown as “coming soon”.
