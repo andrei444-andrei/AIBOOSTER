@@ -5,7 +5,13 @@ import SwiftUI
 /// "coming soon" placeholders that preview the roadmap.
 struct HomeView: View {
     @State private var appeared = false
+    @State private var quickText = ""
+    @State private var quickMode: ChatMode = .auto
+    @State private var creatingChat = false
+    @State private var startedSession: API.ChatSession?
+    @State private var pendingMessage: String?
 
+    private let chatClient = ChatClient()
     private let available = Feature.available
     private let comingSoon = Feature.comingSoon
     private let columns = [
@@ -58,6 +64,37 @@ struct HomeView: View {
             }
         }
         .onAppear { appeared = true }
+        .safeAreaInset(edge: .bottom) {
+            ChatComposer(
+                text: $quickText,
+                mode: $quickMode,
+                sending: creatingChat,
+                placeholder: "Спросить AI…"
+            ) {
+                startQuickChat()
+            }
+        }
+        .navigationDestination(item: $startedSession) { session in
+            ChatThreadView(session: session, initialMessage: pendingMessage)
+        }
+    }
+
+    /// Create a session from the home quick-bar and open it with the first message.
+    private func startQuickChat() {
+        let text = quickText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !creatingChat else { return }
+        creatingChat = true
+        Task {
+            defer { creatingChat = false }
+            do {
+                let session = try await chatClient.createSession(mode: quickMode)
+                pendingMessage = text
+                quickText = ""
+                startedSession = session
+            } catch {
+                // Keep the typed text so the user can retry.
+            }
+        }
     }
 
     // MARK: - Sections

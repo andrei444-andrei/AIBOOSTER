@@ -5,6 +5,7 @@ struct ChatComposer: View {
     @Binding var text: String
     @Binding var mode: ChatMode
     let sending: Bool
+    var placeholder: String = "Сообщение…"
     let onSend: () -> Void
 
     @StateObject private var recorder = VoiceRecorder()
@@ -24,7 +25,7 @@ struct ChatComposer: View {
             }
             HStack(alignment: .bottom, spacing: 8) {
                 modeMenu
-                TextField("Сообщение…", text: $text, axis: .vertical)
+                TextField(placeholder, text: $text, axis: .vertical)
                     .lineLimit(1...5)
                     .font(.system(size: 16))
                     .padding(.horizontal, 12)

@@ -80,13 +80,16 @@ final class ChatThreadStore: ObservableObject {
 
 struct ChatThreadView: View {
     let session: API.ChatSession
+    let initialMessage: String?
 
     @StateObject private var store: ChatThreadStore
     @State private var text = ""
     @State private var mode: ChatMode
+    @State private var sentInitial = false
 
-    init(session: API.ChatSession) {
+    init(session: API.ChatSession, initialMessage: String? = nil) {
         self.session = session
+        self.initialMessage = initialMessage
         _store = StateObject(wrappedValue: ChatThreadStore(sessionId: session.id))
         _mode = State(initialValue: ChatMode(rawValue: session.mode ?? "auto") ?? .auto)
     }
@@ -99,7 +102,13 @@ struct ChatThreadView: View {
         .background(Theme.pageBackground)
         .navigationTitle(session.title)
         .navigationBarTitleDisplayMode(.inline)
-        .task { if !store.loaded { await store.load() } }
+        .task {
+            if !store.loaded { await store.load() }
+            if let initial = initialMessage, !sentInitial {
+                sentInitial = true
+                store.send(initial, mode: mode)
+            }
+        }
     }
 
     private var messages: some View {
