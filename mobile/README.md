@@ -32,15 +32,27 @@ In Xcode:
 
 ```
 mobile/
-├── project.yml                        # XcodeGen spec — single source of truth
+├── project.yml                            # XcodeGen spec — single source of truth
 └── AIBOOSTER/
-    ├── App.swift                      # @main entry
-    ├── Views/RootView.swift           # root view
-    ├── Config/AppConfig.swift         # API base URL, token resolution
-    ├── Networking/APIClient.swift     # async HTTP wrapper, Bearer auth
-    ├── Networking/Keychain.swift      # token storage
-    └── Models/API.swift               # mirror of lib/api-types.ts (web)
+    ├── App.swift                          # @main entry
+    ├── Config/AppConfig.swift             # API base URL, token resolution
+    ├── Networking/APIClient.swift         # async HTTP wrapper, Bearer auth
+    ├── Networking/Keychain.swift          # token storage
+    ├── Models/API.swift                   # mirror of lib/api-types.ts (web)
+    ├── Design/Theme.swift                 # design tokens — mirror of web UX Kit
+    └── Views/
+        ├── RootView.swift                 # NavigationStack → HomeView
+        ├── Components/Components.swift     # IconBadge, PressableStyle, AppearAnimator
+        ├── Home/                          # home screen: feature tiles + animations
+        │   ├── Feature.swift              # tile model + navigation routes
+        │   └── HomeView.swift             # header, hero tile, "coming soon" grid
+        └── YouTubePodcasts/               # first feature screen (layout-only for now)
+            └── YouTubePodcastsView.swift
 ```
+
+> `Design/Theme.swift` mirrors the web UX Kit tokens (`app/globals.css`) — warm
+> cream palette, near-black accent, hairline borders. Keep it in sync by hand,
+> same discipline as `Models/API.swift`.
 
 ## API config
 
