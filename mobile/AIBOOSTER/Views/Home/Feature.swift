@@ -51,7 +51,7 @@ extension Feature {
             id: "research",
             title: "Исследования",
             subtitle: "Глубокий поиск по теме",
-            systemImage: "sparkle.magnifyingglass",
+            systemImage: "binoculars.fill",
             tint: Theme.success,
             route: nil
         ),
