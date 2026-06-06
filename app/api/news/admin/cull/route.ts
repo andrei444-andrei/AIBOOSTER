@@ -17,9 +17,12 @@ import { setItemArchived } from "@/lib/news";
 import { chatJson } from "@/lib/aimlapi";
 import { logServerError } from "@/lib/logger";
 
-const CULL_MODEL = "google/gemini-2.5-flash";
-const BATCH_SIZE = 30; // сколько обрабатываем за один POST (чтобы не упереться в 60s)
-const PER_ITEM_TIMEOUT_MS = 12_000;
+// Haiku 4.5 — нет thinking overhead (Gemini 2.5 Flash сжирал 200 токенов на
+// reasoning и не оставлял на output), надёжный JSON-mode, ~$1/M in + $5/M out.
+// Per-item ~$0.003.
+const CULL_MODEL = "claude-haiku-4-5";
+const BATCH_SIZE = 30;
+const PER_ITEM_TIMEOUT_MS = 15_000;
 
 interface CullCandidate {
   id: string;
@@ -75,7 +78,7 @@ function parseSourcesArr(s: string | null): Array<{ url?: string; title?: string
   }
 }
 
-async function judgeItem(c: CullCandidate): Promise<CullVerdict | null> {
+async function judgeItem(c: CullCandidate): Promise<{ verdict: CullVerdict | null; error?: string }> {
   try {
     const res = await chatJson<{ verdict?: string; reason?: string }>({
       model: CULL_MODEL,
@@ -83,17 +86,21 @@ async function judgeItem(c: CullCandidate): Promise<CullVerdict | null> {
       user: buildUser(c),
       temperature: 0,
       timeoutMs: PER_ITEM_TIMEOUT_MS,
-      maxTokens: 200,
+      maxTokens: 400,
       requestId: c.id,
     });
     const v = res.parsed?.verdict;
-    if (v !== "keep" && v !== "delete") return null;
+    if (v !== "keep" && v !== "delete") {
+      return { verdict: null, error: `bad verdict: ${JSON.stringify(res.parsed).slice(0, 120)}` };
+    }
     return {
-      verdict: v,
-      reason: typeof res.parsed?.reason === "string" ? res.parsed.reason.slice(0, 300) : "",
+      verdict: {
+        verdict: v,
+        reason: typeof res.parsed?.reason === "string" ? res.parsed.reason.slice(0, 300) : "",
+      },
     };
-  } catch {
-    return null;
+  } catch (err) {
+    return { verdict: null, error: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200) };
   }
 }
 
@@ -139,18 +146,20 @@ async function handle(req: Request) {
 
     // Параллельно по 8, чтобы не упереться в rate-limit.
     const CONCURRENCY = 8;
-    const results: Array<{ id: string; title: string | null; verdict: CullVerdict | null }> = [];
+    const results: Array<{ id: string; title: string | null; verdict: CullVerdict | null; error?: string }> = [];
     for (let i = 0; i < candidates.length; i += CONCURRENCY) {
       const slice = candidates.slice(i, i + CONCURRENCY);
       const verdicts = await Promise.all(slice.map((c) => judgeItem(c)));
       for (let j = 0; j < slice.length; j++) {
-        results.push({ id: slice[j].id, title: slice[j].title, verdict: verdicts[j] });
+        results.push({ id: slice[j].id, title: slice[j].title, verdict: verdicts[j].verdict, error: verdicts[j].error });
       }
     }
 
     const toDelete = results.filter((r) => r.verdict?.verdict === "delete");
     const toKeep = results.filter((r) => r.verdict?.verdict === "keep");
     const undecided = results.filter((r) => !r.verdict);
+    // первые 3 уникальных ошибки — для отладки
+    const errSamples = Array.from(new Set(undecided.map((r) => r.error).filter(Boolean))).slice(0, 3);
 
     let archived_count = 0;
     if (!dryRun) {
@@ -175,7 +184,8 @@ async function handle(req: Request) {
       archived_count,
       // Примерная стоимость: Gemini Flash ~$0.075/M input, ~$0.30/M output.
       // Per-item ~1.5K input + 50 output = ~$0.00012. Округляем до 0.02¢.
-      estimated_cost_cents: Math.ceil(candidates.length * 0.02),
+      estimated_cost_cents: Math.ceil(candidates.length * 0.3),
+      undecided_error_samples: errSamples,
       sample_deletes: toDelete.slice(0, 10).map((r) => ({
         id: r.id,
         title: r.title,
