@@ -6,8 +6,10 @@ See **§11** of the project constitution (`/CLAUDE.md`) for the architectural ru
 
 ## Prerequisites
 
-- macOS with Xcode 15+ (iOS 17 SDK).
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`.
+- macOS with **Xcode 16+** (iOS 17 SDK).
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen) **2.44.0+**: `brew install xcodegen`
+  (already installed? `brew upgrade xcodegen`). The source folder uses Xcode 16
+  synchronized folders, which need this version.
 
 ## First-time setup
 
@@ -19,8 +21,18 @@ open AIBOOSTER.xcodeproj
 
 In Xcode:
 
-1. Target **AIBOOSTER** → **Signing & Capabilities** → Team: pick your Apple Developer team.
-2. Plug iPhone in (or enable wireless debug), pick it as run destination, hit **⌘R**.
+1. Pick a run destination — an **iOS Simulator** (no signing needed) or a
+   physical device (Target **AIBOOSTER** → **Signing & Capabilities** → Team).
+2. Hit **⌘R**.
+
+## Adding / changing source files
+
+The `AIBOOSTER` source is a **synchronized folder** (`type: syncedFolder` in
+`project.yml`). New `.swift` files on disk — e.g. after `git pull` — show up in
+the project **automatically**: no `xcodegen generate`, no manual "Add Files".
+
+Re-run `xcodegen generate` only when you edit `project.yml` itself (targets,
+build settings, identity) or to first adopt this setup on an old checkout.
 
 ## Identity
 

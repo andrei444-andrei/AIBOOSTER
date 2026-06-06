@@ -1,5 +1,8 @@
 name: AIBOOSTER
 options:
+  # syncedFolder sources require XcodeGen 2.44.0+ and the xcode16_0 project format.
+  minimumXcodeGenVersion: "2.44.0"
+  projectFormat: xcode16_0
   deploymentTarget:
     iOS: "17.0"
   developmentLanguage: ru
@@ -19,7 +22,10 @@ targets:
     type: application
     platform: iOS
     sources:
+      # Xcode 16 synchronized folder: new files on disk (e.g. after git pull)
+      # appear in the project automatically — no regenerate / "Add Files" needed.
       - path: AIBOOSTER
+        type: syncedFolder
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: aibooster
