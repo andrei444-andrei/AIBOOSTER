@@ -17,6 +17,11 @@ const nextConfig = {
       "./node_modules/@ffmpeg-installer/linux-x64/**",
       "./node_modules/@ffprobe-installer/linux-x64/**",
     ],
+    // Модуль «Английский»: тот же ffmpeg/ffprobe для склейки озвучки.
+    "/api/cron/process-english": [
+      "./node_modules/@ffmpeg-installer/linux-x64/**",
+      "./node_modules/@ffprobe-installer/linux-x64/**",
+    ],
   },
 };
 
