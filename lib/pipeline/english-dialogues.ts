@@ -324,6 +324,16 @@ async function generateScript(
   }
 
   if (!title) title = input.topic.slice(0, 80);
+
+  // Модель на последнем «дописывании» обычно даёт чуть больше запрошенного —
+  // срезаем хвост, чтобы не перебирать сверх ~5% над целевой длительностью.
+  while (
+    lines.length > 1 &&
+    estimateDurationSec(lines, input.withTranslation) > targetSec * 1.05
+  ) {
+    lines.pop();
+  }
+
   return { title, lines };
 }
 
