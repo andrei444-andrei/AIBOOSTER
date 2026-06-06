@@ -95,6 +95,7 @@ export async function runEnrichTick(): Promise<EnrichTickStats> {
 }
 
 async function processOne(job: NewsEnrichmentRow): Promise<void> {
+  const started = Date.now();
   const item = await getItem(job.item_id);
   if (!item) throw new Error(`item ${job.item_id} not found`);
   const profile = await getActiveProfile();
@@ -286,6 +287,7 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     source_name: item.source_name,
     matched_topics: parseTopics(item.matched_topics_json),
     published_at: item.published_at,
+    is_vendor_case_study: isVendorCaseStudyUrl(item.url),
   };
   // ── Шаг D+++: Vision-анализ собранных картинок ──────────────────────
   // Каждую картинку прогоняем через Sonnet 4.6 vision и спрашиваем:
@@ -309,6 +311,41 @@ async function processOne(job: NewsEnrichmentRow): Promise<void> {
     })
     .join("\n");
   console.log(`[news/enrich] vision: ${visionResult.analyses.length} analyzed, ${annotatedImages.length} kept`);
+
+  // ── Шаг E−: Pre-synthesis sufficiency check ─────────────────────────
+  // Если материала почти нет (вендорский кейс одной строкой + Perplexity
+  // вернул «couldn't verify»), Opus синтезирует «честный разбор того,
+  // что у нас нет источников» — мета-статью без пользы. Лучше написать
+  // короткий шаблон, не вызывая Opus и не тратя $0.3.
+  const substantiveSources = related.filter((r) => (r.text || "").length >= 200);
+  const isInsufficient =
+    substantiveSources.length === 0 &&
+    (item.body || "").length < 1500 &&
+    (search.answer || "").length < 1000;
+
+  if (isInsufficient) {
+    console.log(
+      `[news/enrich] insufficient material (sources=${substantiveSources.length}, body=${(item.body || "").length}ch, perplexity=${(search.answer || "").length}ch) — пишу шаблон, Opus не зову`,
+    );
+    const minimal = buildMinimalEnrichment(item, originalSourceUrl ?? item.url);
+    await completeEnrichment(job.id, {
+      status: "done",
+      search_results_json: JSON.stringify({ answer: search.answer, citations: search.citations }),
+      related_sources_json: JSON.stringify(related.map((r) => ({ url: r.url, title: r.title, was_original: r.was_original }))),
+      original_source_url: originalSourceUrl,
+      images_json: JSON.stringify(annotatedImages.slice(0, 1).map((a) => ({ url: a.url, caption: a.caption, meaning: a.meaning, source_url: "" }))),
+      synthesis_input: null,
+      synthesis_output_json: JSON.stringify(minimal.outputJson),
+      synthesis_error: null,
+      model_used: "skip-synthesis",
+      synthesized_summary: minimal.article_body,
+      key_facts: minimal.key_facts,
+      sources_used: minimal.sources_used,
+      cost_cents: search.cost_cents + extraSonarCost + extraApifyCost + extraVisionCost,
+      latency_ms: Date.now() - started,
+    });
+    return;
+  }
 
   const prompt = buildEnrichmentPrompt(
     profile,
@@ -469,4 +506,85 @@ function parseTopics(json: string | null): string[] {
 function estimateOpusCostCents(rawText: string): number {
   const outputTokens = Math.ceil(rawText.length / 4);
   return Math.ceil(outputTokens * 0.000075 * 100);
+}
+
+// Вендорские маркетинговые кейсы / success-stories. Контент по умолчанию
+// одно-источниковый и предвзятый — отбираемая клиентом победа.
+const VENDOR_CASE_STUDY_RE = /\/(customers?|case[-_]?stud(y|ies)|success[-_]?stor(y|ies)|customer[-_]?stor(y|ies))\//i;
+export function isVendorCaseStudyUrl(u: string | null | undefined): boolean {
+  if (!u || typeof u !== "string") return false;
+  try {
+    const url = new URL(u);
+    return VENDOR_CASE_STUDY_RE.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+// Шаблонная карточка, когда материала почти нет и Opus звать не за что.
+// Вместо «честного разбора» в 6К знаков — 100-200 слов фактов + явная
+// quality_note. Цена: $0 (нет LLM-вызова).
+function buildMinimalEnrichment(
+  item: { title: string | null; body: string | null; url: string | null; source_name?: string | null },
+  fallbackUrl: string | null,
+): {
+  article_body: string;
+  key_facts: string[];
+  sources_used: Array<{ url: string; title: string; role: "original" | "confirmation" | "context"; why_relevant: string }>;
+  outputJson: Record<string, unknown>;
+} {
+  const url = item.url || fallbackUrl || "";
+  const source = item.source_name || (url ? new URL(url).hostname.replace(/^www\./, "") : "источник");
+  const title = (item.title || "").trim() || "(без заголовка)";
+  const bodyExcerpt = (item.body || "").trim().slice(0, 600);
+  const isVendor = isVendorCaseStudyUrl(url);
+  const lead = isVendor
+    ? `Маркетинговый кейс на сайте ${source}. Цифры и формулировки приведены самим вендором; независимых подтверждений в моём сборе нет.`
+    : `Сборка не нашла независимых источников по этому материалу. Ниже — то, что есть в оригинальной публикации.`;
+  const body = [
+    `## ${title}`,
+    "",
+    lead,
+    "",
+    bodyExcerpt || "Тело оригинала пустое или короткое — открой первоисточник по ссылке ниже.",
+    "",
+    url ? `**Оригинал:** [${source}](${url})` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const key_facts: string[] = [];
+  if (item.title) key_facts.push(`Заголовок оригинала: «${item.title.trim().slice(0, 200)}»`);
+  if (isVendor) key_facts.push("Источник — раздел customers/case-studies сайта вендора, контент маркетинговый.");
+  key_facts.push("Дополнительных источников нет — глубокий разбор невозможен.");
+
+  const sources_used: Array<{
+    url: string;
+    title: string;
+    role: "original" | "confirmation" | "context";
+    why_relevant: string;
+  }> = url
+    ? [{ url, title: title.slice(0, 200), role: "original", why_relevant: "единственный источник" }]
+    : [];
+
+  const outputJson = {
+    headline: title.slice(0, 120),
+    lead: isVendor
+      ? `Вендорский кейс ${source}.`
+      : `Краткая выжимка из оригинала ${source}.`,
+    article_body: body,
+    concrete_examples: [],
+    key_facts,
+    quotes: [],
+    timeline: [],
+    contradictions: [],
+    implications: "",
+    images: [],
+    sources_used,
+    quality_note: isVendor
+      ? "Источник — маркетинговый кейс вендора. Цифры от него самого. Глубокий разбор не делал."
+      : "Источников недостаточно для разбора. Показал только заголовок + ссылку на оригинал.",
+  };
+
+  return { article_body: body, key_facts, sources_used, outputJson };
 }

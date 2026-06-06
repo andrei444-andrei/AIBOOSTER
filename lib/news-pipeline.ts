@@ -37,6 +37,7 @@ import { extractArticle } from "./article-extract";
 import { sonarUrlRead } from "./perplexity-search";
 import { fetchArticleViaApify } from "./apify-article";
 import { chatJson } from "./aimlapi";
+import { isVendorCaseStudyUrl } from "./enrichment-pipeline";
 import {
   buildValidatorPrompt,
   validateValidatorOutput,
@@ -361,6 +362,7 @@ async function validateOne(
     url: item.url,
     published_at: item.published_at,
     body_quality: bodyQuality,
+    is_vendor_case_study: isVendorCaseStudyUrl(item.url),
   };
   const prompt = buildValidatorPrompt(profile, post);
   const inputDump = `SYSTEM:\n${prompt.system}\n\n---\nUSER:\n${prompt.user}`;
