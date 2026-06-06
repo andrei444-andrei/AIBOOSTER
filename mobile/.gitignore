@@ -1,6 +1,7 @@
 # XcodeGen output — regenerated locally, never committed
 *.xcodeproj/
 *.xcworkspace/
+AIBOOSTER-Info.plist
 
 # Xcode user-specific state
 xcuserdata/

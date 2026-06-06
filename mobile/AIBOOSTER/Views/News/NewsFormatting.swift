@@ -31,6 +31,25 @@ enum NewsFormat {
             .filter { !$0.isEmpty }
     }
 
+    /// Strip markdown markers (#, -, *, **, `, >) and collapse whitespace into
+    /// a clean plain-text paragraph — for the collapsed card preview.
+    static func plainText(_ markdown: String) -> String {
+        markdown
+            .components(separatedBy: "\n")
+            .map { line -> String in
+                var s = line.trimmingCharacters(in: .whitespaces)
+                while s.hasPrefix("#") { s.removeFirst() }
+                if s.hasPrefix("- ") || s.hasPrefix("* ") || s.hasPrefix("> ") { s = String(s.dropFirst(2)) }
+                return s
+            }
+            .joined(separator: " ")
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
     /// Inline-markdown AttributedString (bold/italic/links), plain on failure.
     static func markdown(_ s: String) -> AttributedString {
         (try? AttributedString(

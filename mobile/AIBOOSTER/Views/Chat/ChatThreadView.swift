@@ -35,37 +35,58 @@ final class ChatThreadStore: ObservableObject {
         streaming = true
 
         streamTask = Task { @MainActor in
-            do {
-                for try await event in client.streamMessage(sessionId: sessionId, content: trimmed, mode: mode) {
-                    switch event {
-                    case .delta(let t):
-                        update(assistantId) { $0.content += t }
-                    case .image(let b64):
-                        update(assistantId) { $0.imageBase64 = b64 }
-                    case .error(let m):
-                        update(assistantId) {
-                            if $0.content.isEmpty { $0.content = m }
-                            $0.failed = true
-                            $0.isStreaming = false
-                        }
-                    case .done:
-                        update(assistantId) { $0.isStreaming = false }
-                    case .userMessage:
-                        break
-                    }
-                }
-                update(assistantId) { $0.isStreaming = false }
-            } catch {
-                update(assistantId) {
-                    $0.isStreaming = false
-                    if $0.content.isEmpty {
-                        $0.content = ChatClient.friendlyMessage(error)
-                        $0.failed = true
-                    }
-                }
-            }
+            await runStream(text: trimmed, mode: mode, assistantId: assistantId, attempt: 1)
             streaming = false
         }
+    }
+
+    private func runStream(text: String, mode: ChatMode, assistantId: String, attempt: Int) async {
+        var gotContent = false
+        do {
+            for try await event in client.streamMessage(sessionId: sessionId, content: text, mode: mode) {
+                switch event {
+                case .userMessage:
+                    gotContent = true
+                case .delta(let t):
+                    gotContent = true
+                    update(assistantId) { $0.content += t }
+                case .image(let b64):
+                    gotContent = true
+                    update(assistantId) { $0.imageBase64 = b64 }
+                case .done:
+                    update(assistantId) { $0.isStreaming = false }
+                    return
+                case .error(let m):
+                    await fail(m, text: text, mode: mode, assistantId: assistantId, attempt: attempt, gotContent: gotContent)
+                    return
+                }
+            }
+            update(assistantId) { $0.isStreaming = false }
+        } catch {
+            await fail(ChatClient.friendlyMessage(error), text: text, mode: mode,
+                       assistantId: assistantId, attempt: attempt, gotContent: gotContent)
+        }
+    }
+
+    /// Retry a transient "session not found" right after session creation
+    /// (DB replica lag); otherwise surface + log the error.
+    private func fail(_ message: String, text: String, mode: ChatMode, assistantId: String, attempt: Int, gotContent: Bool) async {
+        let transient = message.localizedCaseInsensitiveContains("not found")
+            || message.localizedCaseInsensitiveContains("session")
+        if !gotContent, transient, attempt < 3 {
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            await runStream(text: text, mode: mode, assistantId: assistantId, attempt: attempt + 1)
+            return
+        }
+        update(assistantId) {
+            $0.isStreaming = false
+            if $0.content.isEmpty {
+                $0.content = message
+                $0.failed = true
+            }
+        }
+        RemoteLog.error("chat send failed: \(message)", route: "chat/messages",
+                        meta: ["session": sessionId, "attempt": "\(attempt)"])
     }
 
     func stop() {

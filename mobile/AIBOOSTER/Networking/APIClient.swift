@@ -70,11 +70,15 @@ struct APIClient {
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
+            if http.statusCode >= 500 {
+                RemoteLog.error("HTTP \(http.statusCode) \(method) \(path)", route: path)
+            }
             throw APIError.http(status: http.statusCode, body: data)
         }
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
+            RemoteLog.error("decode failed \(path): \(error)", route: path)
             throw APIError.decoding(error)
         }
     }

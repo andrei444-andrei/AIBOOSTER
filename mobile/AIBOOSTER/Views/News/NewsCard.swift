@@ -26,7 +26,7 @@ struct NewsCard: View {
     }
 
     private var snippet: String {
-        NewsFormat.paragraphs(fullText).first ?? fullText
+        NewsFormat.plainText(fullText)
     }
 
     var body: some View {
@@ -38,9 +38,9 @@ struct NewsCard: View {
                 expandedBody
             } else if !snippet.isEmpty {
                 Text(snippet)
-                    .font(.system(size: 14))
+                    .font(.system(size: 15))
                     .foregroundStyle(Theme.textSecondary)
-                    .lineLimit(3)
+                    .lineLimit(6)
                     .multilineTextAlignment(.leading)
             }
 
