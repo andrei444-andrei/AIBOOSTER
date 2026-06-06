@@ -47,12 +47,7 @@ struct NewsView: View {
         ScrollView {
             LazyVStack(spacing: Theme.Space.s3) {
                 ForEach(items) { item in
-                    NavigationLink {
-                        NewsDetailView(item: item, store: store)
-                    } label: {
-                        NewsItemRow(item: item)
-                    }
-                    .buttonStyle(.plain)
+                    NewsCard(item: item, showFeedback: tab == .feed, store: store)
                 }
             }
             .padding(.horizontal, Theme.Space.s5)
