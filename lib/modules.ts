@@ -67,6 +67,15 @@ export const MODULES: ModuleEntry[] = [
     icon: "▶",
   },
   {
+    slug: "english",
+    title: "Английский",
+    href: "/tools/english",
+    description: "Практика английского: AI генерирует и озвучивает диалоги, слушаешь как подкаст с резюмом.",
+    pinned: true,
+    section: "main",
+    icon: "EN",
+  },
+  {
     slug: "news",
     title: "Лента новостей",
     href: "/news",

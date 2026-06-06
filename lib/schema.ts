@@ -903,6 +903,89 @@ export const TABLES: TableDef[] = [
       { name: "resolved_at", description: "Когда статус ушёл из 'open'/'reviewing'." },
     ],
   },
+
+  // --- Модуль «Английский» → подраздел «Генерируемые диалоги».
+  //
+  // Зеркалит механику youtube-translate (job + воркер + плеер с резюмом), но
+  // источник — не видео, а тема-промт. Пайплайн: LLM пишет сценарий →
+  // ElevenLabs озвучивает реплики → ffmpeg склеивает в один mp3 → R2.
+  // Прослушивание: last_position_sec (резюм с той же секунды) + watch_status
+  // (to_watch → «Слушать», watched → «Завершённые», авто после конца).
+  {
+    name: "english_dialogue_jobs",
+    description:
+      "Задачи генерации англоязычных диалогов/монологов для практики языка: одна строка = один сгенерированный разговор (тема + длительность + тип + перевод). Аналог video_translation_jobs, но контент создаётся из промта, а не из видео.",
+    ddl: `CREATE TABLE IF NOT EXISTS english_dialogue_jobs (
+      id TEXT PRIMARY KEY,
+      topic TEXT NOT NULL,
+      duration_min INTEGER NOT NULL DEFAULT 3,
+      kind TEXT NOT NULL DEFAULT 'dialogue',
+      with_translation INTEGER NOT NULL DEFAULT 0,
+      title TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      stage TEXT,
+      progress INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      error_id TEXT,
+      audio_url TEXT,
+      duration_sec REAL,
+      claimed_at TEXT,
+      claimed_by TEXT,
+      watch_status TEXT NOT NULL DEFAULT 'to_watch',
+      last_position_sec REAL NOT NULL DEFAULT 0,
+      watched_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT
+    )`,
+    columns: [
+      { name: "id", description: "UUID задачи. В URL разговора /tools/english/dialogues/j/<id>." },
+      { name: "topic", description: "Тема разговора — промт пользователя, о чём сгенерировать диалог." },
+      { name: "duration_min", description: "Желаемая длительность аудио в минутах (ползунок 3..10). Ориентир для объёма текста." },
+      { name: "kind", description: "Тип: 'dialogue' (два собеседника) | 'monologue' (один говорящий)." },
+      { name: "with_translation", description: "0/1. Если 1 — после каждого английского предложения звучит его русский перевод." },
+      { name: "title", description: "Короткий заголовок разговора (генерирует LLM вместе со сценарием)." },
+      { name: "status", description: "queued | running | done | error | cancelled." },
+      { name: "stage", description: "Этап для UI: script (пишем сценарий) | tts (озвучка) | mux (склейка)." },
+      { name: "progress", description: "Прогресс 0..100 для прогрессбара." },
+      { name: "error_message", description: "Человекочитаемое сообщение об ошибке (показываем пользователю)." },
+      { name: "error_id", description: "ID из app_errors, если ошибка залогирована — для диагностики." },
+      { name: "audio_url", description: "URL итогового mp3 в R2, готов когда status='done'." },
+      { name: "duration_sec", description: "Фактическая длительность готового аудио в секундах (ffprobe после склейки)." },
+      { name: "claimed_at", description: "Когда воркер забрал задачу (для перезапуска зависших)." },
+      { name: "claimed_by", description: "Идентификатор воркера, забравшего задачу." },
+      { name: "watch_status", description: "'to_watch' (вкладка «Слушать») | 'watched' (вкладка «Завершённые»). Авто-watched при дослушивании до конца, либо вручную." },
+      { name: "last_position_sec", description: "На какой секунде остановились последний раз. При открытии плеера прыгаем сюда (резюм)." },
+      { name: "watched_at", description: "Когда отметили watched (UTC)." },
+      { name: "created_at", description: "Время создания задачи (UTC)." },
+      { name: "updated_at", description: "Время последнего апдейта статуса (UTC)." },
+      { name: "finished_at", description: "Время финального статуса (done/error/cancelled)." },
+    ],
+  },
+  {
+    name: "english_dialogue_segments",
+    description:
+      "Реплики сгенерированного разговора с таймкодами в итоговом аудио: каждая фраза = английский текст + русский перевод + метка говорящего. Используется для транскрипта и подсветки активной фразы в плеере (клик → прыжок на секунду).",
+    ddl: `CREATE TABLE IF NOT EXISTS english_dialogue_segments (
+      job_id TEXT NOT NULL,
+      idx INTEGER NOT NULL,
+      start_ms INTEGER NOT NULL,
+      end_ms INTEGER NOT NULL,
+      speaker TEXT,
+      en_text TEXT NOT NULL,
+      ru_text TEXT,
+      PRIMARY KEY (job_id, idx)
+    )`,
+    columns: [
+      { name: "job_id", description: "FK на english_dialogue_jobs.id." },
+      { name: "idx", description: "Порядковый номер фразы в разговоре (0..N)." },
+      { name: "start_ms", description: "Начало фразы в итоговом mp3, миллисекунды." },
+      { name: "end_ms", description: "Конец фразы (включая русский перевод, если есть), миллисекунды." },
+      { name: "speaker", description: "Метка говорящего: 'A'/'B' для диалога, NULL для монолога." },
+      { name: "en_text", description: "Английский текст фразы (то, что учим)." },
+      { name: "ru_text", description: "Русский перевод фразы. NULL, если разговор без перевода." },
+    ],
+  },
 ];
 
 // Индексы для быстрого чтения.
@@ -919,6 +1002,11 @@ export const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_vtj_cache ON video_translation_jobs (yt_video_id, target_lang, quality, status)`,
   `CREATE INDEX IF NOT EXISTS idx_vtj_queue ON video_translation_jobs (status, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_vts_job ON video_translation_segments (job_id, idx)`,
+
+  // Английский (генерируемые диалоги): очередь воркера + сегменты транскрипта.
+  `CREATE INDEX IF NOT EXISTS idx_edj_queue ON english_dialogue_jobs (status, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_edj_watch ON english_dialogue_jobs (watch_status, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_eds_job ON english_dialogue_segments (job_id, idx)`,
 
   // Адаптеры: очередь cron'а — какие источники due.
   `CREATE INDEX IF NOT EXISTS idx_adapter_sources_due ON adapter_sources (status, next_run_at)`,

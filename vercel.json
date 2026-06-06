@@ -10,6 +10,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/cron/process-english",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/poll-playlist",
       "schedule": "* * * * *"
     },
