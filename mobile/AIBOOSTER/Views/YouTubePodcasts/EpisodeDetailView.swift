@@ -14,6 +14,7 @@ struct EpisodeDetailView: View {
     @State private var showOriginal = false
     @State private var didStartAudio = false
     @State private var watchedOverride: Bool?
+    @Environment(\.scenePhase) private var scenePhase
 
     private let client = APIClient()
 
@@ -55,6 +56,9 @@ struct EpisodeDetailView: View {
         }
         .task { await load() }
         .refreshable { await load() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { player.persistNow() }
+        }
         .onDisappear { savePositionAndStop() }
     }
 
@@ -280,10 +284,14 @@ struct EpisodeDetailView: View {
     private func startAudioIfPossible() {
         guard !didStartAudio, let d = detail, d.status == .done, let audio = d.audioURL else { return }
         didStartAudio = true
+        let id = summary.id
         player.onFinished = {
-            Task { await store.setWatched(summary.id, watched: true) }
+            Task { await store.setWatched(id, watched: true) }
         }
-        player.load(urlString: audio, startAt: d.lastPositionSec)
+        player.onPersistPosition = { pos in
+            Task { try? await APIClient().updatePlayback(id: id, positionSec: pos) }
+        }
+        player.load(urlString: audio, startAt: d.lastPositionSec, title: summary.title ?? "Эпизод")
     }
 
     /// Seek the player (loading it first if needed) and start playing.
@@ -294,11 +302,7 @@ struct EpisodeDetailView: View {
     }
 
     private func savePositionAndStop() {
-        let pos = player.currentTime
-        let id = summary.id
-        if pos > 1 {
-            Task { try? await APIClient().updatePlayback(id: id, positionSec: pos) }
-        }
+        // teardown() persists the final position via onPersistPosition.
         player.teardown()
     }
 }

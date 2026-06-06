@@ -12,6 +12,7 @@ struct DialogueDetailView: View {
     @State private var showTranslation: Bool
     @State private var didStartAudio = false
     @State private var watchedOverride: Bool?
+    @Environment(\.scenePhase) private var scenePhase
 
     private let client = APIClient()
 
@@ -61,6 +62,9 @@ struct DialogueDetailView: View {
         }
         .task { await load() }
         .refreshable { await load() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { player.persistNow() }
+        }
         .onDisappear { savePositionAndStop() }
     }
 
@@ -250,10 +254,14 @@ struct DialogueDetailView: View {
     private func startAudioIfPossible() {
         guard !didStartAudio, let d = detail, d.status == "done", let audio = d.audioURL else { return }
         didStartAudio = true
+        let id = summary.id
         player.onFinished = {
-            Task { await store.setWatched(summary.id, watched: true) }
+            Task { await store.setWatched(id, watched: true) }
         }
-        player.load(urlString: audio, startAt: d.lastPositionSec)
+        player.onPersistPosition = { pos in
+            Task { try? await APIClient().updateDialoguePlayback(id: id, positionSec: pos) }
+        }
+        player.load(urlString: audio, startAt: d.lastPositionSec, title: summary.title ?? summary.topic)
     }
 
     private func seek(to seconds: Double) {
@@ -263,11 +271,7 @@ struct DialogueDetailView: View {
     }
 
     private func savePositionAndStop() {
-        let pos = player.currentTime
-        let id = summary.id
-        if pos > 1 {
-            Task { try? await APIClient().updateDialoguePlayback(id: id, positionSec: pos) }
-        }
+        // teardown() persists the final position via onPersistPosition.
         player.teardown()
     }
 }
