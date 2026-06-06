@@ -42,8 +42,23 @@ struct APIClient {
         return try await send(path: path, method: "POST", body: data)
     }
 
+    func patch<T: Decodable, Body: Encodable>(
+        _ path: String,
+        body: Body,
+        as _: T.Type = T.self
+    ) async throws -> T {
+        let data = try JSONEncoder().encode(body)
+        return try await send(path: path, method: "PATCH", body: data)
+    }
+
     private func send<T: Decodable>(path: String, method: String, body: Data?) async throws -> T {
-        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        // Resolve `path` (which may carry a query string) relative to baseURL.
+        // appendingPathComponent would percent-encode "?" and "=", so use
+        // relative URL resolution instead.
+        guard let url = URL(string: path, relativeTo: baseURL) else {
+            throw APIError.invalidResponse
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }

@@ -1,61 +1,102 @@
 import SwiftUI
 
-/// First-cut screen for the YouTube Podcasts feature.
-///
-/// Layout-only for now: a hero explaining the feature plus a skeleton feed
-/// that previews the episode list. The data layer is intentionally not wired
-/// yet — per §11 the API contract is fixed in `lib/api-types.ts` on `main`
-/// first, then web + mobile implement it. See `Models/API.swift`.
+/// YouTube Podcasts feature: a live feed of translated episodes backed by the
+/// existing /api/jobs endpoints. Tap an episode to listen + read the
+/// transcript; "+" submits a new YouTube URL.
 struct YouTubePodcastsView: View {
-    @State private var skeletonPulse = false
+    @StateObject private var store = PodcastsStore()
+    @State private var showAdd = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Space.s5) {
-                heroCard
-                sectionHeader("Лента")
-                VStack(spacing: Theme.Space.s3) {
-                    ForEach(0..<4, id: \.self) { _ in
-                        SkeletonRow(pulse: skeletonPulse)
+        content
+            .background(Theme.pageBackground)
+            .navigationTitle("YouTube Podcasts")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showAdd = true } label: {
+                        Image(systemName: "plus")
                     }
                 }
-                note
             }
-            .padding(.horizontal, Theme.Space.s5)
-            .padding(.top, Theme.Space.s4)
-            .padding(.bottom, Theme.Space.s10)
-        }
-        .background(Theme.pageBackground)
-        .navigationTitle("YouTube Podcasts")
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear { skeletonPulse = true }
-    }
-
-    private var heroCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s4) {
-            HStack(spacing: Theme.Space.s4) {
-                IconBadge(systemImage: "play.fill", tint: Theme.youtube, size: 56, animated: true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Видео-подкасты, на твоём языке")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Theme.text)
-                    Text("Вставь ссылку на видео или плейлист — получишь перевод, транскрипт и аудио для прослушивания в фоне.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            .sheet(isPresented: $showAdd) {
+                AddPodcastSheet { url, lang, quality in
+                    await store.submit(url: url, lang: lang, quality: quality)
                 }
             }
+            .task {
+                if store.jobs.isEmpty { await store.load(initial: true) }
+            }
+    }
 
-            // Inert for now — enabled once the API contract lands.
-            Button {
-            } label: {
+    @ViewBuilder private var content: some View {
+        if store.jobs.isEmpty {
+            switch store.phase {
+            case .idle, .loading:
+                loadingState
+            case .failed(let message):
+                errorState(message)
+            case .loaded:
+                emptyState
+            }
+        } else {
+            feed
+        }
+    }
+
+    // MARK: Feed
+
+    private var feed: some View {
+        ScrollView {
+            LazyVStack(spacing: Theme.Space.s3) {
+                ForEach(store.jobs) { job in
+                    NavigationLink {
+                        EpisodeDetailView(summary: job)
+                    } label: {
+                        EpisodeRow(job: job)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, Theme.Space.s5)
+            .padding(.top, Theme.Space.s3)
+            .padding(.bottom, Theme.Space.s10)
+        }
+        .refreshable { await store.load() }
+    }
+
+    // MARK: States
+
+    private var loadingState: some View {
+        ScrollView {
+            VStack(spacing: Theme.Space.s3) {
+                ForEach(0..<5, id: \.self) { _ in SkeletonRow() }
+            }
+            .padding(.horizontal, Theme.Space.s5)
+            .padding(.top, Theme.Space.s3)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: Theme.Space.s5) {
+            IconBadge(systemImage: "play.fill", tint: Theme.youtube, size: 64, animated: true)
+            VStack(spacing: 8) {
+                Text("Пока пусто")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(Theme.text)
+                Text("Вставь ссылку на видео или плейлист — получишь перевод, транскрипт и аудио для прослушивания.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            Button { showAdd = true } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "plus")
                     Text("Добавить подкаст")
                 }
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, Theme.Space.s5)
                 .padding(.vertical, Theme.Space.s3)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
@@ -63,57 +104,46 @@ struct YouTubePodcastsView: View {
                 )
             }
             .buttonStyle(PressableStyle())
-            .disabled(true)
-            .opacity(0.55)
         }
-        .padding(Theme.Space.s5)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                .fill(Theme.surface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-                        .stroke(Theme.border, lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.07), radius: 18, y: 9)
-        )
+        .padding(Theme.Space.s8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 12, weight: .semibold))
-            .textCase(.uppercase)
-            .kerning(0.6)
-            .foregroundStyle(Theme.textMuted)
-    }
-
-    private var note: some View {
-        HStack(spacing: Theme.Space.s2) {
-            Image(systemName: "info.circle")
-            Text("Лента подключится к API на следующем шаге.")
+    private func errorState(_ message: String) -> some View {
+        VStack(spacing: Theme.Space.s4) {
+            Image(systemName: "wifi.exclamationmark")
+                .font(.system(size: 40))
+                .foregroundStyle(Theme.textMuted)
+            Text("Не удалось загрузить ленту")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.text)
+            Text(message)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textMuted)
+                .multilineTextAlignment(.center)
+            Button("Повторить") { Task { await store.load(initial: true) } }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
         }
-        .font(.system(size: 12))
-        .foregroundStyle(Theme.textMuted)
-        .padding(.top, Theme.Space.s2)
+        .padding(Theme.Space.s8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-/// Loading-state placeholder row — breathes to read as "loading".
+/// Loading placeholder row — breathes to read as "loading".
 private struct SkeletonRow: View {
-    let pulse: Bool
+    @State private var pulse = false
 
     var body: some View {
         HStack(spacing: Theme.Space.s3) {
             RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                 .fill(Theme.bgMuted)
-                .frame(width: 104, height: 64)
-
+                .frame(width: 104, height: 66)
             VStack(alignment: .leading, spacing: 8) {
                 bar(width: nil, height: 12)
                 bar(width: 150, height: 12)
-                bar(width: 84, height: 10)
+                bar(width: 90, height: 10)
             }
-
             Spacer(minLength: 0)
         }
         .padding(Theme.Space.s3)
@@ -126,7 +156,9 @@ private struct SkeletonRow: View {
                 )
         )
         .opacity(pulse ? 1 : 0.55)
-        .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: pulse)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) { pulse = true }
+        }
     }
 
     private func bar(width: CGFloat?, height: CGFloat) -> some View {
