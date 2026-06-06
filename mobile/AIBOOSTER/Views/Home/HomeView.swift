@@ -54,6 +54,7 @@ struct HomeView: View {
             switch route {
             case .youtubePodcasts: YouTubePodcastsView()
             case .news: NewsView()
+            case .chat: ChatSessionsView()
             }
         }
         .onAppear { appeared = true }

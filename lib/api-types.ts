@@ -210,3 +210,93 @@ export interface NewsFeedbackRequest {
   reason_chip?: string;
   custom_text?: string;
 }
+
+// =====================================================================
+// Chat (AI-чат) — app/api/chat/*, /api/transcribe.
+// Auth: `x-chat-uid` header (8-64 chars, [A-Za-z0-9_-]). Errors are the
+// NESTED form `{ error: { code, message, error_id? } }`. Posting a message
+// returns an SSE stream (text/event-stream), not JSON.
+// =====================================================================
+
+export type ChatMode = "thinking" | "pro" | "judge" | "image";
+
+export interface ChatSession {
+  id: string;
+  uid: string;
+  title: string;
+  model: string;
+  mode: ChatMode | null;
+  model_override: string | null;
+  category_override: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatAttachment {
+  id: string;
+  message_id: string;
+  filename: string;
+  mime_type: string;
+  size: number;
+  kind: "text" | "image" | "image_url";
+  content_text: string | null;
+  content_base64: string | null;
+  created_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  model: string | null;
+  created_at: string;
+  attachments?: ChatAttachment[];
+}
+
+export interface ChatSessionsResponse {
+  sessions: ChatSession[];
+}
+
+export interface ChatSessionResponse {
+  session: ChatSession;
+}
+
+export interface ChatSessionDetailResponse {
+  session: ChatSession;
+  messages: ChatMessage[];
+  active_generation:
+    | { id: string; status: string; mode: ChatMode | null; content: string }
+    | null;
+}
+
+export interface CreateSessionRequest {
+  mode?: ChatMode | null;
+  title?: string;
+}
+
+export interface PostMessageRequest {
+  content: string;
+  mode?: ChatMode | null;
+}
+
+/**
+ * SSE events streamed from POST /api/chat/sessions/[id]/messages
+ * (each frame is `event: <name>\ndata: <json>\n\n`).
+ */
+export type ChatStreamEvent =
+  | { event: "user_message"; data: { id: string; created_at: string } }
+  | { event: "route"; data: { model: string; mode: string; category?: string } }
+  | { event: "delta"; data: { text: string } }
+  | { event: "web_images"; data: { images: Array<{ image_url: string; title?: string }> } }
+  | { event: "citations"; data: { citations: Array<{ url: string; title: string }> } }
+  | { event: "image"; data: { base64: string; mime: string } }
+  | { event: "done"; data: { id: string | null; model: string } }
+  | { event: "error"; data: { message: string; error_id?: string } };
+
+/** POST /api/transcribe — multipart form: audio (blob), language?, prompt? */
+export interface TranscribeResponse {
+  text: string;
+  language?: string;
+  duration?: number;
+}

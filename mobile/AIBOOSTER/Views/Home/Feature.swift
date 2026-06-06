@@ -17,11 +17,12 @@ struct Feature: Identifiable {
 enum Route: Hashable {
     case youtubePodcasts
     case news
+    case chat
 }
 
 extension Feature {
     /// Live features — rendered as full-width hero cards.
-    static let available: [Feature] = [youtubePodcasts, news]
+    static let available: [Feature] = [youtubePodcasts, news, chat]
 
     static let youtubePodcasts = Feature(
         id: "youtube-podcasts",
@@ -41,16 +42,17 @@ extension Feature {
         route: .news
     )
 
+    static let chat = Feature(
+        id: "chat",
+        title: "Чат",
+        subtitle: "Диалог с AI: голос, режимы, стриминг ответов",
+        systemImage: "bubble.left.and.bubble.right.fill",
+        tint: Theme.accent,
+        route: .chat
+    )
+
     /// Roadmap tiles — mirror real web features, shown as “coming soon”.
     static let comingSoon: [Feature] = [
-        Feature(
-            id: "chat",
-            title: "Чат",
-            subtitle: "Ансамбль моделей в одном диалоге",
-            systemImage: "bubble.left.and.bubble.right.fill",
-            tint: Theme.accent,
-            route: nil
-        ),
         Feature(
             id: "research",
             title: "Исследования",

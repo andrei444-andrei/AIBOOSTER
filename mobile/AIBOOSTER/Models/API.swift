@@ -365,4 +365,62 @@ enum API {
             case customText = "custom_text"
         }
     }
+
+    // MARK: Chat — /api/chat/sessions/*, /api/transcribe
+
+    struct ChatSession: Decodable, Identifiable, Hashable {
+        let id: String
+        let title: String
+        let model: String?
+        let mode: String?
+        let createdAt: String
+        let updatedAt: String
+
+        enum CodingKeys: String, CodingKey {
+            case id, title, model, mode
+            case createdAt = "created_at"
+            case updatedAt = "updated_at"
+        }
+    }
+
+    struct ChatMessage: Decodable, Identifiable {
+        let id: String
+        let role: String
+        let content: String
+        let model: String?
+        let createdAt: String
+
+        enum CodingKeys: String, CodingKey {
+            case id, role, content, model
+            case createdAt = "created_at"
+        }
+    }
+
+    struct ChatSessionsResponse: Decodable {
+        let sessions: [ChatSession]
+    }
+
+    struct ChatSessionResponse: Decodable {
+        let session: ChatSession
+    }
+
+    struct ChatSessionDetailResponse: Decodable {
+        let session: ChatSession
+        let messages: [ChatMessage]
+    }
+
+    struct CreateSessionRequest: Encodable {
+        let mode: String?
+    }
+
+    struct PostMessageRequest: Encodable {
+        let content: String
+        let mode: String?
+    }
+
+    struct TranscribeResponse: Decodable {
+        let text: String
+        let language: String?
+        let duration: Double?
+    }
 }
