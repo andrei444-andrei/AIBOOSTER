@@ -6,7 +6,7 @@ import SwiftUI
 struct HomeView: View {
     @State private var appeared = false
 
-    private let featured = Feature.youtubePodcasts
+    private let available = Feature.available
     private let comingSoon = Feature.comingSoon
     private let columns = [
         GridItem(.flexible(), spacing: Theme.Space.s3),
@@ -18,27 +18,31 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: Theme.Space.s6) {
                 AppearAnimator(index: 0, appeared: appeared) { header }
 
-                AppearAnimator(index: 1, appeared: appeared) {
-                    NavigationLink(value: Route.youtubePodcasts) {
-                        FeatureHeroCard(feature: featured)
+                VStack(spacing: Theme.Space.s3) {
+                    ForEach(Array(available.enumerated()), id: \.element.id) { idx, feature in
+                        AppearAnimator(index: 1 + idx, appeared: appeared) {
+                            NavigationLink(value: feature.route ?? .youtubePodcasts) {
+                                FeatureHeroCard(feature: feature, animated: idx == 0)
+                            }
+                            .buttonStyle(PressableStyle())
+                        }
                     }
-                    .buttonStyle(PressableStyle())
                 }
 
                 VStack(alignment: .leading, spacing: Theme.Space.s4) {
-                    AppearAnimator(index: 2, appeared: appeared) {
+                    AppearAnimator(index: 1 + available.count, appeared: appeared) {
                         sectionHeader("Скоро в приложении")
                     }
                     LazyVGrid(columns: columns, spacing: Theme.Space.s3) {
                         ForEach(Array(comingSoon.enumerated()), id: \.element.id) { idx, feature in
-                            AppearAnimator(index: 3 + idx, appeared: appeared) {
+                            AppearAnimator(index: 2 + available.count + idx, appeared: appeared) {
                                 ComingSoonCard(feature: feature)
                             }
                         }
                     }
                 }
 
-                AppearAnimator(index: 3 + comingSoon.count, appeared: appeared) { footer }
+                AppearAnimator(index: 2 + available.count + comingSoon.count, appeared: appeared) { footer }
             }
             .padding(.horizontal, Theme.Space.s5)
             .padding(.top, Theme.Space.s3)
@@ -49,6 +53,7 @@ struct HomeView: View {
         .navigationDestination(for: Route.self) { route in
             switch route {
             case .youtubePodcasts: YouTubePodcastsView()
+            case .news: NewsView()
             }
         }
         .onAppear { appeared = true }
@@ -96,10 +101,11 @@ struct HomeView: View {
 /// Full-width lead feature card.
 struct FeatureHeroCard: View {
     let feature: Feature
+    var animated: Bool = true
 
     var body: some View {
         HStack(spacing: Theme.Space.s4) {
-            IconBadge(systemImage: feature.systemImage, tint: feature.tint, size: 60, animated: true)
+            IconBadge(systemImage: feature.systemImage, tint: feature.tint, size: 60, animated: animated)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(feature.title)

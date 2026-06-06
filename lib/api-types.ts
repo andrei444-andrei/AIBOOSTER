@@ -108,3 +108,105 @@ export interface ApiErrorResponse {
   error: string;
   error_id?: string;
 }
+
+// =====================================================================
+// News (Новости) — see app/api/news/*, lib/news-serialize.ts.
+// All read/feedback routes are open. Serialized item shape comes from
+// serializeItem() plus inline enrichment/related added by the route.
+// =====================================================================
+
+export type NewsKind = "telegram" | "rss" | "web";
+export type NewsVerdict = "show" | "borderline" | "skip";
+export type NewsEnrichStatus = "pending" | "running" | "done" | "failed";
+export type NewsSignal = "like" | "dislike" | "hide";
+
+export interface NewsSourceRef {
+  id: string;
+  name: string;
+  kind: NewsKind;
+  url: string;
+}
+
+export interface NewsImage {
+  url: string;
+  caption: string;
+  source_url: string;
+}
+
+export interface NewsSourceUsed {
+  url: string;
+  title: string;
+  role?: string;
+  why_relevant: string;
+}
+
+/** Inline enrichment as returned under an item (and by /api/news/enrichment). */
+export interface NewsEnrichmentView {
+  status: NewsEnrichStatus;
+  article_body: string | null;
+  key_facts: string[];
+  images: NewsImage[];
+  sources_used: NewsSourceUsed[];
+  original_source_url: string | null;
+  model_used: string | null;
+  cost_cents: number | null;
+  latency_ms: number | null;
+  completed_at: string | null;
+  synthesis_error: string | null;
+  synthesis_output_json?: string | null;
+}
+
+export interface RelatedNewsItem {
+  id: string;
+  title: string | null;
+  url: string | null;
+  source_name: string;
+  published_at: string | null;
+  relevance: number | null;
+}
+
+export interface NewsItem {
+  id: string;
+  source: NewsSourceRef;
+  external_id: string;
+  url: string | null;
+  title: string | null;
+  body: string | null;
+  published_at: string | null;
+  summary: string | null;
+  value_explanation: string | null;
+  matched_topics: string[];
+  relevance: number | null;
+  verdict: NewsVerdict | null;
+  reasoning: string | null;
+  model_used: string | null;
+  validated_at: string | null;
+  created_at: string;
+  status: "pending" | "validated" | "failed";
+  cluster_id: string | null;
+  enrichment: NewsEnrichmentView | null;
+  /** Only on the main feed; absent on read/skipped lists. */
+  related?: RelatedNewsItem[];
+  /** Only on the read list. */
+  feedback_signal?: NewsSignal | null;
+  feedback_at?: string;
+}
+
+/** GET /api/news/items, /api/news/items/read */
+export interface NewsItemsResponse {
+  count: number;
+  items: NewsItem[];
+}
+
+/** GET /api/news/enrichment?item_id= */
+export interface NewsEnrichmentResponse {
+  enrichment: NewsEnrichmentView | null;
+}
+
+/** POST /api/news/feedback — marks the item read */
+export interface NewsFeedbackRequest {
+  item_id: string;
+  signal: NewsSignal;
+  reason_chip?: string;
+  custom_text?: string;
+}

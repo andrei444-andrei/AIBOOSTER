@@ -238,4 +238,131 @@ enum API {
         .init(code: "ko", name: "한국어"),
         .init(code: "hi", name: "हिन्दी")
     ]
+
+    // MARK: News — GET /api/news/items, /api/news/enrichment, POST /api/news/feedback
+
+    struct NewsSourceRef: Decodable {
+        let id: String
+        let name: String
+        let kind: String
+        let url: String
+    }
+
+    struct NewsImage: Decodable, Identifiable {
+        let url: String
+        let caption: String?
+        let sourceURL: String?
+        var id: String { url }
+
+        enum CodingKeys: String, CodingKey {
+            case url, caption
+            case sourceURL = "source_url"
+        }
+    }
+
+    struct NewsSourceUsed: Decodable, Identifiable {
+        let url: String
+        let title: String?
+        let role: String?
+        let whyRelevant: String?
+        var id: String { url }
+
+        enum CodingKeys: String, CodingKey {
+            case url, title, role
+            case whyRelevant = "why_relevant"
+        }
+    }
+
+    struct NewsEnrichment: Decodable {
+        let status: String
+        let articleBody: String?
+        let keyFacts: [String]?
+        let images: [NewsImage]?
+        let sourcesUsed: [NewsSourceUsed]?
+        let originalSourceURL: String?
+        let completedAt: String?
+        let synthesisError: String?
+
+        enum CodingKeys: String, CodingKey {
+            case status
+            case articleBody = "article_body"
+            case keyFacts = "key_facts"
+            case images
+            case sourcesUsed = "sources_used"
+            case originalSourceURL = "original_source_url"
+            case completedAt = "completed_at"
+            case synthesisError = "synthesis_error"
+        }
+    }
+
+    struct RelatedNewsItem: Decodable, Identifiable {
+        let id: String
+        let title: String?
+        let url: String?
+        let sourceName: String?
+        let publishedAt: String?
+        let relevance: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case id, title, url
+            case sourceName = "source_name"
+            case publishedAt = "published_at"
+            case relevance
+        }
+    }
+
+    struct NewsItem: Decodable, Identifiable {
+        let id: String
+        let source: NewsSourceRef
+        let url: String?
+        let title: String?
+        let body: String?
+        let publishedAt: String?
+        let summary: String?
+        let valueExplanation: String?
+        let matchedTopics: [String]?
+        let relevance: Int?
+        let verdict: String?
+        let reasoning: String?
+        let createdAt: String
+        let status: String
+        let enrichment: NewsEnrichment?
+        let related: [RelatedNewsItem]?
+        let feedbackSignal: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, source, url, title, body
+            case publishedAt = "published_at"
+            case summary
+            case valueExplanation = "value_explanation"
+            case matchedTopics = "matched_topics"
+            case relevance, verdict, reasoning
+            case createdAt = "created_at"
+            case status, enrichment, related
+            case feedbackSignal = "feedback_signal"
+        }
+    }
+
+    struct NewsItemsResponse: Decodable {
+        let count: Int
+        let items: [NewsItem]
+    }
+
+    struct NewsEnrichmentResponse: Decodable {
+        let enrichment: NewsEnrichment?
+    }
+
+    struct NewsFeedbackRequest: Encodable {
+        let itemId: String
+        let signal: String
+        let reasonChip: String?
+        let customText: String?
+
+        enum CodingKeys: String, CodingKey {
+            case itemId = "item_id"
+            case signal
+            case reasonChip = "reason_chip"
+            case customText = "custom_text"
+        }
+    }
 }

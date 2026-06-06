@@ -16,10 +16,13 @@ struct Feature: Identifiable {
 /// Navigation targets pushed onto the home `NavigationStack`.
 enum Route: Hashable {
     case youtubePodcasts
+    case news
 }
 
 extension Feature {
-    /// The lead feature — first real screen of the app.
+    /// Live features — rendered as full-width hero cards.
+    static let available: [Feature] = [youtubePodcasts, news]
+
     static let youtubePodcasts = Feature(
         id: "youtube-podcasts",
         title: "YouTube Podcasts",
@@ -29,16 +32,17 @@ extension Feature {
         route: .youtubePodcasts
     )
 
+    static let news = Feature(
+        id: "news",
+        title: "Новости",
+        subtitle: "Персональная лента с AI-разбором каждой новости",
+        systemImage: "newspaper.fill",
+        tint: Theme.info,
+        route: .news
+    )
+
     /// Roadmap tiles — mirror real web features, shown as “coming soon”.
     static let comingSoon: [Feature] = [
-        Feature(
-            id: "news",
-            title: "Новости",
-            subtitle: "Персональная лента с AI-разбором",
-            systemImage: "newspaper.fill",
-            tint: Theme.info,
-            route: nil
-        ),
         Feature(
             id: "chat",
             title: "Чат",
