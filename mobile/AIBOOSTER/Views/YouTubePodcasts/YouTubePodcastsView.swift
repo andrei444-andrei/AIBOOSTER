@@ -6,6 +6,26 @@ import SwiftUI
 struct YouTubePodcastsView: View {
     @StateObject private var store = PodcastsStore()
     @State private var showAdd = false
+    @State private var filter: Filter = .toListen
+
+    enum Filter: String, CaseIterable, Hashable {
+        case toListen, watched, all
+        var title: String {
+            switch self {
+            case .toListen: return "Слушать"
+            case .watched: return "Прослушано"
+            case .all: return "Все"
+            }
+        }
+    }
+
+    private var filtered: [API.JobSummary] {
+        switch filter {
+        case .toListen: return store.jobs.filter { $0.watchStatus == .toWatch }
+        case .watched:  return store.jobs.filter { $0.watchStatus == .watched }
+        case .all:      return store.jobs
+        }
+    }
 
     var body: some View {
         content
@@ -47,22 +67,54 @@ struct YouTubePodcastsView: View {
     // MARK: Feed
 
     private var feed: some View {
-        ScrollView {
-            LazyVStack(spacing: Theme.Space.s3) {
-                ForEach(store.jobs) { job in
-                    NavigationLink {
-                        EpisodeDetailView(summary: job)
-                    } label: {
-                        EpisodeRow(job: job)
-                    }
-                    .buttonStyle(.plain)
+        VStack(spacing: 0) {
+            Picker("", selection: $filter) {
+                ForEach(Filter.allCases, id: \.self) { f in
+                    Text(f.title).tag(f)
                 }
             }
+            .pickerStyle(.segmented)
             .padding(.horizontal, Theme.Space.s5)
-            .padding(.top, Theme.Space.s3)
-            .padding(.bottom, Theme.Space.s10)
+            .padding(.top, Theme.Space.s2)
+            .padding(.bottom, Theme.Space.s3)
+
+            ScrollView {
+                LazyVStack(spacing: Theme.Space.s3) {
+                    if filtered.isEmpty {
+                        Text(filter == .watched ? "Пока ничего не прослушано" : "Здесь пусто")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.textMuted)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, Theme.Space.s10)
+                    } else {
+                        ForEach(filtered) { job in
+                            NavigationLink {
+                                EpisodeDetailView(summary: job, store: store)
+                            } label: {
+                                EpisodeRow(job: job)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu { watchToggle(job) }
+                        }
+                    }
+                }
+                .padding(.horizontal, Theme.Space.s5)
+                .padding(.bottom, Theme.Space.s10)
+            }
+            .refreshable { await store.load() }
         }
-        .refreshable { await store.load() }
+    }
+
+    @ViewBuilder private func watchToggle(_ job: API.JobSummary) -> some View {
+        if job.watchStatus == .watched {
+            Button { Task { await store.setWatched(job.id, watched: false) } } label: {
+                Label("Вернуть в «Слушать»", systemImage: "arrow.uturn.left")
+            }
+        } else {
+            Button { Task { await store.setWatched(job.id, watched: true) } } label: {
+                Label("Отметить прослушанным", systemImage: "checkmark")
+            }
+        }
     }
 
     // MARK: States

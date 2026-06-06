@@ -45,6 +45,12 @@ final class PodcastsStore: ObservableObject {
         }
     }
 
+    /// Toggle an episode's watched status, then refresh the feed.
+    func setWatched(_ id: String, watched: Bool) async {
+        try? await client.updatePlayback(id: id, watchStatus: watched ? "watched" : "to_watch")
+        await load()
+    }
+
     private var hasActiveJobs: Bool {
         jobs.contains { $0.status == .queued || $0.status == .running }
     }
