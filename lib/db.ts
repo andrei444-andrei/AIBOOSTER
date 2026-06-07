@@ -71,6 +71,8 @@ const COLUMN_MIGRATIONS: ColumnAddition[] = [
   // (один и тот же сюжет из разных источников группируется по cosine).
   { table: "news_items", column: "title_embedding", ddl: "title_embedding TEXT" },
   { table: "news_items", column: "cluster_id", ddl: "cluster_id TEXT" },
+  // Английский (диалоги): темп озвучки, запекаемый при генерации (ffmpeg atempo).
+  { table: "english_dialogue_jobs", column: "speed", ddl: "speed REAL NOT NULL DEFAULT 1.0" },
 ];
 
 async function hasColumn(table: string, column: string): Promise<boolean> {

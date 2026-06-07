@@ -124,15 +124,19 @@ export async function ffmpegFit(
 // без изменения длительности. Используется в подкаст-режиме, где TTS играет
 // в натуральном темпе, а нужно только привести все файлы к одинаковым
 // параметрам для concat-склейки.
-export async function ffmpegNormalize(inFile: string, outFile: string): Promise<void> {
-  await run(FFMPEG, [
-    "-y", "-i", inFile,
-    "-acodec", "libmp3lame",
-    "-q:a", "4",
-    "-ar", "44100",
-    "-ac", "1",
-    outFile,
-  ]);
+export async function ffmpegNormalize(
+  inFile: string,
+  outFile: string,
+  tempo = 1,
+): Promise<void> {
+  const args = ["-y", "-i", inFile];
+  // atempo меняет темп без изменения высоты тона. Диапазон фильтра 0.5..2.0 —
+  // нам хватает (используем ~0.7..1.2). При tempo≈1 фильтр не добавляем.
+  if (tempo && Math.abs(tempo - 1) > 0.001) {
+    args.push("-filter:a", `atempo=${tempo.toFixed(3)}`);
+  }
+  args.push("-acodec", "libmp3lame", "-q:a", "4", "-ar", "44100", "-ac", "1", outFile);
+  await run(FFMPEG, args);
 }
 
 // Собирает финальный mp3 из TTS-сегментов с точным позиционированием

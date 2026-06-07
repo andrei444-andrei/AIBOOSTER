@@ -31,6 +31,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
         kind: job.kind,
         duration_min: job.duration_min,
         with_translation: job.with_translation,
+        speed: job.speed,
         status: job.status,
         stage: job.stage,
         progress: job.progress,

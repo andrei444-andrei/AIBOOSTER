@@ -20,6 +20,7 @@ export interface DialogueJobRow {
   duration_min: number;
   kind: DialogueKind;
   with_translation: number; // 0 | 1
+  speed: number;
   title: string | null;
   status: JobStatus;
   stage: JobStage | null;
@@ -53,6 +54,7 @@ export interface CreateDialogueArgs {
   durationMin: number;
   kind: DialogueKind;
   withTranslation: boolean;
+  speed: number;
 }
 
 export async function createDialogueJob(
@@ -65,14 +67,15 @@ export async function createDialogueJob(
 
   await db.execute({
     sql: `INSERT INTO english_dialogue_jobs
-            (id, topic, duration_min, kind, with_translation, status, progress, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?)`,
+            (id, topic, duration_min, kind, with_translation, speed, status, progress, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)`,
     args: [
       id,
       args.topic,
       args.durationMin,
       args.kind,
       args.withTranslation ? 1 : 0,
+      args.speed,
       now,
       now,
     ],
@@ -101,6 +104,7 @@ export interface DialogueJobSummary {
   kind: DialogueKind;
   duration_min: number;
   with_translation: number;
+  speed: number;
   status: JobStatus;
   stage: JobStage | null;
   progress: number;
@@ -129,7 +133,7 @@ export async function listDialogueJobs(
   params.push(limit);
 
   const res = await db.execute({
-    sql: `SELECT id, topic, title, kind, duration_min, with_translation,
+    sql: `SELECT id, topic, title, kind, duration_min, with_translation, speed,
                  status, stage, progress, audio_url, duration_sec,
                  watch_status, last_position_sec, created_at
           FROM english_dialogue_jobs
