@@ -22,6 +22,14 @@ const SUBSECTIONS: SubsectionDef[] = [
     href: "/tools/english/dialogues",
     status: "live",
   },
+  {
+    slug: "build-sentences",
+    title: "Build sentences",
+    description:
+      "Тема → 10 предложений. Собери каждое из кусков в правильном порядке: перетаскивай, тапай для перевода, при ошибке — памятка по структуре. Разделы «Надо сделать»/«Сделано».",
+    href: "/tools/english/build-sentences",
+    status: "live",
+  },
 ];
 
 export default function EnglishHubPage() {
