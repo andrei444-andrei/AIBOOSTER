@@ -11,6 +11,7 @@ export default function GenerateForm() {
   const [durationMin, setDurationMin] = useState(5);
   const [kind, setKind] = useState<Kind>("dialogue");
   const [withTranslation, setWithTranslation] = useState(false);
+  const [speed, setSpeed] = useState(0.9);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,6 +34,7 @@ export default function GenerateForm() {
           duration_min: durationMin,
           kind,
           with_translation: withTranslation,
+          speed,
         }),
       });
       const data = await res.json();
@@ -88,6 +90,36 @@ export default function GenerateForm() {
         >
           <span>3</span>
           <span>10</span>
+        </div>
+      </div>
+
+      {/* Скорость озвучки — ползунок 0.7..1.2× (запекается в аудио) */}
+      <div style={{ marginTop: 20 }}>
+        <label htmlFor="dlg-speed" className={styles.fieldLabel}>
+          Скорость озвучки:{" "}
+          <strong style={{ color: "var(--text)" }}>{speed.toFixed(2)}×</strong>
+        </label>
+        <input
+          id="dlg-speed"
+          type="range"
+          min={0.7}
+          max={1.2}
+          step={0.05}
+          value={speed}
+          onChange={(e) => setSpeed(Number(e.target.value))}
+          style={{ width: "100%", accentColor: "var(--accent)" }}
+        />
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            fontSize: 11,
+            color: "var(--text-muted)",
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          <span>0.7× медленнее</span>
+          <span>быстрее 1.2×</span>
         </div>
       </div>
 

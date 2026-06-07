@@ -16,6 +16,7 @@ interface JobDto {
   kind: "dialogue" | "monologue";
   duration_min: number;
   with_translation: number;
+  speed: number;
   status: Status;
   stage: Stage;
   progress: number;
@@ -52,9 +53,11 @@ const STAGE_ORDER: Exclude<Stage, null>[] = ["script", "tts", "mux"];
 // Скорость воспроизведения (как в подкаст-плеере). Выбор запоминается глобально
 // в localStorage и применяется ко всем разговорам. Для учащихся важны медленные
 // значения, поэтому по умолчанию чуть медленнее обычного.
-const RATE_KEY = "english_dialogue_rate";
+// Скорость воспроизведения — живая подстройка поверх «запечённого» при
+// генерации темпа. Дефолт 1× (базовый темп уже задан при генерации).
+const RATE_KEY = "english_dialogue_play_rate";
 const RATE_OPTIONS = [0.6, 0.75, 0.9, 1, 1.25];
-const DEFAULT_RATE = 0.9;
+const DEFAULT_RATE = 1;
 function readSavedRate(): number {
   if (typeof window === "undefined") return DEFAULT_RATE;
   const v = Number(localStorage.getItem(RATE_KEY));
@@ -151,6 +154,7 @@ function Hero({ job }: { job: JobDto }) {
         <Tag>{job.kind === "monologue" ? "монолог" : "диалог"}</Tag>
         <Tag>{job.duration_min} мин</Tag>
         {job.with_translation === 1 && <Tag>с переводом</Tag>}
+        {job.speed && job.speed !== 1 ? <Tag>озвучка ×{job.speed}</Tag> : null}
       </div>
       <h1 className={styles.heroTitle}>{job.title || "Разговор на английском"}</h1>
       <p style={{ margin: 0, fontSize: "var(--text-base)", color: "var(--text-secondary)", lineHeight: "var(--leading-relaxed)" }}>

@@ -56,9 +56,10 @@ export async function POST(req: Request) {
   const durationMin = clampDuration(body.duration_min);
   const kind: DialogueKind = body.kind === "monologue" ? "monologue" : "dialogue";
   const withTranslation = body.with_translation === true || body.with_translation === 1;
+  const speed = clampSpeed(body.speed);
 
   try {
-    const job = await createDialogueJob({ topic, durationMin, kind, withTranslation });
+    const job = await createDialogueJob({ topic, durationMin, kind, withTranslation, speed });
     waitUntil(triggerProcessing(req));
     return NextResponse.json({ job_id: job.id });
   } catch (err) {
@@ -67,6 +68,7 @@ export async function POST(req: Request) {
       durationMin,
       kind,
       withTranslation,
+      speed,
     });
     return NextResponse.json(
       { error: "не удалось создать задачу", error_id },
@@ -79,6 +81,14 @@ function clampDuration(raw: unknown): number {
   const n = Math.round(Number(raw));
   if (!Number.isFinite(n)) return 3;
   return Math.max(3, Math.min(10, n));
+}
+
+// Темп озвучки, запекаемый при генерации. Шаг 0.05, диапазон 0.7..1.2,
+// дефолт 0.9 (натуральный ElevenLabs ~1.0 слишком быстрый для учащихся).
+function clampSpeed(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0.9;
+  return Math.max(0.7, Math.min(1.2, Math.round(n * 20) / 20));
 }
 
 // Дёргает воркер на этом же деплое, чтобы он сразу забрал свежую задачу

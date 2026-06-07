@@ -11,6 +11,7 @@ interface JobSummary {
   kind: "dialogue" | "monologue";
   duration_min: number;
   with_translation: number;
+  speed: number;
   status: "queued" | "running" | "done" | "error" | "cancelled";
   stage: "script" | "tts" | "mux" | null;
   progress: number;
@@ -180,6 +181,7 @@ function JobCard({ job }: { job: JobSummary }) {
           <Badge>{job.kind === "monologue" ? "монолог" : "диалог"}</Badge>
           <Badge>{job.duration_min} мин</Badge>
           {job.with_translation === 1 && <Badge>с переводом</Badge>}
+          {job.speed && job.speed !== 1 ? <Badge>×{job.speed}</Badge> : null}
           {job.watch_status === "watched" && (
             <Badge color="var(--success)" bg="var(--success-bg)">
               ✓ прослушано

@@ -41,7 +41,11 @@ const RU_VOICE = "Bella"; // голос русского перевода
 // Паузы для комфортного восприятия учащимся (миллисекунды).
 const LEAD_MS = 300; // тишина в самом начале
 const GAP_EN_RU_MS = 350; // между английской фразой и её переводом
-const GAP_LINE_MS = 550; // между фразами
+const GAP_LINE_MS = 550; // между фразами (базовая)
+// Если LLM дал мало текста и до запрошенных минут не дотягиваем — добиваем
+// время паузами между фразами (для учащихся паузы полезны), но не больше
+// этого на фразу, чтобы не было «мёртвого эфира».
+const MAX_EXTRA_GAP_MS = 1500;
 
 // Калибровка длительности (по реальным замерам ElevenLabs eleven_multilingual_v2:
 // чистая речь ~163 слов/мин). Берём 170 — слегка завышаем темп, чтобы оценка
@@ -54,7 +58,7 @@ const TTS_CONCURRENCY = 5;
 
 // Циклы «дописывания» сценария и потолок числа фраз (бюджет serverless-функции,
 // maxDuration=300). С переводом на фразу 2 TTS-вызова, поэтому потолок ниже.
-const MAX_FILL_ROUNDS = 6;
+const MAX_FILL_ROUNDS = 8;
 function maxSentences(withTranslation: boolean): number {
   return withTranslation ? 150 : 240;
 }
@@ -97,6 +101,8 @@ export async function runDialogueJob(job: DialogueJobRow): Promise<void> {
 async function runPipeline(job: DialogueJobRow, work: string): Promise<void> {
   const withTranslation = job.with_translation === 1;
   const kind = job.kind === "monologue" ? "monologue" : "dialogue";
+  // Темп озвучки, запекаемый при генерации (ffmpeg atempo). 1.0 — натуральный.
+  const speed = job.speed && job.speed > 0 ? job.speed : 1;
 
   // 1. Сценарий — дописываем до запрошенной длительности.
   await updateDialogueProgress({ id: job.id, stage: "script", progress: 6 });
@@ -105,6 +111,7 @@ async function runPipeline(job: DialogueJobRow, work: string): Promise<void> {
     durationMin: job.duration_min,
     kind,
     withTranslation,
+    speed,
     jobId: job.id,
   });
   await updateDialogueProgress({ id: job.id, stage: "script", progress: 24, title });
@@ -156,9 +163,10 @@ async function runPipeline(job: DialogueJobRow, work: string): Promise<void> {
       const raw = await ttsSynth(c.text, { voice: c.voice });
       const rawFile = `${c.file}.raw`;
       await writeFile(rawFile, raw);
-      // Нормализуем в канонический формат (44.1kHz mono) — без этого concat
-      // demuxer спотыкается на разных частотах от ElevenLabs.
-      await ffmpegNormalize(rawFile, c.file);
+      // Нормализуем в канонический формат (44.1kHz mono) + применяем темп
+      // (atempo) — без нормализации concat demuxer спотыкается на разных
+      // частотах от ElevenLabs.
+      await ffmpegNormalize(rawFile, c.file, speed);
       done++;
       await reportTts();
     }
@@ -187,6 +195,32 @@ async function runPipeline(job: DialogueJobRow, work: string): Promise<void> {
     ru_text: string | null;
   }> = [];
 
+  // Реальные длительности клипов (ffprobe) — для точного таймлайна и расчёта
+  // добора паузами.
+  const durMs = new Map<string, number>();
+  let speechMs = 0;
+  for (const c of clips) {
+    const d = Math.round((await ffprobeDuration(c.file)) * 1000);
+    durMs.set(c.file, d);
+    speechMs += d;
+  }
+
+  // Сколько добрать паузами, если речи не хватает до запрошенной длительности.
+  const playable = lines.filter((_, i) => Boolean(byLine.get(i)?.en));
+  let baseGapMs = LEAD_MS;
+  for (let i = 0; i < lines.length; i++) {
+    const f = byLine.get(i);
+    if (!f?.en) continue;
+    baseGapMs += GAP_LINE_MS;
+    if (withTranslation && f.ru) baseGapMs += GAP_EN_RU_MS;
+  }
+  const targetMs = job.duration_min * 60 * 1000;
+  const deficitMs = targetMs - (speechMs + baseGapMs);
+  const extraGapMs =
+    deficitMs > 0 && playable.length > 0
+      ? Math.min(Math.round(deficitMs / playable.length), MAX_EXTRA_GAP_MS)
+      : 0;
+
   let cursor = LEAD_MS;
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
@@ -194,16 +228,14 @@ async function runPipeline(job: DialogueJobRow, work: string): Promise<void> {
     if (!files?.en) continue;
 
     const enStart = cursor;
-    const enDurMs = Math.round((await ffprobeDuration(files.en)) * 1000);
-    const enEnd = enStart + enDurMs;
+    const enEnd = enStart + (durMs.get(files.en) ?? 0);
     concatPieces.push({ file: files.en, start_ms: enStart, end_ms: enEnd });
     cursor = enEnd;
     let lineEnd = enEnd;
 
     if (withTranslation && files.ru) {
       const ruStart = cursor + GAP_EN_RU_MS;
-      const ruDurMs = Math.round((await ffprobeDuration(files.ru)) * 1000);
-      const ruEnd = ruStart + ruDurMs;
+      const ruEnd = ruStart + (durMs.get(files.ru) ?? 0);
       concatPieces.push({ file: files.ru, start_ms: ruStart, end_ms: ruEnd });
       cursor = ruEnd;
       lineEnd = ruEnd;
@@ -217,7 +249,7 @@ async function runPipeline(job: DialogueJobRow, work: string): Promise<void> {
       en_text: ln.en,
       ru_text: withTranslation ? ln.ru || null : null,
     });
-    cursor = lineEnd + GAP_LINE_MS;
+    cursor = lineEnd + GAP_LINE_MS + extraGapMs;
   }
 
   await replaceDialogueSegments(job.id, segments);
@@ -249,14 +281,15 @@ function wordCount(s: string): number {
 // Расчётная длительность готового аудио по словам (без TTS — дёшево).
 // Воспроизводит реальные замеры в пределах ~4%, что достаточно для попадания
 // в запрошенные минуты.
-function estimateDurationSec(lines: Line[], withTranslation: boolean): number {
+function estimateDurationSec(lines: Line[], withTranslation: boolean, speed = 1): number {
   let enWords = 0;
   let ruWords = 0;
   for (const ln of lines) {
     enWords += wordCount(ln.en);
     if (withTranslation && ln.ru) ruWords += wordCount(ln.ru);
   }
-  const speechSec = ((enWords + ruWords) / SPEECH_WPM) * 60;
+  // Темп влияет только на речь (паузы — отдельные silence-вставки, не ускоряются).
+  const speechSec = ((enWords + ruWords) / (SPEECH_WPM * speed)) * 60;
   const pauseSec =
     LEAD_MS / 1000 +
     (lines.length * ((withTranslation ? GAP_EN_RU_MS : 0) + GAP_LINE_MS)) / 1000;
@@ -266,10 +299,12 @@ function estimateDurationSec(lines: Line[], withTranslation: boolean): number {
 // Сколько английских слов попросить, чтобы добрать ~secNeeded секунд аудио.
 // Пауз в оценку не закладываем (они тоже наполняют время) — намеренно просим
 // чуть меньше, цикл добьёт остаток.
-function enWordsForSeconds(secNeeded: number, withTranslation: boolean): number {
-  const totalWords = (secNeeded * SPEECH_WPM) / 60;
+function enWordsForSeconds(secNeeded: number, withTranslation: boolean, speed = 1): number {
+  const totalWords = (secNeeded * SPEECH_WPM * speed) / 60;
   const enWords = withTranslation ? totalWords / 1.85 : totalWords; // RU ≈ 0.85×EN
-  return Math.max(40, Math.min(900, Math.round(enWords * 0.85)));
+  // Просим с запасом ×1.3: LLM систематически недодаёт объём. Перебор затем
+  // срезаем по факту (trim ниже). Кап на раунд — чтобы JSON-ответ не обрывался.
+  return Math.max(80, Math.min(600, Math.round(enWords * 1.3)));
 }
 
 interface ScriptInput {
@@ -277,6 +312,7 @@ interface ScriptInput {
   durationMin: number;
   kind: "dialogue" | "monologue";
   withTranslation: boolean;
+  speed: number;
   jobId: string;
 }
 
@@ -292,12 +328,13 @@ async function generateScript(
   let title = "";
   const lines: Line[] = [];
 
+  let emptyStreak = 0;
   for (let round = 0; round < MAX_FILL_ROUNDS; round++) {
-    const estSec = estimateDurationSec(lines, input.withTranslation);
-    if (estSec >= targetSec * 0.97) break;
+    const estSec = estimateDurationSec(lines, input.withTranslation, input.speed);
+    if (estSec >= targetSec * 0.98) break;
     if (lines.length >= cap) break;
 
-    const askWords = enWordsForSeconds(targetSec - estSec, input.withTranslation);
+    const askWords = enWordsForSeconds(targetSec - estSec, input.withTranslation, input.speed);
     const { title: t, turns } =
       round === 0
         ? await generateInitialChunk(input, askWords)
@@ -307,15 +344,17 @@ async function generateScript(
     const newLines = flattenTurns(turns);
     if (newLines.length === 0) {
       if (round === 0) throw new Error("LLM вернул пустой сценарий");
-      break; // модель больше ничего осмысленного не даёт — выходим
+      if (++emptyStreak >= 2) break; // дважды подряд пусто — модель исчерпалась
+      continue;
     }
+    emptyStreak = 0;
     for (const ln of newLines) {
       if (lines.length >= cap) break;
       lines.push(ln);
     }
 
     // Прогресс этапа script: 6→22 по мере набора длительности.
-    const filled = Math.min(1, estimateDurationSec(lines, input.withTranslation) / targetSec);
+    const filled = Math.min(1, estimateDurationSec(lines, input.withTranslation, input.speed) / targetSec);
     await updateDialogueProgress({
       id: input.jobId,
       stage: "script",
@@ -329,7 +368,7 @@ async function generateScript(
   // срезаем хвост, чтобы не перебирать сверх ~5% над целевой длительностью.
   while (
     lines.length > 1 &&
-    estimateDurationSec(lines, input.withTranslation) > targetSec * 1.05
+    estimateDurationSec(lines, input.withTranslation, input.speed) > targetSec * 1.05
   ) {
     lines.pop();
   }
@@ -359,9 +398,9 @@ async function generateInitialChunk(
     `${form}\n\n` +
     `Тема: "${input.topic}".\n` +
     `Это аудио должно звучать примерно ${input.durationMin} мин, поэтому нужно МНОГО реплик. ` +
-    `Дай не меньше ${Math.round(askWords)} английских слов, разбитых на естественные предложения ` +
-    `(это ~${Math.max(8, Math.round(askWords / 9))} предложений). Не сворачивай тему раньше времени. ` +
-    `Верни только JSON-объект.`;
+    `Дай НЕ МЕНЬШЕ ${Math.round(askWords)} английских слов (~${Math.max(8, Math.round(askWords / 9))} предложений). ` +
+    `Раскрывай тему ШИРОКО: несколько подтем, конкретные детали, примеры, причины. ` +
+    `Не подытоживай и не завершай рано — это только начало. Верни только JSON-объект.`;
 
   const { parsed } = await chatJson<unknown>({
     model: process.env.AIMLAPI_CHAT_MODEL || "gpt-4o",
@@ -391,9 +430,10 @@ async function continueChunk(
   const user =
     `${form} Тема: "${input.topic}".\n` +
     `Вот последние реплики разговора:\n${tail}\n\n` +
-    `Продолжи естественно и БЕЗ ПОВТОРОВ, развивая тему дальше (новые подтемы, детали, примеры). ` +
-    `Добавь примерно ${Math.round(askWords)} английских слов отдельными предложениями. ` +
-    `"title" можно не указывать. Верни только JSON-объект того же формата (turns).`;
+    `Разговор ещё НЕ закончен — продолжай. Введи НОВЫЕ подтемы, детали и примеры, ` +
+    `БЕЗ повторов и без подытоживания. Добавь не меньше ${Math.round(askWords)} английских слов ` +
+    `(~${Math.max(6, Math.round(askWords / 9))} предложений) отдельными предложениями. ` +
+    `"title" не нужен. Верни только JSON-объект того же формата (turns).`;
 
   const { parsed } = await chatJson<unknown>({
     model: process.env.AIMLAPI_CHAT_MODEL || "gpt-4o",
