@@ -73,8 +73,9 @@ final class ChatThreadStore: ObservableObject {
     private func fail(_ message: String, text: String, mode: ChatMode, assistantId: String, attempt: Int, gotContent: Bool) async {
         let transient = message.localizedCaseInsensitiveContains("not found")
             || message.localizedCaseInsensitiveContains("session")
-        if !gotContent, transient, attempt < 3 {
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+        // Session reads can lag a few seconds after creation; retry across ~9s.
+        if !gotContent, transient, attempt < 6 {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
             await runStream(text: text, mode: mode, assistantId: assistantId, attempt: attempt + 1)
             return
         }

@@ -62,15 +62,22 @@ struct NewsCard: View {
     // MARK: Pieces
 
     private var header: some View {
-        HStack(spacing: 6) {
-            Text(item.source.name)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Theme.info)
-                .lineLimit(1)
-            if let rel = NewsFormat.relative(item.publishedAt) {
-                Text("· \(rel)").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(item.source.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.info)
+                    .lineLimit(1)
+                if let rel = NewsFormat.relative(item.publishedAt) {
+                    Text("· \(rel)").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            if let added = NewsFormat.relative(item.createdAt) {
+                Text("Добавлено \(added)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textMuted)
+            }
         }
     }
 

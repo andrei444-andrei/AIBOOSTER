@@ -31,10 +31,16 @@ enum NewsFormat {
             .filter { !$0.isEmpty }
     }
 
-    /// Strip markdown markers (#, -, *, **, `, >) and collapse whitespace into
-    /// a clean plain-text paragraph — for the collapsed card preview.
+    /// Strip markdown markers (#, -, *, **, `, >) and links/images, then
+    /// collapse whitespace into a clean plain-text paragraph for the preview.
     static func plainText(_ markdown: String) -> String {
-        markdown
+        var text = markdown
+        // ![alt](url) -> drop, [text](url) -> text
+        text = text.replacingOccurrences(
+            of: "!\\[[^\\]]*\\]\\([^)]*\\)", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(
+            of: "\\[([^\\]]+)\\]\\([^)]*\\)", with: "$1", options: .regularExpression)
+        return text
             .components(separatedBy: "\n")
             .map { line -> String in
                 var s = line.trimmingCharacters(in: .whitespaces)
