@@ -7,6 +7,7 @@ struct NewsCard: View {
     let item: API.NewsItem
     let showFeedback: Bool
     let store: NewsStore
+    var onCollapse: (() -> Void)? = nil
 
     @State private var expanded = false
     @State private var enrichment: API.NewsEnrichment?
@@ -131,8 +132,13 @@ struct NewsCard: View {
 
     private var spoilerButton: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-            if expanded { Task { await loadEnrichmentIfNeeded() } }
+            let willExpand = !expanded
+            withAnimation(.easeInOut(duration: 0.2)) { expanded = willExpand }
+            if willExpand {
+                Task { await loadEnrichmentIfNeeded() }
+            } else {
+                onCollapse?()
+            }
         } label: {
             HStack(spacing: 4) {
                 Text(expanded ? "Свернуть" : "Читать полностью")

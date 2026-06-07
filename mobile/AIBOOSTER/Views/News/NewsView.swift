@@ -44,16 +44,25 @@ struct NewsView: View {
     }
 
     private func list(_ items: [API.NewsItem]) -> some View {
-        ScrollView {
-            LazyVStack(spacing: Theme.Space.s3) {
-                ForEach(items) { item in
-                    NewsCard(item: item, showFeedback: tab == .feed, store: store)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: Theme.Space.s3) {
+                    ForEach(items) { item in
+                        NewsCard(item: item, showFeedback: tab == .feed, store: store) {
+                            // On collapse, keep this card pinned so the scroll
+                            // position doesn't jump.
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                proxy.scrollTo(item.id, anchor: .top)
+                            }
+                        }
+                        .id(item.id)
+                    }
                 }
+                .padding(.horizontal, Theme.Space.s5)
+                .padding(.bottom, Theme.Space.s10)
             }
-            .padding(.horizontal, Theme.Space.s5)
-            .padding(.bottom, Theme.Space.s10)
+            .refreshable { await store.load(tab) }
         }
-        .refreshable { await store.load(tab) }
     }
 
     private var loadingState: some View {

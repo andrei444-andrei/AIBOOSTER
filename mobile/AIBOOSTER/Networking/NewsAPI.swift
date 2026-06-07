@@ -3,13 +3,15 @@ import Foundation
 // Typed wrappers over the existing open /api/news/* routes.
 extension APIClient {
     /// GET /api/news/items — validated feed (unread, verdict=show).
-    func newsFeed(limit: Int = 50) async throws -> [API.NewsItem] {
+    /// Kept modest: each item carries heavy debug fields server-side, so a big
+    /// limit makes the response multi-MB and slow. 20 ≈ 1.4 MB.
+    func newsFeed(limit: Int = 20) async throws -> [API.NewsItem] {
         let res: API.NewsItemsResponse = try await get("/api/news/items?verdict=show&limit=\(limit)")
         return res.items
     }
 
     /// GET /api/news/items/read — items the user reacted to.
-    func newsRead(limit: Int = 100) async throws -> [API.NewsItem] {
+    func newsRead(limit: Int = 30) async throws -> [API.NewsItem] {
         let res: API.NewsItemsResponse = try await get("/api/news/items/read?limit=\(limit)")
         return res.items
     }
