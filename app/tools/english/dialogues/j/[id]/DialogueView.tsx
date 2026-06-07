@@ -49,6 +49,18 @@ const STAGE_LABEL: Record<Exclude<Stage, null>, string> = {
 };
 const STAGE_ORDER: Exclude<Stage, null>[] = ["script", "tts", "mux"];
 
+// Скорость воспроизведения (как в подкаст-плеере). Выбор запоминается глобально
+// в localStorage и применяется ко всем разговорам. Для учащихся важны медленные
+// значения, поэтому по умолчанию чуть медленнее обычного.
+const RATE_KEY = "english_dialogue_rate";
+const RATE_OPTIONS = [0.6, 0.75, 0.9, 1, 1.25];
+const DEFAULT_RATE = 0.9;
+function readSavedRate(): number {
+  if (typeof window === "undefined") return DEFAULT_RATE;
+  const v = Number(localStorage.getItem(RATE_KEY));
+  return RATE_OPTIONS.includes(v) ? v : DEFAULT_RATE;
+}
+
 export default function DialogueView({ jobId }: { jobId: string }) {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -186,6 +198,7 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [currentMs, setCurrentMs] = useState(0);
   const [watchStatus, setWatchStatus] = useState<WatchStatus>(job.watch_status);
+  const [rate, setRate] = useState<number>(() => readSavedRate());
   const lastSavedRef = useRef<number>(job.last_position_sec);
 
   // Прыжок на сохранённую позицию когда аудио готов (резюм с той же секунды).
@@ -261,6 +274,38 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
     return () => window.removeEventListener("beforeunload", flush);
   }, [job.id]);
 
+  // Применяем скорость к аудио. preservesPitch сохраняет тембр при замедлении
+  // (иначе голос «плыл» бы по высоте). Перевыставляем на loadedmetadata/play,
+  // т.к. некоторые браузеры сбрасывают playbackRate при загрузке источника.
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    const apply = () => {
+      try {
+        (a as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
+        a.playbackRate = rate;
+      } catch {
+        /* ignore */
+      }
+    };
+    apply();
+    a.addEventListener("loadedmetadata", apply);
+    a.addEventListener("play", apply);
+    return () => {
+      a.removeEventListener("loadedmetadata", apply);
+      a.removeEventListener("play", apply);
+    };
+  }, [rate]);
+
+  function changeRate(r: number) {
+    setRate(r);
+    try {
+      localStorage.setItem(RATE_KEY, String(r));
+    } catch {
+      /* ignore */
+    }
+  }
+
   const activeIdx = segments.findIndex((s) => currentMs >= s.start_ms && currentMs < s.end_ms);
 
   function seekTo(ms: number) {
@@ -298,6 +343,7 @@ function ResultCard({ job, segments }: { job: JobDto; segments: SegmentDto[] }) 
           <LinkChip href={job.audio_url ?? "#"} download leading="↓">
             mp3
           </LinkChip>
+          <SpeedControl rate={rate} onChange={changeRate} />
         </div>
       </Card>
 
@@ -360,6 +406,40 @@ function Tag({ children }: { children: React.ReactNode }) {
     >
       {children}
     </span>
+  );
+}
+
+// Переключатель скорости воспроизведения — компактные чипы 0.6×…1.25×.
+function SpeedControl({ rate, onChange }: { rate: number; onChange: (r: number) => void }) {
+  return (
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
+      <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Скорость</span>
+      <div style={{ display: "inline-flex", gap: 2 }}>
+        {RATE_OPTIONS.map((r) => {
+          const active = Math.abs(r - rate) < 0.001;
+          return (
+            <button
+              key={r}
+              type="button"
+              onClick={() => onChange(r)}
+              aria-pressed={active}
+              style={{
+                padding: "2px 7px",
+                fontSize: 12,
+                fontFamily: "var(--font-mono)",
+                background: active ? "var(--accent)" : "transparent",
+                color: active ? "var(--text-on-accent)" : "var(--text-secondary)",
+                border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+                borderRadius: "var(--radius-sm)",
+                cursor: "pointer",
+              }}
+            >
+              {r}×
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
