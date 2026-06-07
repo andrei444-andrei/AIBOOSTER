@@ -191,54 +191,60 @@ function SentenceExercise({
   const [trShown, setTrShown] = useState<number | null>(null);
   const [draggingChunk, setDraggingChunk] = useState<number | null>(null);
   const dragRef = useRef<{ from: number; moved: boolean; x: number; y: number } | null>(null);
+  // Последний порядок — чтобы window-обработчики drag читали свежее значение.
+  const orderRef = useRef(order);
+  orderRef.current = order;
 
   const solved = status === "correct" || done;
 
-  function pointerDown(e: React.PointerEvent, pos: number) {
+  // Перетаскивание через window-листенеры. На iOS Safari setPointerCapture для
+  // touch ненадёжен — поэтому pointermove/up слушаем на window (работает и на
+  // тач, и на мыши). Тап без перемещения = показать перевод куска.
+  function startDrag(e: React.PointerEvent, pos: number) {
     if (solved) return;
-    dragRef.current = { from: pos, moved: false, x: e.clientX, y: e.clientY };
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-  }
-  function pointerMove(e: React.PointerEvent) {
-    const d = dragRef.current;
-    if (!d) return;
-    if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6) {
-      d.moved = true;
-      setDraggingChunk(order[d.from]);
-      setTrShown(null);
-    }
-    if (!d.moved) return;
-    const el = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest(
-      "[data-pos]",
-    ) as HTMLElement | null;
-    if (!el) return;
-    const to = Number(el.dataset.pos);
-    if (Number.isNaN(to) || to === d.from) return;
-    setOrder((prev) => {
-      const a = [...prev];
-      const [m] = a.splice(d.from, 1);
-      a.splice(to, 0, m);
-      return a;
-    });
-    d.from = to;
-  }
-  function pointerUp(e: React.PointerEvent, pos: number) {
-    const d = dragRef.current;
-    dragRef.current = null;
-    setDraggingChunk(null);
-    if (!d) return;
-    if (!d.moved) {
-      // тап без перемещения → показать перевод куска
-      const chunkIndex = order[pos];
-      setTrShown((prev) => (prev === chunkIndex ? null : chunkIndex));
-      return;
-    }
-    // после перетаскивания сбрасываем статус проверки
-    if (status !== "idle") setStatus("idle");
+    e.preventDefault();
+    const d = { from: pos, moved: false, x: e.clientX, y: e.clientY };
+    dragRef.current = d;
+
+    const move = (ev: PointerEvent) => {
+      if (!dragRef.current) return;
+      if (!d.moved && Math.hypot(ev.clientX - d.x, ev.clientY - d.y) > 6) {
+        d.moved = true;
+        setDraggingChunk(orderRef.current[d.from]);
+        setTrShown(null);
+      }
+      if (!d.moved) return;
+      ev.preventDefault();
+      const el = (document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null)?.closest(
+        "[data-pos]",
+      ) as HTMLElement | null;
+      if (!el) return;
+      const to = Number(el.getAttribute("data-pos"));
+      if (Number.isNaN(to) || to === d.from) return;
+      setOrder((prev) => {
+        const a = [...prev];
+        const [m] = a.splice(d.from, 1);
+        a.splice(to, 0, m);
+        return a;
+      });
+      d.from = to;
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      dragRef.current = null;
+      setDraggingChunk(null);
+      if (!d.moved) {
+        const chunkIndex = orderRef.current[d.from];
+        setTrShown((prev) => (prev === chunkIndex ? null : chunkIndex));
+      } else {
+        setStatus((s) => (s === "wrong" ? "idle" : s));
+      }
+    };
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
   }
 
   function check() {
@@ -283,9 +289,8 @@ function SentenceExercise({
                   key={chunkIndex}
                   data-pos={pos}
                   className={`${styles.tile} ${isDragging ? styles.tileDragging : ""} ${status === "wrong" ? styles.tileWrong : ""}`}
-                  onPointerDown={(e) => pointerDown(e, pos)}
-                  onPointerMove={pointerMove}
-                  onPointerUp={(e) => pointerUp(e, pos)}
+                  style={{ touchAction: "none" }}
+                  onPointerDown={(e) => startDrag(e, pos)}
                 >
                   {c.text}
                   {trShown === chunkIndex && (
