@@ -988,6 +988,68 @@ export const TABLES: TableDef[] = [
       { name: "ru_text", description: "Русский перевод фразы. NULL, если разговор без перевода." },
     ],
   },
+
+  // --- Модуль «Английский» → подраздел «Build sentences» (собери предложение).
+  //
+  // Тема-промт → LLM генерит 10 предложений; каждое разбито на куски, которые
+  // надо собрать в правильном порядке. У куска есть перевод (тап по куску),
+  // у предложения — памятка по структуре (показываем при ошибке). Разделы
+  // «Надо сделать» (done=0) / «Сделано» (done=1, авто при выполнении всех).
+  {
+    name: "english_sentence_tasks",
+    description:
+      "Задания «собери предложение» для практики английского: одна строка = один набор из 10 предложений по теме. done=1 когда все предложения собраны (авто-перенос в «Сделано»).",
+    ddl: `CREATE TABLE IF NOT EXISTS english_sentence_tasks (
+      id TEXT PRIMARY KEY,
+      topic TEXT NOT NULL,
+      title TEXT,
+      status TEXT NOT NULL DEFAULT 'generating',
+      error_message TEXT,
+      error_id TEXT,
+      total INTEGER NOT NULL DEFAULT 0,
+      done INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT
+    )`,
+    columns: [
+      { name: "id", description: "UUID задания. В URL /tools/english/build-sentences/t/<id>." },
+      { name: "topic", description: "Тема — промт пользователя, по которой сгенерированы предложения." },
+      { name: "title", description: "Короткий заголовок задания (генерирует LLM)." },
+      { name: "status", description: "generating | ready | failed." },
+      { name: "error_message", description: "Сообщение об ошибке генерации (для пользователя)." },
+      { name: "error_id", description: "ID из app_errors, если ошибка залогирована." },
+      { name: "total", description: "Сколько предложений в задании (обычно 10)." },
+      { name: "done", description: "0/1. 1 — все предложения собраны, задание уехало в «Сделано»." },
+      { name: "created_at", description: "Когда создано (UTC)." },
+      { name: "updated_at", description: "Когда последний раз обновлялось (UTC)." },
+      { name: "finished_at", description: "Когда сгенерировано (ready) или упало (failed)." },
+    ],
+  },
+  {
+    name: "english_sentence_items",
+    description:
+      "Предложения внутри задания «собери предложение»: правильный текст, перевод, куски (chunks с переводами) и памятка по структуре. completed=1 — собрано верно.",
+    ddl: `CREATE TABLE IF NOT EXISTS english_sentence_items (
+      task_id TEXT NOT NULL,
+      idx INTEGER NOT NULL,
+      en_text TEXT NOT NULL,
+      ru_text TEXT,
+      chunks TEXT NOT NULL,
+      memo TEXT,
+      completed INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (task_id, idx)
+    )`,
+    columns: [
+      { name: "task_id", description: "FK на english_sentence_tasks.id." },
+      { name: "idx", description: "Порядковый номер предложения в задании (0..N)." },
+      { name: "en_text", description: "Правильное английское предложение целиком." },
+      { name: "ru_text", description: "Русский перевод всего предложения." },
+      { name: "chunks", description: "JSON-массив кусков в ПРАВИЛЬНОМ порядке: [{text, tr}]. На клиенте перемешиваются; tr — перевод куска (тап по куску)." },
+      { name: "memo", description: "Памятка 200–300 символов на русском: объяснение структуры/порядка слов. Показываем при ошибке сборки." },
+      { name: "completed", description: "0/1. 1 — пользователь собрал предложение в правильном порядке." },
+    ],
+  },
 ];
 
 // Индексы для быстрого чтения.
@@ -1009,6 +1071,10 @@ export const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_edj_queue ON english_dialogue_jobs (status, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_edj_watch ON english_dialogue_jobs (watch_status, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_eds_job ON english_dialogue_segments (job_id, idx)`,
+
+  // Английский (build sentences): разделы todo/done + предложения задания.
+  `CREATE INDEX IF NOT EXISTS idx_est_done ON english_sentence_tasks (done, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_esi_task ON english_sentence_items (task_id, idx)`,
 
   // Адаптеры: очередь cron'а — какие источники due.
   `CREATE INDEX IF NOT EXISTS idx_adapter_sources_due ON adapter_sources (status, next_run_at)`,

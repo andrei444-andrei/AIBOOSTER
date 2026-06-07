@@ -1,0 +1,117 @@
+/* Стили подраздела «Build sentences». Тот же дизайн-язык (CSS-переменные). */
+
+.libraryPage {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-8) var(--space-16);
+}
+@media (max-width: 768px) {
+  .libraryPage {
+    padding: var(--space-4) var(--space-4) var(--space-10);
+  }
+}
+
+.libraryTitle {
+  font-size: 32px;
+  letter-spacing: -0.02em;
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-2);
+}
+@media (max-width: 768px) {
+  .libraryTitle {
+    font-size: 24px;
+    margin-top: var(--space-3);
+  }
+}
+
+.libraryIntro {
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+  line-height: var(--leading-relaxed);
+  margin: 0 0 var(--space-6);
+  max-width: 720px;
+}
+
+.tabsRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+.tabsRow .tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabsRow .tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+@media (max-width: 540px) {
+  .cardGrid {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+}
+
+/* Страница задания. */
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-8) var(--space-16);
+}
+@media (max-width: 768px) {
+  .page {
+    padding: var(--space-4) var(--space-4) var(--space-10);
+  }
+}
+
+.fieldLabel {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+/* Плитки-куски: ряд с переносом. */
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+  min-height: 44px;
+  align-items: flex-start;
+}
+.tile {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-size: var(--text-base);
+  color: var(--text);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  transition: transform 120ms var(--ease), box-shadow 120ms var(--ease);
+}
+.tileDragging {
+  opacity: 0.5;
+}
+.tileCorrect {
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+.tileWrong {
+  border-color: var(--danger);
+}
