@@ -126,10 +126,15 @@ export const NETWORKS: Network[] = [
 
 export const CAMPAIGNS: Campaign[] = [
   { id: "c1", name: "Nike Air — Ретаргет RU", net: "push", geo: "RU", status: "active" },
+  { id: "c6", name: "SneakerHub — Push RU", net: "push", geo: "RU", status: "active" },
   { id: "c2", name: "LuxTime Часы — Cold EU", net: "propeller", geo: "EU", status: "active" },
+  { id: "c7", name: "WatchMarket — Cold", net: "propeller", geo: "EU", status: "draft" },
   { id: "c3", name: "FitGo Подписка", net: "mytarget", geo: "CIS", status: "draft" },
+  { id: "c8", name: "HealthPlus Подписка", net: "mytarget", geo: "CIS", status: "active" },
   { id: "c4", name: "CryptoPro Native", net: "tiktok", geo: "Tier-1", status: "paused" },
+  { id: "c9", name: "TradeApp Native", net: "tiktok", geo: "Tier-1", status: "active" },
   { id: "c5", name: "Зимняя распродажа 2026", net: "google", geo: "RU", status: "active" },
+  { id: "c10", name: "MegaSale Display RU", net: "google", geo: "RU", status: "active" },
 ];
 
 // ---- Images --------------------------------------------------------------

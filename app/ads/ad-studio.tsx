@@ -32,7 +32,6 @@ import {
   IcChevronDown,
   IcClock,
   IcClose,
-  IcCopy,
   IcCrop,
   IcDoc,
   IcEye,
@@ -347,11 +346,11 @@ export default function AdStudio() {
                 <StepCampaign
                   campaign={campaign}
                   network={network}
-                  onPick={(c) => {
-                    setCampaignId(c.id);
-                    setNetworkId(c.net);
+                  onNetwork={(id) => {
+                    setNetworkId(id);
+                    if (campaign && campaign.net !== id) setCampaignId("");
                   }}
-                  onNetwork={setNetworkId}
+                  onPickCampaign={(c) => setCampaignId(c.id)}
                   selectedCount={selected.length}
                 />
               ) : step === 1 ? (
@@ -390,10 +389,6 @@ export default function AdStudio() {
                   onSelect={setFlowId}
                   subids={subids}
                   setSubids={setSubids}
-                  onCopy={(url) => {
-                    navigator.clipboard?.writeText(url).catch(() => {});
-                    flash("Ссылка скопирована");
-                  }}
                 />
               ) : step === 3 ? (
                 <StepPhotos
@@ -689,40 +684,35 @@ function Cropped({ c, f }: { c: Creative; f: Format }) {
 function StepCampaign({
   campaign,
   network,
-  onPick,
+  onPickCampaign,
   onNetwork,
   selectedCount,
 }: {
   campaign?: Campaign;
   network?: Network;
-  onPick: (c: Campaign) => void;
+  onPickCampaign: (c: Campaign) => void;
   onNetwork: (id: string) => void;
   selectedCount: number;
 }) {
+  const campaigns = network ? CAMPAIGNS.filter((c) => c.net === network.id) : [];
   return (
     <div className="ads-step-pad ads-fade">
-      <SectionTitle n={1} title="Выберите рекламную кампанию" hint="Объявления добавятся в неё" />
-      <CampaignDropdown campaign={campaign} onPick={onPick} />
+      <SectionTitle n={1} title="Выберите рекламную сеть" hint="Она определяет форматы и лимиты текстов" />
+      <div className="ads-net-pills">
+        {NETWORKS.map((nw) => (
+          <button
+            key={nw.id}
+            className={`ads-net-pill${nw.id === network?.id ? " active" : ""}`}
+            style={netVar(nw.color)}
+            onClick={() => onNetwork(nw.id)}
+          >
+            <span className="ads-net-badge">{nw.short}</span>
+            {nw.name}
+          </button>
+        ))}
+      </div>
       {network && (
         <div className="ads-net-block ads-fade">
-          <SectionTitle
-            n={2}
-            title="Рекламная сеть"
-            hint="Определяет форматы и лимиты текстов — настроим автоматически"
-          />
-          <div className="ads-net-pills">
-            {NETWORKS.map((nw) => (
-              <button
-                key={nw.id}
-                className={`ads-net-pill${nw.id === network.id ? " active" : ""}`}
-                style={netVar(nw.color)}
-                onClick={() => onNetwork(nw.id)}
-              >
-                <span className="ads-net-badge">{nw.short}</span>
-                {nw.name}
-              </button>
-            ))}
-          </div>
           <div className="ads-net-specs">
             <div className="ads-spec">
               <div className="ads-spec-h">
@@ -753,18 +743,32 @@ function StepCampaign({
               </div>
             </div>
           </div>
-          <div className="ads-readybar">
-            <IcCheck size={16} /> Готово. Каждое фото станет {network.formats.length} объявлениями
-            {selectedCount > 0 ? ` — итого ${selectedCount * network.formats.length}.` : "."} Жмите{" "}
-            <b>Далее</b>.
+          <div style={{ marginTop: 26 }}>
+            <SectionTitle n={2} title="Выберите рекламную кампанию" hint={`Кампании сети ${network.name}`} />
+            <CampaignDropdown campaign={campaign} campaigns={campaigns} onPick={onPickCampaign} />
           </div>
+          {campaign && (
+            <div className="ads-readybar">
+              <IcCheck size={16} /> Готово. Каждое фото станет {network.formats.length} объявлениями
+              {selectedCount > 0 ? ` — итого ${selectedCount * network.formats.length}.` : "."} Жмите{" "}
+              <b>Далее</b>.
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function CampaignDropdown({ campaign, onPick }: { campaign?: Campaign; onPick: (c: Campaign) => void }) {
+function CampaignDropdown({
+  campaign,
+  campaigns,
+  onPick,
+}: {
+  campaign?: Campaign;
+  campaigns: Campaign[];
+  onPick: (c: Campaign) => void;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -795,7 +799,7 @@ function CampaignDropdown({ campaign, onPick }: { campaign?: Campaign; onPick: (
       </button>
       {open && (
         <div className="ads-dd-panel ads-pop">
-          {CAMPAIGNS.map((c) => {
+          {campaigns.map((c) => {
             const nw = netOf(c.net);
             return (
               <button
@@ -979,7 +983,6 @@ function StepFlow({
   onSelect,
   subids,
   setSubids,
-  onCopy,
 }: {
   region: string;
   setRegion: (s: string) => void;
@@ -993,7 +996,6 @@ function StepFlow({
   onSelect: (id: string) => void;
   subids: Record<string, string>;
   setSubids: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  onCopy: (url: string) => void;
 }) {
   const list = FLOWS.filter(
     (f) =>
@@ -1064,9 +1066,6 @@ function StepFlow({
               </div>
               <div className="ads-flow-urlrow" onClick={(e) => e.stopPropagation()}>
                 <div className="ads-flow-url">{url}</div>
-                <button className="ads-flow-copy" onClick={() => onCopy(url)}>
-                  <IcCopy size={15} /> Скопировать ссылку
-                </button>
               </div>
               <div className="ads-flow-subs" onClick={(e) => e.stopPropagation()}>
                 {SUB_KEYS.map((k) => (
@@ -1079,10 +1078,6 @@ function StepFlow({
                     onChange={(e) => setSubids((s) => ({ ...s, [`${f.id}_${k}`]: e.target.value }))}
                   />
                 ))}
-                <div className="ads-flow-pixel">
-                  <Select value="" onChange={() => {}} options={[]} placeholder="Выбор пикселя" />
-                  <span className="ads-flow-pixel-note">Нет соответствующих данных</span>
-                </div>
               </div>
               <div className="ads-flow-note">
                 <IcLink size={13} /> Макросы автоматически подставляются в ссылку
@@ -1959,7 +1954,7 @@ const CSS = `
 .ads-flow-url{flex:1;background:var(--field);border-radius:10px;padding:11px 13px;font-size:12.5px;color:#46506b;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ads-flow-copy{flex-shrink:0;border:1.5px solid #f3c0c0;background:#fff;color:#e5484d;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.14s}
 .ads-flow-copy:hover{background:#fff5f5}
-.ads-flow-subs{display:grid;grid-template-columns:repeat(6,1fr) 1.4fr;gap:8px;align-items:start}
+.ads-flow-subs{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;align-items:start}
 .ads-flow-subs input{border:1.5px solid var(--line);border-radius:9px;padding:9px 10px;font-size:12.5px;color:var(--ink);background:#fff;width:100%}
 .ads-flow-subs input:focus{outline:none;border-color:var(--violet);box-shadow:0 0 0 3px var(--violet-soft)}
 .ads-flow-subs input.macro{color:var(--faint);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--field)}
