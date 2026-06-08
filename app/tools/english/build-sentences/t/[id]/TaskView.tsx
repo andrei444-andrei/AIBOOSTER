@@ -194,6 +194,10 @@ function SentenceExercise({
   // Последний порядок — чтобы window-обработчики drag читали свежее значение.
   const orderRef = useRef(order);
   orderRef.current = order;
+  // Тап-режим (надёжен на мобиле): выбрать кусок, затем тапнуть место вставки.
+  const [selectedPos, setSelectedPos] = useState<number | null>(null);
+  const selectedPosRef = useRef<number | null>(null);
+  selectedPosRef.current = selectedPos;
 
   const solved = status === "correct" || done;
 
@@ -236,9 +240,9 @@ function SentenceExercise({
       dragRef.current = null;
       setDraggingChunk(null);
       if (!d.moved) {
-        const chunkIndex = orderRef.current[d.from];
-        setTrShown((prev) => (prev === chunkIndex ? null : chunkIndex));
+        handleTap(d.from);
       } else {
+        setSelectedPos(null);
         setStatus((s) => (s === "wrong" ? "idle" : s));
       }
     };
@@ -247,9 +251,35 @@ function SentenceExercise({
     window.addEventListener("pointercancel", end);
   }
 
+  // Тап по куску: показать перевод + режим «выбрать → поставить» (надёжно на
+  // мобиле, где drag может не сработать). Первый тап выбирает кусок, тап по
+  // другому куску переставляет выбранный на это место.
+  function handleTap(pos: number) {
+    const chunkIndex = orderRef.current[pos];
+    const sel = selectedPosRef.current;
+    if (sel === null) {
+      setSelectedPos(pos);
+      setTrShown(chunkIndex);
+    } else if (sel === pos) {
+      setSelectedPos(null);
+      setTrShown((prev) => (prev === chunkIndex ? null : chunkIndex));
+    } else {
+      setOrder((prev) => {
+        const a = [...prev];
+        const [m] = a.splice(sel, 1);
+        a.splice(pos, 0, m);
+        return a;
+      });
+      setSelectedPos(null);
+      setTrShown(null);
+      setStatus((s) => (s === "wrong" ? "idle" : s));
+    }
+  }
+
   function check() {
     const userSeq = order.map((i) => chunks[i].text).join("");
     const correctSeq = chunks.map((c) => c.text).join("");
+    setSelectedPos(null);
     if (userSeq === correctSeq) {
       setStatus("correct");
       setTrShown(null);
@@ -263,6 +293,7 @@ function SentenceExercise({
     setOrder(shuffleOrder(chunks.length));
     setStatus("idle");
     setTrShown(null);
+    setSelectedPos(null);
   }
 
   return (
@@ -289,7 +320,12 @@ function SentenceExercise({
                   key={chunkIndex}
                   data-pos={pos}
                   className={`${styles.tile} ${isDragging ? styles.tileDragging : ""} ${status === "wrong" ? styles.tileWrong : ""}`}
-                  style={{ touchAction: "none" }}
+                  style={{
+                    touchAction: "none",
+                    ...(pos === selectedPos
+                      ? { outline: "2px solid var(--accent)", outlineOffset: 1, transform: "translateY(-2px)" }
+                      : {}),
+                  }}
                   onPointerDown={(e) => startDrag(e, pos)}
                 >
                   {c.text}
@@ -325,7 +361,7 @@ function SentenceExercise({
               Перемешать
             </Button>
             <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-              перетащи куски по порядку · тапни по куску — перевод
+              тапни кусок, затем место для него — или перетащи · тап по куску показывает перевод
             </span>
           </div>
 
