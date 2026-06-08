@@ -165,3 +165,98 @@ export const IcLayers = (p: P) => (
     <path d="m3 13 9 5 9-5" />
   </Svg>
 );
+export const IcUpload = (p: P) => (
+  <Svg {...p}>
+    <path d="M12 16V4M7 9l5-5 5 5" />
+    <path d="M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" />
+  </Svg>
+);
+export const IcShield = (p: P) => (
+  <Svg {...p}>
+    <path d="M12 3 5 6v6c0 4 3 6.5 7 9 4-2.5 7-5 7-9V6l-7-3Z" />
+    <path d="m9 12 2 2 4-4" />
+  </Svg>
+);
+export const IcRefresh = (p: P) => (
+  <Svg {...p}>
+    <path d="M20 11a8 8 0 0 0-14-4L4 9" />
+    <path d="M4 4v5h5" />
+    <path d="M4 13a8 8 0 0 0 14 4l2-2" />
+    <path d="M20 20v-5h-5" />
+  </Svg>
+);
+export const IcHeartFill = ({ size = 18, style }: P) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    stroke="currentColor"
+    strokeWidth={1.5}
+    strokeLinejoin="round"
+    style={style}
+    aria-hidden
+  >
+    <path d="M12 20s-7-4.5-9.5-8.5A4.5 4.5 0 0 1 12 6a4.5 4.5 0 0 1 9.5 5.5C19 15.5 12 20 12 20Z" />
+  </svg>
+);
+export const IcEye = (p: P) => (
+  <Svg {...p}>
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+    <circle cx="12" cy="12" r="3" />
+  </Svg>
+);
+export const IcLink = (p: P) => (
+  <Svg {...p}>
+    <path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1" />
+    <path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1" />
+  </Svg>
+);
+export const IcCopy = (p: P) => (
+  <Svg {...p}>
+    <rect x="9" y="9" width="12" height="12" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </Svg>
+);
+export const IcGlobe = (p: P) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18" />
+  </Svg>
+);
+export const IcPlay = (p: P) => (
+  <Svg {...p}>
+    <path d="M8 5v14l11-7z" />
+  </Svg>
+);
+export const IcStar = (p: P) => (
+  <Svg {...p}>
+    <path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9Z" />
+  </Svg>
+);
+export const IcStarFill = ({ size = 18, style }: P) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    stroke="currentColor"
+    strokeWidth={1.2}
+    strokeLinejoin="round"
+    style={style}
+    aria-hidden
+  >
+    <path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9Z" />
+  </svg>
+);
+export const IcFilter = (p: P) => (
+  <Svg {...p}>
+    <path d="M3 5h18l-7 8v6l-4-2v-4Z" />
+  </Svg>
+);
+export const IcPencil = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 20h4l10-10-4-4L4 16v4Z" />
+    <path d="m13.5 6.5 4 4" />
+  </Svg>
+);
