@@ -85,6 +85,17 @@ export const MODULES: ModuleEntry[] = [
     icon: "◎",
   },
   {
+    slug: "research",
+    title: "Глубокие исследования",
+    href: "/research",
+    description:
+      "Итеративный агент: декомпозирует цель, ищет в вебе, углубляется на зацепках — десятки факторов с источниками.",
+    pinned: true,
+    section: "main",
+    icon: "⌕",
+    requiresAdminToken: true,
+  },
+  {
     slug: "ux-kit",
     title: "UX Kit",
     href: "/ux",

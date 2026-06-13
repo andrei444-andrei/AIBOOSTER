@@ -1050,6 +1050,113 @@ export const TABLES: TableDef[] = [
       { name: "completed", description: "0/1. 1 — пользователь собрал предложение в правильном порядке." },
     ],
   },
+
+  // === Модуль "Глубокие исследования" (/research) ===
+  {
+    name: "research_runs",
+    description:
+      "Прогон глубокого исследования (модуль /research). Один ряд = одна цель. Источник правды для резюмируемого агента: статус, бюджеты/модели, накопленная статистика и итоговый отчёт.",
+    ddl: `CREATE TABLE IF NOT EXISTS research_runs (
+      id TEXT PRIMARY KEY,
+      goal TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      params TEXT NOT NULL,
+      stats TEXT NOT NULL,
+      report TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT
+    )`,
+    columns: [
+      { name: "id", description: "Идентификатор прогона (UUID)." },
+      { name: "goal", description: "Исследовательская цель/запрос пользователя." },
+      { name: "status", description: "running | done | error | pending." },
+      { name: "params", description: "JSON параметров: бюджеты (глубина, узлы, стоимость), модели, провайдер поиска." },
+      { name: "stats", description: "JSON накопленной статистики: раскрыто узлов, найдено факторов, поисков, стоимость, тиков." },
+      { name: "report", description: "Итоговый синтез-отчёт (Markdown), заполняется при завершении." },
+      { name: "error", description: "Текст фатальной ошибки прогона (если был)." },
+      { name: "created_at", description: "Время создания (ISO/UTC)." },
+      { name: "updated_at", description: "Время последнего обновления (ISO/UTC)." },
+      { name: "finished_at", description: "Время завершения (ISO/UTC) или NULL." },
+    ],
+  },
+  {
+    name: "research_nodes",
+    description:
+      "Узел дерева рассуждений прогона: под-вопрос/гипотеза. parent_id+depth задают дерево произвольной глубины (best-first с backtracking). Хранит запрос, источники, оценки и РЕШЕНИЕ агента — для отладки и обхода дерева в визуализаторе.",
+    ddl: `CREATE TABLE IF NOT EXISTS research_nodes (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      parent_id TEXT,
+      depth INTEGER NOT NULL DEFAULT 0,
+      kind TEXT NOT NULL,
+      question TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      query TEXT,
+      sources TEXT,
+      summary TEXT,
+      scores TEXT,
+      decision TEXT,
+      rationale TEXT,
+      cost_usd REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "Идентификатор узла (UUID)." },
+      { name: "run_id", description: "К какому прогону относится (research_runs.id)." },
+      { name: "parent_id", description: "Родительский узел; NULL у корня." },
+      { name: "depth", description: "Глубина в дереве (0 = корень/цель)." },
+      { name: "kind", description: "root (цель) | question (под-вопрос)." },
+      { name: "question", description: "Формулировка под-вопроса/гипотезы узла." },
+      { name: "status", description: "open | searching | expanded | exhausted | error." },
+      { name: "query", description: "Поисковый запрос, который реально был выполнен." },
+      { name: "sources", description: "JSON источников (title/url/snippet/date) из веб-поиска." },
+      { name: "summary", description: "Краткая выжимка найденного на узле." },
+      { name: "scores", description: "JSON оценок: relevance, novelty, evidence, promise (0..1)." },
+      { name: "decision", description: "Решение агента: deepen | stop (углублять ли ветку)." },
+      { name: "rationale", description: "Объяснение решения судьёй — то, что инспектируем при отладке." },
+      { name: "cost_usd", description: "Стоимость раскрытия узла (USD, приблизительно)." },
+      { name: "created_at", description: "Время создания (ISO/UTC)." },
+      { name: "updated_at", description: "Время последнего обновления (ISO/UTC)." },
+    ],
+  },
+  {
+    name: "research_findings",
+    description:
+      "Реестр находок прогона: дедуплицированные факторы (результат исследования). Один ряд = один фактор; разные ветки сходятся сюда. factor_norm — нормализованное имя для дедупа.",
+    ddl: `CREATE TABLE IF NOT EXISTS research_findings (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      factor TEXT NOT NULL,
+      factor_norm TEXT NOT NULL,
+      description TEXT,
+      direction TEXT,
+      confidence REAL NOT NULL DEFAULT 0,
+      evidence TEXT,
+      sources TEXT,
+      node_ids TEXT,
+      mentions INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "Идентификатор находки (UUID)." },
+      { name: "run_id", description: "К какому прогону относится (research_runs.id)." },
+      { name: "factor", description: "Имя фактора (как его сформулировала модель)." },
+      { name: "factor_norm", description: "Нормализованное имя (нижний регистр, без пунктуации) — ключ дедупа в рамках прогона." },
+      { name: "description", description: "Краткое описание фактора." },
+      { name: "direction", description: "Направление влияния: positive | negative | mixed | unclear." },
+      { name: "confidence", description: "Уверенность 0..1 (максимум по упоминаниям)." },
+      { name: "evidence", description: "JSON-массив конкретных зацепок/цитат из материалов." },
+      { name: "sources", description: "JSON-массив источников, подтверждающих фактор." },
+      { name: "node_ids", description: "JSON-массив id узлов, где фактор всплыл." },
+      { name: "mentions", description: "Сколько раз фактор встретился (мера повторяемости)." },
+      { name: "created_at", description: "Время создания (ISO/UTC)." },
+      { name: "updated_at", description: "Время последнего обновления (ISO/UTC)." },
+    ],
+  },
 ];
 
 // Индексы для быстрого чтения.
@@ -1106,4 +1213,10 @@ export const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_maintenance_actions_target ON maintenance_actions (action_type, target_id, applied_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_news_user_reports_status ON news_user_reports (status, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_news_user_reports_item ON news_user_reports (item_id, created_at DESC)`,
+
+  // Глубокие исследования: активные прогоны, дерево узлов, дедуп находок.
+  `CREATE INDEX IF NOT EXISTS idx_research_runs_status ON research_runs (status, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_research_nodes_run ON research_nodes (run_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_research_nodes_parent ON research_nodes (parent_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_research_findings_norm ON research_findings (run_id, factor_norm)`,
 ];
