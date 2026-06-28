@@ -306,7 +306,7 @@ export async function generateOpening(
 export interface EvalResult {
   verdict: Verdict;
   errorReason: string | null;
-  correction: string | null;
+  corrected: string | null;
   nextQuestion: string | null;
   nextSuggestion: Suggestion | null;
 }
@@ -330,9 +330,10 @@ export async function evaluateAnswer(args: {
     `- "skip": empty, nonsensical, or clearly not an attempt.\n` +
     `Be lenient and supportive — prefer continuing the conversation.\n` +
     `If ok/minor: produce a natural SHORT follow-up question (speakable, ~max 20 words) and a suggested answer.\n` +
-    `If gross: "error_reason" in RUSSIAN (1–2 sentences: what's wrong and why), and "correction" — the correct ` +
-    `English phrase the learner should have said.\n` +
-    `Reply STRICT JSON: {"verdict":"ok|minor|gross|skip","error_reason":string|null,"correction":string|null,` +
+    `ALWAYS include "corrected": the learner's answer rewritten in correct, natural English (keep their meaning; ` +
+    `if it is already correct, return it unchanged).\n` +
+    `If gross: also "error_reason" in RUSSIAN (1–2 sentences: what's wrong and why).\n` +
+    `Reply STRICT JSON: {"verdict":"ok|minor|gross|skip","corrected":string,"error_reason":string|null,` +
     `"next_question":string|null,"next_suggestion":{"en":string,"ru":string}|null}. No text outside JSON.` +
     pastErrorsBlock(errors);
   const user =
@@ -354,7 +355,7 @@ export async function evaluateAnswer(args: {
   return {
     verdict,
     errorReason: typeof o.error_reason === "string" ? o.error_reason.trim() || null : null,
-    correction: typeof o.correction === "string" ? o.correction.trim() || null : null,
+    corrected: typeof o.corrected === "string" ? o.corrected.trim() || null : null,
     nextQuestion: typeof o.next_question === "string" ? o.next_question.trim() || null : null,
     nextSuggestion: o.next_suggestion ? normalizeSuggestion(o.next_suggestion) : null,
   };
@@ -399,9 +400,11 @@ export interface AnswerOutcome {
   aiText?: string;
   aiAudio?: string | null;
   suggestion?: Suggestion;
+  // правка ответа (для любого вердикта — для ленты с красным diff). null/пусто,
+  // если правка не нужна (ответ уже корректен).
+  corrected?: string | null;
   // gross:
   errorReason?: string;
-  correction?: string;
   correctionAudio?: string | null;
   // skip:
   repeatText?: string;
@@ -436,6 +439,10 @@ export async function processAnswer(
     history,
   });
 
+  // Исправленную версию пишем в лог только если она реально отличается.
+  const correctedDiffers =
+    !!evalRes.corrected && evalRes.corrected.toLowerCase().trim() !== cleaned.toLowerCase().trim();
+
   await logTurn({
     sessionId: session.id,
     idx: session.current_idx,
@@ -443,7 +450,7 @@ export async function processAnswer(
     transcript: cleaned,
     verdict: evalRes.verdict,
     errorReason: evalRes.errorReason,
-    correction: evalRes.correction,
+    correction: correctedDiffers ? evalRes.corrected : null,
   });
 
   if (evalRes.verdict === "skip") {
@@ -453,16 +460,14 @@ export async function processAnswer(
   if (evalRes.verdict === "gross") {
     await bumpCounts(session.id, "error_count");
     const reason = evalRes.errorReason || "Ответ содержит ошибку. Попробуй ещё раз.";
-    const correction = evalRes.correction || "";
-    const speak = correction
-      ? `${correction}. Try again.`
-      : `Let's try that again.`;
+    const corrected = evalRes.corrected || "";
+    const speak = corrected ? `${corrected}. Try again.` : `Let's try that again.`;
     const correctionAudio = await synthSpeech(speak);
     return {
       verdict: "gross",
       transcript: cleaned,
       errorReason: reason,
-      correction,
+      corrected,
       correctionAudio,
     };
   }
@@ -477,6 +482,7 @@ export async function processAnswer(
   return {
     verdict: evalRes.verdict,
     transcript: cleaned,
+    corrected: correctedDiffers ? evalRes.corrected : null,
     aiText: nextQuestion,
     aiAudio,
     suggestion: nextSuggestion,

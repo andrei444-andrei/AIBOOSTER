@@ -1,10 +1,12 @@
 import Link from "next/link";
-import SessionLog from "./SessionLog";
+import LiveDialogueApp from "../../LiveDialogueApp";
 import styles from "../../live.module.css";
 
 export const dynamic = "force-dynamic";
 
-export default async function SessionLogPage({ params }: { params: Promise<{ id: string }> }) {
+// Открытие сессии: активную — продолжаем (резюм), завершённую — показываем лог.
+// Обе ветки обрабатывает LiveDialogueApp по resumeId.
+export default async function SessionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return (
     <div className={styles.page}>
@@ -19,7 +21,8 @@ export default async function SessionLogPage({ params }: { params: Promise<{ id:
       >
         ← к диалогам
       </Link>
-      <SessionLog id={id} />
+      <h1 className={styles.title} style={{ fontSize: 24 }}>Живой диалог</h1>
+      <LiveDialogueApp resumeId={id} />
     </div>
   );
 }
