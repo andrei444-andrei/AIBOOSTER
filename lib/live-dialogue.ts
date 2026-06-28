@@ -14,7 +14,9 @@ import { chatJson } from "./aimlapi";
 import { ttsSynth } from "./pipeline/aimlapi";
 
 // Быстрые модели (скорость в приоритете).
-const CHAT_MODEL = process.env.LIVE_DIALOGUE_MODEL || "gemini-2.5-flash";
+// gpt-4o-mini надёжнее держит JSON-схему (gemini-flash временами ронял
+// next_question/corrected → терялась нить). Так же быстр.
+const CHAT_MODEL = process.env.LIVE_DIALOGUE_MODEL || "gpt-4o-mini";
 // eleven_turbo_v2_5 — низкая задержка, доступна на aimlapi (flash_v2_5 там 404).
 const TTS_MODEL = process.env.LIVE_TTS_MODEL || "elevenlabs/eleven_turbo_v2_5";
 const TTS_VOICE = process.env.LIVE_DIALOGUE_VOICE || "Rachel";
@@ -23,7 +25,7 @@ const TTS_VOICE = process.env.LIVE_DIALOGUE_VOICE || "Rachel";
 const AIML_BASE = "https://api.aimlapi.com/v1";
 const STT_MODEL = process.env.LIVE_STT_AIML_MODEL || "#g1_whisper-large";
 
-export type Verdict = "ok" | "minor" | "gross" | "skip";
+export type Verdict = "ok" | "minor" | "gross" | "skip" | "clarify";
 
 export interface Suggestion {
   en: string;
@@ -195,6 +197,25 @@ async function setCurrentQuestion(
   });
 }
 
+// Обновляет только текст текущего вопроса (для переспроса «clarify») — idx и
+// счётчики не трогаем: это та же логическая реплика, просто переформулирована.
+async function updateCurrentQuestionText(sessionId: string, question: string): Promise<void> {
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE live_dialogue_sessions SET current_question = ?, updated_at = ? WHERE id = ?`,
+    args: [question, new Date().toISOString(), sessionId],
+  });
+}
+
+function parseSuggestionStr(raw: string | null): Suggestion {
+  if (!raw) return { en: "", ru: "" };
+  try {
+    return normalizeSuggestion(JSON.parse(raw));
+  } catch {
+    return { en: "", ru: "" };
+  }
+}
+
 async function logTurn(args: {
   sessionId: string;
   idx: number;
@@ -283,6 +304,8 @@ export async function generateOpening(
   const errors = await recentErrorReasons();
   const system =
     `You are a friendly English conversation partner for a Russian-speaking learner (level A2–B2). ` +
+    `Play a realistic ROLE that fits the topic and stay in character the whole conversation (e.g. for ` +
+    `"ordering at a cafe" you are the barista; for "job interview" you are the interviewer). ` +
     `Start a natural spoken conversation on the given topic. Ask ONE short, clear opening question ` +
     `(it will be read aloud, so keep it speakable, max ~20 words). Also give a suggested answer the ` +
     `learner could say. Reply STRICT JSON: ` +
@@ -307,6 +330,7 @@ export interface EvalResult {
   verdict: Verdict;
   errorReason: string | null;
   corrected: string | null;
+  rephrase: string | null;
   nextQuestion: string | null;
   nextSuggestion: Suggestion | null;
 }
@@ -320,21 +344,33 @@ export async function evaluateAnswer(args: {
 }): Promise<EvalResult> {
   const errors = await recentErrorReasons();
   const system =
-    `You are an encouraging English speaking coach in a LIVE voice conversation with a Russian-speaking ` +
-    `learner (A2–B2). The learner's answer comes from speech-to-text and may contain minor transcription ` +
-    `noise — do NOT penalize plausible mishearings. Judge whether the answer is an acceptable spoken reply ` +
-    `to the AI's question.\n` +
+    `You are an encouraging English speaking partner + coach in a LIVE voice conversation with a ` +
+    `Russian-speaking learner (A2–B2). You are role-playing a consistent character for the topic — ` +
+    `keep the conversation COHERENT, on-topic and in-character. The learner's answer comes from ` +
+    `speech-to-text and may contain minor transcription noise — do NOT penalize plausible mishearings.\n` +
+    `First decide the verdict:\n` +
+    `- "clarify": the learner did NOT answer but asked to repeat/rephrase, said they don't understand, ` +
+    `or asked what something means (in English OR Russian — e.g. "I don't understand", "can you repeat", ` +
+    `"what does X mean", "что значит", "я не понял", "повтори"). This is NORMAL, NOT an error.\n` +
     `- "ok": communicates the meaning; small slips fine.\n` +
     `- "minor": understandable but with a noticeable slip (still continue).\n` +
-    `- "gross": serious grammar/meaning error, or off-topic/irrelevant answer.\n` +
+    `- "gross": ONLY a serious GRAMMAR/vocabulary error that breaks the English. Do NOT use gross for ` +
+    `content or relevance — if the English is fine, NEVER mark gross, even if the answer doesn't directly ` +
+    `address the question. A real partner just rolls with tangents and keeps chatting.\n` +
     `- "skip": empty, nonsensical, or clearly not an attempt.\n` +
-    `Be lenient and supportive — prefer continuing the conversation.\n` +
-    `If ok/minor: produce a natural SHORT follow-up question (speakable, ~max 20 words) and a suggested answer.\n` +
-    `ALWAYS include "corrected": the learner's answer rewritten in correct, natural English (keep their meaning; ` +
-    `if it is already correct, return it unchanged).\n` +
-    `If gross: also "error_reason" in RUSSIAN (1–2 sentences: what's wrong and why).\n` +
-    `Reply STRICT JSON: {"verdict":"ok|minor|gross|skip","corrected":string,"error_reason":string|null,` +
-    `"next_question":string|null,"next_suggestion":{"en":string,"ru":string}|null}. No text outside JSON.` +
+    `Be lenient and supportive — prefer continuing the conversation; only "gross" for broken English.\n` +
+    `If clarify: set "rephrase" = the SAME current question reworded more simply/slowly in English ` +
+    `(optionally a tiny hint). Do NOT advance the topic, do NOT mark an error.\n` +
+    `If ok/minor: produce "next_question" — a natural SHORT follow-up (speakable, ~max 20 words) that ` +
+    `DIRECTLY reacts to and builds on what the learner just said (reference a detail they mentioned), ` +
+    `continuing the same scenario like a real person. Also a suggested answer for it.\n` +
+    `For ok/minor/gross ALWAYS include NON-EMPTY "corrected": the learner's answer rewritten in correct, ` +
+    `natural English keeping their meaning (if already correct, return it unchanged). For clarify/skip set corrected="".\n` +
+    `If gross: "error_reason" is REQUIRED and NON-EMPTY — in RUSSIAN, 1–2 specific sentences naming what exactly ` +
+    `is wrong and why (not generic).\n` +
+    `Reply STRICT JSON: {"verdict":"ok|minor|gross|skip|clarify","corrected":string,"error_reason":string|null,` +
+    `"rephrase":string|null,"next_question":string|null,"next_suggestion":{"en":string,"ru":string}|null}. ` +
+    `No text outside JSON.` +
     pastErrorsBlock(errors);
   const user =
     `Topic: "${args.topic}".\n` +
@@ -356,13 +392,14 @@ export async function evaluateAnswer(args: {
     verdict,
     errorReason: typeof o.error_reason === "string" ? o.error_reason.trim() || null : null,
     corrected: typeof o.corrected === "string" ? o.corrected.trim() || null : null,
+    rephrase: typeof o.rephrase === "string" ? o.rephrase.trim() || null : null,
     nextQuestion: typeof o.next_question === "string" ? o.next_question.trim() || null : null,
     nextSuggestion: o.next_suggestion ? normalizeSuggestion(o.next_suggestion) : null,
   };
 }
 
 function normalizeVerdict(v: unknown): Verdict {
-  return v === "ok" || v === "minor" || v === "gross" || v === "skip" ? v : "minor";
+  return v === "ok" || v === "minor" || v === "gross" || v === "skip" || v === "clarify" ? v : "minor";
 }
 
 function normalizeSuggestion(raw: unknown): Suggestion {
@@ -439,9 +476,16 @@ export async function processAnswer(
     history,
   });
 
-  // Исправленную версию пишем в лог только если она реально отличается.
+  // Санитизация правки: иногда модель возвращает обрывок (напр. "I") — такую
+  // правку отбрасываем, чтобы не показывать бессмысленный diff.
+  let corrected = evalRes.corrected;
+  if (corrected) {
+    const cw = corrected.split(/\s+/).filter(Boolean).length;
+    const tw = cleaned.split(/\s+/).filter(Boolean).length;
+    if (tw >= 3 && cw < Math.max(2, Math.floor(tw * 0.5))) corrected = null;
+  }
   const correctedDiffers =
-    !!evalRes.corrected && evalRes.corrected.toLowerCase().trim() !== cleaned.toLowerCase().trim();
+    !!corrected && corrected.toLowerCase().trim() !== cleaned.toLowerCase().trim();
 
   await logTurn({
     sessionId: session.id,
@@ -450,24 +494,39 @@ export async function processAnswer(
     transcript: cleaned,
     verdict: evalRes.verdict,
     errorReason: evalRes.errorReason,
-    correction: correctedDiffers ? evalRes.corrected : null,
+    correction: correctedDiffers ? corrected : null,
   });
 
   if (evalRes.verdict === "skip") {
     return { verdict: "skip", transcript: cleaned, repeatText: aiQuestion };
   }
 
+  // «Не понял / повтори» — переспрашиваем тот же вопрос проще, без ошибки и
+  // без продвижения сценария.
+  if (evalRes.verdict === "clarify") {
+    const rephrase = evalRes.rephrase || aiQuestion;
+    await updateCurrentQuestionText(session.id, rephrase);
+    const aiAudio = await synthSpeech(rephrase);
+    return {
+      verdict: "clarify",
+      transcript: cleaned,
+      aiText: rephrase,
+      aiAudio,
+      suggestion: parseSuggestionStr(session.current_suggestion),
+    };
+  }
+
   if (evalRes.verdict === "gross") {
     await bumpCounts(session.id, "error_count");
     const reason = evalRes.errorReason || "Ответ содержит ошибку. Попробуй ещё раз.";
-    const corrected = evalRes.corrected || "";
-    const speak = corrected ? `${corrected}. Try again.` : `Let's try that again.`;
+    const phrase = corrected || "";
+    const speak = phrase ? `${phrase}. Try again.` : `Let's try that again.`;
     const correctionAudio = await synthSpeech(speak);
     return {
       verdict: "gross",
       transcript: cleaned,
       errorReason: reason,
-      corrected,
+      corrected: phrase,
       correctionAudio,
     };
   }
@@ -482,7 +541,7 @@ export async function processAnswer(
   return {
     verdict: evalRes.verdict,
     transcript: cleaned,
-    corrected: correctedDiffers ? evalRes.corrected : null,
+    corrected: correctedDiffers ? corrected : null,
     aiText: nextQuestion,
     aiAudio,
     suggestion: nextSuggestion,
