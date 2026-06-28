@@ -1,0 +1,178 @@
+/* «Живой диалог» — мобайл-фёрст. Крупные тач-цели, sticky-панель управления. */
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5) var(--space-16);
+}
+@media (max-width: 768px) {
+  .page {
+    padding: var(--space-4) var(--space-4) var(--space-10);
+  }
+}
+
+.title {
+  font-size: 30px;
+  letter-spacing: -0.02em;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.intro {
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+  line-height: var(--leading-relaxed);
+  margin: 0 0 var(--space-5);
+}
+
+/* Карточка реплики AI */
+.aiCard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  margin-bottom: var(--space-4);
+}
+.aiLabel {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+.aiText {
+  font-size: 22px;
+  line-height: 1.35;
+  color: var(--text);
+}
+@media (max-width: 768px) {
+  .aiText {
+    font-size: 19px;
+  }
+}
+
+.status {
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  min-height: 22px;
+  margin: var(--space-3) 0;
+}
+
+/* Подсказка (Помощь) */
+.hint {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.hintEn {
+  font-size: var(--text-md);
+  color: var(--text);
+}
+.hintRu {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Коррекция (грубая ошибка) */
+.correction {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.correctionReason {
+  color: var(--text);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+}
+.correctionPhrase {
+  margin-top: var(--space-2);
+  font-size: var(--text-md);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Sticky-панель управления внизу */
+.controls {
+  position: sticky;
+  bottom: 0;
+  padding: var(--space-3) 0 var(--space-2);
+  background: linear-gradient(to top, var(--bg) 70%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.controlRow {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Большая кнопка push-to-talk */
+.talkBtn {
+  flex: 1;
+  min-height: 76px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: var(--text-md);
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  transition: transform 80ms var(--ease), background 120ms var(--ease);
+}
+.talkBtn:active {
+  transform: scale(0.99);
+}
+.talkBtnRec {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+  animation: pulse 1s ease-in-out infinite;
+}
+.talkBtnDisabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.35); }
+  50% { box-shadow: 0 0 0 10px rgba(220, 38, 38, 0); }
+}
+
+.helpBtn {
+  min-height: 76px;
+  flex: 0 0 38%;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  user-select: none;
+}
+
+.secondaryRow {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* Библиотека сессий */
+.cardGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-3);
+}
+.transcript {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-top: 6px;
+}
