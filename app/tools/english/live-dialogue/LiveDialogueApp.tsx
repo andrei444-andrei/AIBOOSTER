@@ -38,6 +38,16 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [summary, setSummary] = useState<{ ok: number; err: number; turns: number } | null>(null);
 
+  // sessionId держим ещё и в ref. Запись (push-to-talk) стартует из
+  // мемоизированного startRecording, чей onstop вызывает sendAnswer. Его deps
+  // не включают sessionId, а переход setup→active не меняет busy/recording —
+  // поэтому колбэк захватывал sessionId="" из первого рендера, и ПЕРВЫЙ ответ
+  // уходил на /api/live-dialogue//answer → 405 (роут [id] без POST) → пустое
+  // тело → "Unexpected end of JSON input". Ref всегда актуален и от этого не
+  // зависит. Синхронизируем и эффектом, и явно в start()/resume().
+  const sessionIdRef = useRef("");
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+
   // --- Web Audio (надёжно на iOS) ---
   const ctxRef = useRef<AudioContext | null>(null);
   const srcRef = useRef<AudioBufferSourceNode | null>(null);
@@ -181,6 +191,7 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
           return;
         }
         setSessionId(d.session.id);
+        sessionIdRef.current = d.session.id;
         const msgs = buildMessagesFromTurns(d.turns || []);
         const cur = d.session.current_question as string | null;
         if (cur && (msgs.length === 0 || !(msgs[msgs.length - 1].role === "ai" && msgs[msgs.length - 1].text === cur))) {
@@ -220,6 +231,7 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
         return;
       }
       setSessionId(data.session_id);
+      sessionIdRef.current = data.session_id;
       setAiText(data.ai_text);
       setAiAudio(data.ai_audio);
       setSuggestion(data.suggestion ?? null);
@@ -238,13 +250,15 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
   }
 
   async function sendAnswer(blob: Blob) {
+    const sid = sessionIdRef.current;
+    if (!sid) { setStatus(""); setError("Сессия ещё не готова — нажми «Ответить» и повтори."); return; }
     setBusy(true);
     setStatus("Проверяю ответ…");
     setCorrection(null);
     try {
       const fd = new FormData();
       fd.append("audio", blob, `answer.${extFor(blob.type)}`);
-      const res = await fetch(`/api/live-dialogue/${sessionId}/answer`, { method: "POST", body: fd });
+      const res = await fetch(`/api/live-dialogue/${sid}/answer`, { method: "POST", body: fd });
       const data = await readJsonSafe(res);
       if (!res.ok) {
         setStatus("");
@@ -298,7 +312,7 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
   async function finish() {
     stopPlayback();
     try {
-      const res = await fetch(`/api/live-dialogue/${sessionId}/finish`, { method: "POST" });
+      const res = await fetch(`/api/live-dialogue/${sessionIdRef.current}/finish`, { method: "POST" });
       const data = await res.json();
       const s = data.summary || {};
       setSummary({ ok: s.ok_count ?? 0, err: s.error_count ?? 0, turns: s.turn_count ?? 0 });
