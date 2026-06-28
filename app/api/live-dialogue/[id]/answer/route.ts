@@ -56,7 +56,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       ai_audio: outcome.aiAudio ?? null,
       suggestion: outcome.suggestion ?? null,
       error_reason: outcome.errorReason ?? null,
-      correction: outcome.correction ?? null,
+      corrected: outcome.corrected ?? null,
       correction_audio: outcome.correctionAudio ?? null,
       repeat_text: outcome.repeatText ?? null,
     });
