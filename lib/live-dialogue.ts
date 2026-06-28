@@ -18,7 +18,10 @@ const CHAT_MODEL = process.env.LIVE_DIALOGUE_MODEL || "gemini-2.5-flash";
 // eleven_turbo_v2_5 — низкая задержка, доступна на aimlapi (flash_v2_5 там 404).
 const TTS_MODEL = process.env.LIVE_TTS_MODEL || "elevenlabs/eleven_turbo_v2_5";
 const TTS_VOICE = process.env.LIVE_DIALOGUE_VOICE || "Rachel";
-export const STT_MODEL = process.env.LIVE_STT_MODEL || "gpt-4o-mini-transcribe";
+// STT через aimlapi (async create+poll). Не зависим от прямого OpenAI-ключа
+// (он на проде упирался в 429). whisper-large устойчив к акценту учащегося.
+const AIML_BASE = "https://api.aimlapi.com/v1";
+const STT_MODEL = process.env.LIVE_STT_AIML_MODEL || "#g1_whisper-large";
 
 export type Verdict = "ok" | "minor" | "gross" | "skip";
 
@@ -63,6 +66,54 @@ export async function synthSpeech(text: string): Promise<string | null> {
     // Озвучка не критична: если TTS упал — вернём текст, клиент покажет без аудио.
     return null;
   }
+}
+
+// --- STT через aimlapi (create → poll). Кидает ошибку при сбое распознавания
+// (вызывающий отличает «тех. сбой» от «тишины/пустого ответа»). ---
+export async function transcribeViaAimlapi(audio: Blob, filename: string): Promise<string> {
+  const key = process.env.AIMLAPI_KEY;
+  if (!key) throw new Error("AIMLAPI_KEY is not set");
+  const fd = new FormData();
+  fd.append("model", STT_MODEL);
+  fd.append("audio", audio, filename);
+  const c = await fetch(`${AIML_BASE}/stt/create`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${key}` },
+    body: fd,
+  });
+  if (!c.ok) throw new Error(`stt create ${c.status}: ${(await c.text().catch(() => "")).slice(0, 200)}`);
+  const cj = (await c.json()) as Record<string, unknown>;
+  const gid = (cj.generation_id || cj.id || cj.gen_id) as string | undefined;
+  if (!gid) throw new Error("stt: no generation_id");
+
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 400));
+    const g = await fetch(`${AIML_BASE}/stt/${gid}`, { headers: { authorization: `Bearer ${key}` } });
+    if (!g.ok) continue;
+    const gj = (await g.json()) as Record<string, unknown>;
+    const st = String(gj.status ?? "");
+    if (st === "completed" || st === "complete" || st === "succeeded" || st === "done" || gj.result) {
+      return extractTranscript(gj);
+    }
+    if (st === "error" || st === "failed") {
+      throw new Error(`stt failed: ${JSON.stringify(gj).slice(0, 200)}`);
+    }
+  }
+  throw new Error("stt timeout");
+}
+
+function extractTranscript(gj: Record<string, unknown>): string {
+  try {
+    const t = (gj as { result?: { results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string }> }> } } })
+      .result?.results?.channels?.[0]?.alternatives?.[0]?.transcript;
+    if (typeof t === "string") return t.trim();
+  } catch {
+    /* fallthrough */
+  }
+  const s = JSON.stringify(gj);
+  const m = s.match(/"transcript":"([^"]*)"/) || s.match(/"text":"([^"]*)"/);
+  return m ? m[1].trim() : "";
 }
 
 // --- Сессии ---
