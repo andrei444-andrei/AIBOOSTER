@@ -30,6 +30,14 @@ const SUBSECTIONS: SubsectionDef[] = [
     href: "/tools/english/build-sentences",
     status: "live",
   },
+  {
+    slug: "live-dialogue",
+    title: "Живой диалог",
+    description:
+      "Голосовая практика: AI спрашивает голосом, ты отвечаешь, удерживая кнопку. «Помощь» подскажет фразу, грубые ошибки разбираются на ходу. Мобайл-фёрст.",
+    href: "/tools/english/live-dialogue",
+    status: "live",
+  },
 ];
 
 export default function EnglishHubPage() {

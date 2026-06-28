@@ -1050,6 +1050,73 @@ export const TABLES: TableDef[] = [
       { name: "completed", description: "0/1. 1 — пользователь собрал предложение в правильном порядке." },
     ],
   },
+
+  // --- Модуль «Английский» → подраздел «Живой диалог» (live voice conversation).
+  //
+  // Голосовая практика: AI задаёт вопросы и озвучивает их, пользователь
+  // отвечает голосом (push-to-talk). Сервер транскрибирует, оценивает и либо
+  // продолжает, либо объясняет ошибку. Аудио реплик НЕ храним (эфемерны) —
+  // только транскрипты/вердикты/причины (лог для просмотра и персонализации).
+  {
+    name: "live_dialogue_sessions",
+    description:
+      "Сессии живого голосового диалога для практики английского: одна строка = один разговор по теме. Лог реплик — в live_dialogue_turns.",
+    ddl: `CREATE TABLE IF NOT EXISTS live_dialogue_sessions (
+      id TEXT PRIMARY KEY,
+      topic TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      turn_count INTEGER NOT NULL DEFAULT 0,
+      ok_count INTEGER NOT NULL DEFAULT 0,
+      error_count INTEGER NOT NULL DEFAULT 0,
+      current_idx INTEGER NOT NULL DEFAULT 0,
+      current_question TEXT,
+      current_suggestion TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT
+    )`,
+    columns: [
+      { name: "id", description: "UUID сессии. В URL /tools/english/live-dialogue/s/<id>." },
+      { name: "topic", description: "Тема разговора (промт пользователя)." },
+      { name: "status", description: "active | finished." },
+      { name: "turn_count", description: "Сколько вопросов AI задал (реплик-вопросов)." },
+      { name: "current_idx", description: "Индекс текущего (ожидающего ответа) вопроса AI." },
+      { name: "current_question", description: "Текст текущего вопроса AI — на него оценивается ответ." },
+      { name: "current_suggestion", description: "JSON {en, ru}: подсказка-фраза для ответа на текущий вопрос (кнопка «Помощь»)." },
+      { name: "ok_count", description: "Сколько ответов засчитано как верные/приемлемые." },
+      { name: "error_count", description: "Сколько ответов с грубой ошибкой (были коррекции)." },
+      { name: "created_at", description: "Начало сессии (UTC)." },
+      { name: "updated_at", description: "Последняя активность (UTC)." },
+      { name: "finished_at", description: "Когда сессия завершена." },
+    ],
+  },
+  {
+    name: "live_dialogue_turns",
+    description:
+      "Лог реплик живого диалога: каждая попытка ответа пользователя с вердиктом и причиной. Источник для просмотра ошибок и персонализации будущих сессий.",
+    ddl: `CREATE TABLE IF NOT EXISTS live_dialogue_turns (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      idx INTEGER NOT NULL,
+      ai_text TEXT NOT NULL,
+      user_transcript TEXT,
+      verdict TEXT,
+      error_reason TEXT,
+      correction TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    columns: [
+      { name: "id", description: "UUID попытки." },
+      { name: "session_id", description: "FK на live_dialogue_sessions.id." },
+      { name: "idx", description: "Номер вопроса AI в сессии (на один вопрос может быть несколько попыток-ответов)." },
+      { name: "ai_text", description: "Вопрос/реплика AI, на которую отвечал пользователь." },
+      { name: "user_transcript", description: "Распознанный текст ответа пользователя (STT)." },
+      { name: "verdict", description: "ok | minor | gross | skip (пусто/не распознано)." },
+      { name: "error_reason", description: "Причина грубой ошибки на русском (что не так). NULL если ок." },
+      { name: "correction", description: "Подсказанный правильный вариант ответа (что нужно было сказать)." },
+      { name: "created_at", description: "Время попытки (UTC)." },
+    ],
+  },
 ];
 
 // Индексы для быстрого чтения.
@@ -1075,6 +1142,11 @@ export const INDEXES: string[] = [
   // Английский (build sentences): разделы todo/done + предложения задания.
   `CREATE INDEX IF NOT EXISTS idx_est_done ON english_sentence_tasks (done, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_esi_task ON english_sentence_items (task_id, idx)`,
+
+  // Английский (живой диалог): сессии + лог реплик.
+  `CREATE INDEX IF NOT EXISTS idx_lds_status ON live_dialogue_sessions (status, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_ldt_session ON live_dialogue_turns (session_id, idx, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_ldt_errors ON live_dialogue_turns (verdict, created_at)`,
 
   // Адаптеры: очередь cron'а — какие источники due.
   `CREATE INDEX IF NOT EXISTS idx_adapter_sources_due ON adapter_sources (status, next_run_at)`,
