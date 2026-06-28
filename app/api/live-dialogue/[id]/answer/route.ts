@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { logServerError } from "@/lib/logger";
-import { transcribeAudio } from "@/lib/ai";
-import { getSession, processAnswer, STT_MODEL } from "@/lib/live-dialogue";
+import { getSession, processAnswer, transcribeViaAimlapi } from "@/lib/live-dialogue";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -38,20 +37,29 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
     let transcript = "";
     try {
-      const r = await transcribeAudio({
-        audio: audioRaw,
-        filename: `answer.${extFor(audioRaw.type)}`,
-        language: "en",
-        model: STT_MODEL,
-      });
-      transcript = r.text ?? "";
-    } catch {
-      // STT упал/тихо — просим повторить, не валим запрос.
-      transcript = "";
+      transcript = await transcribeViaAimlapi(audioRaw, `answer.${extFor(audioRaw.type)}`);
+    } catch (err) {
+      // Реальный сбой распознавания (не тишина) — сообщаем явно, а не «не расслышал».
+      const error_id = await logServerError(err, `/api/live-dialogue/${id}/answer (stt)`);
+      return NextResponse.json(
+        { error: "не удалось распознать речь — попробуй ещё раз", error_id },
+        { status: 502 },
+      );
     }
 
     const outcome = await processAnswer(session, transcript);
-    return NextResponse.json(outcome);
+    // Клиент ожидает snake_case (как в /start). processAnswer отдаёт camelCase.
+    return NextResponse.json({
+      verdict: outcome.verdict,
+      transcript: outcome.transcript,
+      ai_text: outcome.aiText ?? null,
+      ai_audio: outcome.aiAudio ?? null,
+      suggestion: outcome.suggestion ?? null,
+      error_reason: outcome.errorReason ?? null,
+      correction: outcome.correction ?? null,
+      correction_audio: outcome.correctionAudio ?? null,
+      repeat_text: outcome.repeatText ?? null,
+    });
   } catch (err) {
     const error_id = await logServerError(err, `/api/live-dialogue/${id}/answer`);
     return NextResponse.json({ error: "не удалось обработать ответ", error_id }, { status: 500 });
