@@ -173,7 +173,7 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
     (async () => {
       try {
         const r = await fetch(`/api/live-dialogue/${resumeId}`, { cache: "no-store" });
-        const d = await r.json();
+        const d = await readJsonSafe(r);
         if (cancelled) return;
         if (!r.ok || !d.session) {
           setError(d.error || "не удалось загрузить сессию");
@@ -213,7 +213,7 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ topic: topic.trim() }),
       });
-      const data = await res.json();
+      const data = await readJsonSafe(res);
       if (!res.ok || !data.session_id) {
         setError(data.error || `ошибка ${res.status}`);
         setStarting(false);
@@ -245,7 +245,7 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
       const fd = new FormData();
       fd.append("audio", blob, `answer.${extFor(blob.type)}`);
       const res = await fetch(`/api/live-dialogue/${sessionId}/answer`, { method: "POST", body: fd });
-      const data = await res.json();
+      const data = await readJsonSafe(res);
       if (!res.ok) {
         setStatus("");
         setError(data.error || `ошибка ${res.status}`);
@@ -418,9 +418,11 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
 }
 
 function Transcript({ messages }: { messages: Msg[] }) {
+  // Свежие реплики сверху (как просили) — рендерим в обратном порядке.
+  const ordered = [...messages].reverse();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {messages.map((m, i) =>
+      {ordered.map((m, i) =>
         m.role === "ai" ? (
           <div key={i} style={{ alignSelf: "flex-start", maxWidth: "92%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "8px 12px" }}>
             <span style={{ fontSize: 11, color: "var(--text-muted)" }}>AI</span>
@@ -494,6 +496,18 @@ function buildMessagesFromTurns(turns: Array<{ idx: number; ai_text: string; use
     });
   }
   return msgs;
+}
+
+// Безопасный разбор ответа: пустое/не-JSON тело (таймаут, холодный старт) не
+// роняет UI криптовым «Unexpected end of JSON input», а даёт понятную ошибку.
+async function readJsonSafe(res: Response) {
+  const raw = await res.text();
+  if (!raw) throw new Error("Сервер не ответил. Попробуй ещё раз.");
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error("Сбой ответа сервера. Попробуй ещё раз.");
+  }
 }
 
 function extFor(mime: string): string {
