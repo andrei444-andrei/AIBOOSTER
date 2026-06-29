@@ -524,6 +524,12 @@ const MISSION_RULES =
   `that ALSO shares something about YOU (an opinion, a small fact/feeling from your character) — this is ` +
   `NOT a question; then (b) ONE short question that advances the NEAREST OPEN BEAT toward the GOAL. ` +
   `Never produce a bare question. Keep total speakable, ≤25 words / ≤2 sentences.\n` +
+  `CRITICAL — answer the learner back: if the learner ASKS YOU a question, asks your opinion, or turns a ` +
+  `question back to you ("and you?", "what about you?", "do you like…?"), you MUST ANSWER it directly and ` +
+  `in character FIRST (that answer IS your reaction/share). NEVER ignore or dodge the learner's question — ` +
+  `that feels unfair and robotic. Only after answering do you ask your own follow-up.\n` +
+  `Do NOT repeat a question you have already asked (especially not the opening question); every turn must ` +
+  `move the scenario FORWARD to a new, more specific point toward the goal.\n` +
   `Tangents: if PHASE is DEVELOP you MAY follow a tangent the learner opened for ONE exchange, then gently ` +
   `come back to the nearest open beat next turn. If PHASE is TOWARD_GOAL or WRAP_UP: acknowledge what they ` +
   `said in one clause, then steer firmly back toward the goal.\n` +
