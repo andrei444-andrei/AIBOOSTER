@@ -20,10 +20,16 @@ const CHAT_MODEL = process.env.LIVE_DIALOGUE_MODEL || "gpt-4o-mini";
 // eleven_turbo_v2_5 — низкая задержка, доступна на aimlapi (flash_v2_5 там 404).
 const TTS_MODEL = process.env.LIVE_TTS_MODEL || "elevenlabs/eleven_turbo_v2_5";
 const TTS_VOICE = process.env.LIVE_DIALOGUE_VOICE || "Rachel";
-// STT через aimlapi (async create+poll). Не зависим от прямого OpenAI-ключа
-// (он на проде упирался в 429). whisper-large устойчив к акценту учащегося.
+// STT: Deepgram (синхронный HTTP, ~0.3–0.5с) — основной путь, если задан ключ.
+// Async-STT aimlapi (~5с из-за их очереди, проверено замерами) остаётся
+// фолбэком, когда DEEPGRAM_API_KEY не задан.
 const AIML_BASE = "https://api.aimlapi.com/v1";
 const STT_MODEL = process.env.LIVE_STT_AIML_MODEL || "#g1_whisper-large";
+const DEEPGRAM_KEY = process.env.DEEPGRAM_API_KEY;
+const DG_MODEL = process.env.LIVE_STT_DEEPGRAM_MODEL || "nova-2";
+// Речь учащегося — английская (главный сценарий практики). Фиксируем язык:
+// для коротких реплик это точнее, чем авто-детект.
+const DG_LANG = process.env.LIVE_STT_LANG || "en";
 
 export type Verdict = "ok" | "minor" | "gross" | "skip" | "clarify";
 
@@ -116,6 +122,38 @@ function extractTranscript(gj: Record<string, unknown>): string {
   const s = JSON.stringify(gj);
   const m = s.match(/"transcript":"([^"]*)"/) || s.match(/"text":"([^"]*)"/);
   return m ? m[1].trim() : "";
+}
+
+// --- STT через Deepgram (синхронный, низкая задержка). Принимает контейнер
+// браузера как есть (webm/opus с Android/desktop, mp4/m4a с iOS) — Deepgram
+// определяет формат сам. Кидает ошибку при сбое (вызывающий отличает от тишины). ---
+async function transcribeViaDeepgram(audio: Blob, mime: string): Promise<string> {
+  const key = DEEPGRAM_KEY;
+  if (!key) throw new Error("DEEPGRAM_API_KEY is not set");
+  const params = new URLSearchParams({
+    model: DG_MODEL,
+    language: DG_LANG,
+    smart_format: "true",
+    punctuate: "true",
+  });
+  const body = Buffer.from(await audio.arrayBuffer());
+  const r = await fetch(`https://api.deepgram.com/v1/listen?${params.toString()}`, {
+    method: "POST",
+    headers: { authorization: `Token ${key}`, "content-type": mime || "audio/webm" },
+    body,
+  });
+  if (!r.ok) throw new Error(`deepgram ${r.status}: ${(await r.text().catch(() => "")).slice(0, 200)}`);
+  const j = (await r.json()) as Record<string, unknown>;
+  const t = (j as { results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string }> }> } })
+    .results?.channels?.[0]?.alternatives?.[0]?.transcript;
+  return typeof t === "string" ? t.trim() : "";
+}
+
+// Единая точка распознавания: Deepgram (быстро) если задан ключ, иначе
+// aimlapi async (фолбэк). Меняет провайдера без правок в роуте.
+export async function transcribeSpeech(audio: Blob, filename: string, mime: string): Promise<string> {
+  if (DEEPGRAM_KEY) return transcribeViaDeepgram(audio, mime);
+  return transcribeViaAimlapi(audio, filename);
 }
 
 // --- Сессии ---
@@ -318,7 +356,7 @@ export async function generateOpening(
     system,
     user,
     temperature: 0.7,
-    maxTokens: 600,
+    maxTokens: 320,
     timeoutMs: 30_000,
   });
   const o = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
@@ -383,7 +421,7 @@ export async function evaluateAnswer(args: {
     system,
     user,
     temperature: 0.5,
-    maxTokens: 700,
+    maxTokens: 320,
     timeoutMs: 30_000,
   });
   const o = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
@@ -505,8 +543,11 @@ export async function processAnswer(
   // без продвижения сценария.
   if (evalRes.verdict === "clarify") {
     const rephrase = evalRes.rephrase || aiQuestion;
-    await updateCurrentQuestionText(session.id, rephrase);
-    const aiAudio = await synthSpeech(rephrase);
+    // TTS параллельно с записью текущего вопроса в БД.
+    const [aiAudio] = await Promise.all([
+      synthSpeech(rephrase),
+      updateCurrentQuestionText(session.id, rephrase),
+    ]);
     return {
       verdict: "clarify",
       transcript: cleaned,
@@ -517,11 +558,14 @@ export async function processAnswer(
   }
 
   if (evalRes.verdict === "gross") {
-    await bumpCounts(session.id, "error_count");
     const reason = evalRes.errorReason || "Ответ содержит ошибку. Попробуй ещё раз.";
     const phrase = corrected || "";
     const speak = phrase ? `${phrase}. Try again.` : `Let's try that again.`;
-    const correctionAudio = await synthSpeech(speak);
+    // TTS параллельно с инкрементом счётчика ошибок.
+    const [correctionAudio] = await Promise.all([
+      synthSpeech(speak),
+      bumpCounts(session.id, "error_count"),
+    ]);
     return {
       verdict: "gross",
       transcript: cleaned,
@@ -532,12 +576,17 @@ export async function processAnswer(
   }
 
   // ok / minor → продолжаем
-  await bumpCounts(session.id, "ok_count");
   const nextQuestion =
     evalRes.nextQuestion || "Nice. Can you tell me a bit more?";
   const nextSuggestion = evalRes.nextSuggestion || { en: "", ru: "" };
-  await setCurrentQuestion(session.id, session.current_idx + 1, nextQuestion, nextSuggestion);
-  const aiAudio = await synthSpeech(nextQuestion);
+  // TTS следующего вопроса параллельно с записью состояния сессии в БД.
+  const [aiAudio] = await Promise.all([
+    synthSpeech(nextQuestion),
+    (async () => {
+      await bumpCounts(session.id, "ok_count");
+      await setCurrentQuestion(session.id, session.current_idx + 1, nextQuestion, nextSuggestion);
+    })(),
+  ]);
   return {
     verdict: evalRes.verdict,
     transcript: cleaned,
