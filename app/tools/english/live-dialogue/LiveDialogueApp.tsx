@@ -9,7 +9,7 @@ interface Suggestion {
   en: string;
   ru: string;
 }
-type Verdict = "ok" | "minor" | "gross" | "skip";
+type Verdict = "ok" | "minor" | "gross" | "skip" | "clarify";
 type Mode = "setup" | "active" | "review" | "loading";
 
 interface Msg {
@@ -37,6 +37,10 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
   const [status, setStatus] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [summary, setSummary] = useState<{ ok: number; err: number; turns: number } | null>(null);
+  // Миссия: цель (RU) + прогресс по бетам (для плашки и индикатора «N из M»).
+  const [goalRu, setGoalRu] = useState<string | null>(null);
+  const [beatsTotal, setBeatsTotal] = useState(0);
+  const [beatsDone, setBeatsDone] = useState(0);
 
   // sessionId держим ещё и в ref. Запись (push-to-talk) стартует из
   // мемоизированного startRecording, чей onstop вызывает sendAnswer. Его deps
@@ -199,6 +203,9 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
         }
         setMessages(msgs);
         setSummary({ ok: d.session.ok_count ?? 0, err: d.session.error_count ?? 0, turns: d.session.turn_count ?? 0 });
+        setGoalRu(d.session.goal_ru ?? null);
+        setBeatsTotal(d.session.beats_total ?? 0);
+        setBeatsDone(d.session.beats_done ?? 0);
         if (d.session.status === "active" && cur) {
           setAiText(cur);
           setSuggestion(d.session.current_suggestion ?? null);
@@ -235,6 +242,9 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
       setAiText(data.ai_text);
       setAiAudio(data.ai_audio);
       setSuggestion(data.suggestion ?? null);
+      setGoalRu(data.goal_ru ?? null);
+      setBeatsTotal(data.beats_total ?? 0);
+      setBeatsDone(data.beats_done ?? 0);
       setShowHint(false);
       setCorrection(null);
       setMessages([{ role: "ai", text: data.ai_text }]);
@@ -265,6 +275,9 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
         setError(data.error || `ошибка ${res.status}`);
         return;
       }
+      // синхронизируем прогресс миссии (индикатор «N из M»)
+      if (typeof data.beats_done === "number") setBeatsDone(data.beats_done);
+      if (typeof data.beats_total === "number" && data.beats_total > 0) setBeatsTotal(data.beats_total);
       if (data.verdict === "skip") {
         setStatus("Не расслышал — нажми «Ответить» и повтори.");
         return;
@@ -281,7 +294,19 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
         if (data.correction_audio) setTimeout(() => void playDataUri(data.correction_audio), 480);
         return;
       }
-      // ok / minor → следующая реплика
+      // финал миссии: прощальная реплика AI → озвучка → экран итога
+      if (data.finished) {
+        const ft = (data.final_text as string) || "";
+        if (ft) setMessages((m) => [...m, { role: "ai", text: ft }]);
+        setAiText(ft);
+        setShowHint(false);
+        setStatus("");
+        setSummary(null); // итог посчитаем из ленты при рендере review
+        setMode("review");
+        void playDataUri(data.final_audio);
+        return;
+      }
+      // ok / minor / clarify → следующая реплика
       setAiText(data.ai_text || "");
       setAiAudio(data.ai_audio ?? null);
       setSuggestion(data.suggestion ?? null);
@@ -355,16 +380,22 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
   }
 
   if (mode === "review") {
+    const sm = summary ?? deriveSummary(messages);
+    const missionDone = beatsTotal > 0 && beatsDone >= beatsTotal;
     return (
       <div>
         <Card padded style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Диалог</div>
-          {summary && (
-            <div style={{ color: "var(--text-secondary)", fontSize: 14 }}>
-              реплик {summary.turns} · верных <span style={{ color: "var(--success)" }}>{summary.ok}</span> · ошибок{" "}
-              <span style={{ color: "var(--danger)" }}>{summary.err}</span>
+          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Диалог завершён</div>
+          {goalRu && (
+            <div style={{ fontSize: 14, color: "var(--text-secondary)", marginBottom: 6 }}>
+              🎯 Цель: {goalRu}{missionDone ? " — выполнена ✓" : ""}
             </div>
           )}
+          <div style={{ color: "var(--text-secondary)", fontSize: 14 }}>
+            реплик {sm.turns} · верных <span style={{ color: "var(--success)" }}>{sm.ok}</span> · ошибок{" "}
+            <span style={{ color: "var(--danger)" }}>{sm.err}</span>
+            {beatsTotal > 0 && <> · миссия {Math.min(beatsDone, beatsTotal)}/{beatsTotal}</>}
+          </div>
           <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
             <a href="/tools/english/live-dialogue" style={{ textDecoration: "none" }}><Button variant="primary">Новый диалог</Button></a>
           </div>
@@ -375,8 +406,22 @@ export default function LiveDialogueApp({ resumeId }: { resumeId?: string }) {
   }
 
   // active
+  const missionPct = beatsTotal > 0 ? Math.round((Math.min(beatsDone, beatsTotal) / beatsTotal) * 100) : 0;
   return (
     <div>
+      {(goalRu || beatsTotal > 0) && (
+        <div style={{ marginBottom: 10, padding: "8px 12px", background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            {goalRu && <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>🎯 {goalRu}</span>}
+            {beatsTotal > 0 && <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>{Math.min(beatsDone, beatsTotal)}/{beatsTotal}</span>}
+          </div>
+          {beatsTotal > 0 && (
+            <div style={{ height: 4, background: "var(--border)", borderRadius: 2, marginTop: 6, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${missionPct}%`, background: "var(--success)", transition: "width 0.3s" }} />
+            </div>
+          )}
+        </div>
+      )}
       <div className={styles.aiCard}>
         <div className={styles.aiLabel}>AI спрашивает</div>
         <div className={styles.aiText}>{aiText || "…"}</div>
@@ -522,6 +567,17 @@ async function readJsonSafe(res: Response) {
   } catch {
     throw new Error("Сбой ответа сервера. Попробуй ещё раз.");
   }
+}
+
+// Итог диалога из ленты сообщений (когда нет серверного summary, напр. авто-финал).
+function deriveSummary(messages: Msg[]): { ok: number; err: number; turns: number } {
+  let ok = 0, err = 0, turns = 0;
+  for (const m of messages) {
+    if (m.role === "ai") turns++;
+    else if (m.verdict === "gross") err++;
+    else if (m.verdict === "ok" || m.verdict === "minor") ok++;
+  }
+  return { ok, err, turns };
 }
 
 function extFor(mime: string): string {

@@ -73,6 +73,15 @@ const COLUMN_MIGRATIONS: ColumnAddition[] = [
   { table: "news_items", column: "cluster_id", ddl: "cluster_id TEXT" },
   // Английский (диалоги): темп озвучки, запекаемый при генерации (ffmpeg atempo).
   { table: "english_dialogue_jobs", column: "speed", ddl: "speed REAL NOT NULL DEFAULT 1.0" },
+  // Английский (живой диалог): структура миссии — цель, роль, чеклист бет,
+  // прогресс, лимит ходов, причина завершения. Старые сессии деградируют мягко.
+  { table: "live_dialogue_sessions", column: "goal", ddl: "goal TEXT" },
+  { table: "live_dialogue_sessions", column: "goal_ru", ddl: "goal_ru TEXT" },
+  { table: "live_dialogue_sessions", column: "role_desc", ddl: "role_desc TEXT" },
+  { table: "live_dialogue_sessions", column: "beats_json", ddl: "beats_json TEXT" },
+  { table: "live_dialogue_sessions", column: "beats_done", ddl: "beats_done INTEGER NOT NULL DEFAULT 0" },
+  { table: "live_dialogue_sessions", column: "target_turns", ddl: "target_turns INTEGER NOT NULL DEFAULT 10" },
+  { table: "live_dialogue_sessions", column: "ended_reason", ddl: "ended_reason TEXT" },
 ];
 
 async function hasColumn(table: string, column: string): Promise<boolean> {

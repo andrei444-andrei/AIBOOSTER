@@ -23,6 +23,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
         error_count: session.error_count,
         current_question: session.current_question,
         current_suggestion: parseSuggestion(session.current_suggestion),
+        goal_ru: session.goal_ru,
+        beats_total: beatsTotal(session.beats_json),
+        beats_done: session.beats_done ?? 0,
+        ended_reason: session.ended_reason,
         created_at: session.created_at,
         finished_at: session.finished_at,
       },
@@ -49,5 +53,15 @@ function parseSuggestion(raw: string | null): Suggestion | null {
     return { en: typeof o?.en === "string" ? o.en : "", ru: typeof o?.ru === "string" ? o.ru : "" };
   } catch {
     return null;
+  }
+}
+
+function beatsTotal(raw: string | null): number {
+  if (!raw) return 0;
+  try {
+    const a = JSON.parse(raw);
+    return Array.isArray(a) ? a.length : 0;
+  } catch {
+    return 0;
   }
 }

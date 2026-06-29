@@ -36,12 +36,15 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { session, aiText, aiAudio, suggestion } = await startSession(topic);
+    const { session, aiText, aiAudio, suggestion, goalRu, beatsTotal, beatsDone } = await startSession(topic);
     return NextResponse.json({
       session_id: session.id,
       ai_text: aiText,
       ai_audio: aiAudio,
       suggestion,
+      goal_ru: goalRu,
+      beats_total: beatsTotal,
+      beats_done: beatsDone,
     });
   } catch (err) {
     const error_id = await logServerError(err, "/api/live-dialogue", { topic });
