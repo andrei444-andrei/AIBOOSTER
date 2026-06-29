@@ -59,6 +59,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       corrected: outcome.corrected ?? null,
       correction_audio: outcome.correctionAudio ?? null,
       repeat_text: outcome.repeatText ?? null,
+      finished: outcome.finished ?? false,
+      final_text: outcome.finalText ?? null,
+      final_audio: outcome.finalAudio ?? null,
+      beats_done: outcome.beatsDone ?? null,
+      beats_total: outcome.beatsTotal ?? null,
     });
   } catch (err) {
     const error_id = await logServerError(err, `/api/live-dialogue/${id}/answer`);
