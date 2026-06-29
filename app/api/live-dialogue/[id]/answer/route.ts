@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { logServerError } from "@/lib/logger";
-import { getSession, processAnswer, transcribeViaAimlapi } from "@/lib/live-dialogue";
+import { getSession, processAnswer, transcribeSpeech } from "@/lib/live-dialogue";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -37,7 +37,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
     let transcript = "";
     try {
-      transcript = await transcribeViaAimlapi(audioRaw, `answer.${extFor(audioRaw.type)}`);
+      transcript = await transcribeSpeech(audioRaw, `answer.${extFor(audioRaw.type)}`, audioRaw.type);
     } catch (err) {
       // Реальный сбой распознавания (не тишина) — сообщаем явно, а не «не расслышал».
       const error_id = await logServerError(err, `/api/live-dialogue/${id}/answer (stt)`);
