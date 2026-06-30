@@ -26,7 +26,9 @@ const TTS_VOICE = process.env.LIVE_DIALOGUE_VOICE || "Rachel";
 const AIML_BASE = "https://api.aimlapi.com/v1";
 const STT_MODEL = process.env.LIVE_STT_AIML_MODEL || "#g1_whisper-large";
 const DEEPGRAM_KEY = process.env.DEEPGRAM_API_KEY;
-const DG_MODEL = process.env.LIVE_STT_DEEPGRAM_MODEL || "nova-2";
+// nova-3 — последняя модель Deepgram, точнее на акценте/шуме (важно для речи
+// русскоязычного ученика: nova-2 путал «Russian» → «rush»).
+const DG_MODEL = process.env.LIVE_STT_DEEPGRAM_MODEL || "nova-3";
 // Речь учащегося — английская (главный сценарий практики). Фиксируем язык:
 // для коротких реплик это точнее, чем авто-детект.
 const DG_LANG = process.env.LIVE_STT_LANG || "en";
@@ -492,9 +494,12 @@ const BASE_EVAL_SYSTEM =
   `keep the conversation COHERENT, on-topic and in-character. The learner's answer comes from ` +
   `speech-to-text and may contain minor transcription noise — do NOT penalize plausible mishearings.\n` +
   `First decide the verdict:\n` +
-  `- "clarify": the learner did NOT answer but asked to repeat/rephrase, said they don't understand, ` +
-  `or asked what something means (in English OR Russian — e.g. "I don't understand", "can you repeat", ` +
-  `"what does X mean", "что значит", "я не понял", "повтори"). This is NORMAL, NOT an error.\n` +
+  `- "clarify": ONLY when the learner signals THEY did not understand YOU or asks you to repeat/explain ` +
+  `(in English OR Russian — e.g. "I don't understand", "can you repeat", "what does X mean", "что значит", ` +
+  `"я не понял", "повтори"). IMPORTANT: a learner ASKING YOU a question — about you, your opinion, your ` +
+  `language, or anything else (e.g. "do you speak Russian?", "and you?", "what about you?", "do you like it?") ` +
+  `— is NOT clarify. Treat it as ok/minor and ANSWER it like a real partner. When unsure between clarify and ` +
+  `a real reply, prefer ok and answer.\n` +
   `- "ok": communicates the meaning; small slips fine.\n` +
   `- "minor": understandable but with a noticeable slip (still continue).\n` +
   `- "gross": ONLY a serious GRAMMAR/vocabulary error that breaks the English. Do NOT use gross for ` +
@@ -507,6 +512,8 @@ const BASE_EVAL_SYSTEM =
   `If ok/minor: produce "next_question" — a natural SHORT follow-up (speakable, ~max 20 words) that ` +
   `DIRECTLY reacts to and builds on what the learner just said (reference a detail they mentioned), ` +
   `continuing the same scenario like a real person. Also a suggested answer for it.\n` +
+  `If the learner asks whether you speak Russian/their language, warmly say you are their English-speaking ` +
+  `partner and gently keep the conversation going in English.\n` +
   `For ok/minor/gross ALWAYS include NON-EMPTY "corrected": the learner's answer rewritten in correct, ` +
   `natural English keeping their meaning (if already correct, return it unchanged). For clarify/skip set corrected="".\n` +
   `If gross: "error_reason" is REQUIRED and NON-EMPTY — in RUSSIAN, 1–2 specific sentences naming what exactly ` +
