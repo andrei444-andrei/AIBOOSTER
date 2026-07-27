@@ -42,8 +42,23 @@ struct APIClient {
         return try await send(path: path, method: "POST", body: data)
     }
 
+    func patch<T: Decodable, Body: Encodable>(
+        _ path: String,
+        body: Body,
+        as _: T.Type = T.self
+    ) async throws -> T {
+        let data = try JSONEncoder().encode(body)
+        return try await send(path: path, method: "PATCH", body: data)
+    }
+
     private func send<T: Decodable>(path: String, method: String, body: Data?) async throws -> T {
-        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        // Resolve `path` (which may carry a query string) relative to baseURL.
+        // appendingPathComponent would percent-encode "?" and "=", so use
+        // relative URL resolution instead.
+        guard let url = URL(string: path, relativeTo: baseURL) else {
+            throw APIError.invalidResponse
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
@@ -55,11 +70,15 @@ struct APIClient {
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
+            if http.statusCode >= 500 {
+                RemoteLog.error("HTTP \(http.statusCode) \(method) \(path)", route: path)
+            }
             throw APIError.http(status: http.statusCode, body: data)
         }
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
+            RemoteLog.error("decode failed \(path): \(error)", route: path)
             throw APIError.decoding(error)
         }
     }

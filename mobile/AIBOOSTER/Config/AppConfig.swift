@@ -6,7 +6,9 @@ enum AppConfig {
            let url = URL(string: raw) {
             return url
         }
-        return URL(string: "https://aibooster.vercel.app")!
+        // Production deploy. NB: the bare `aibooster.vercel.app` subdomain is
+        // squatted by an unrelated site — our app lives under this alias.
+        return URL(string: "https://aibooster-pied.vercel.app")!
     }
 
     static var bearerToken: String? {

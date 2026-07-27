@@ -1,5 +1,8 @@
 name: AIBOOSTER
 options:
+  # syncedFolder sources require XcodeGen 2.44.0+ and the xcode16_0 project format.
+  minimumXcodeGenVersion: "2.44.0"
+  projectFormat: xcode16_0
   deploymentTarget:
     iOS: "17.0"
   developmentLanguage: ru
@@ -19,16 +22,32 @@ targets:
     type: application
     platform: iOS
     sources:
+      # Xcode 16 synchronized folder: new files on disk (e.g. after git pull)
+      # appear in the project automatically — no regenerate / "Add Files" needed.
       - path: AIBOOSTER
+        type: syncedFolder
+    # Explicit Info.plist (XcodeGen generates it from these properties) so the
+    # background-audio mode and mic permission are reliably present.
+    info:
+      path: AIBOOSTER-Info.plist
+      properties:
+        CFBundleDisplayName: AIBooster
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIBackgroundModes:
+          - audio
+        NSMicrophoneUsageDescription: "Доступ к микрофону нужен для голосового ввода сообщений в чате."
+        # Let the in-app browser open plain http:// sites. Scoped to web content
+        # only — the app's own API calls stay https-enforced.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsInWebContent: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: aibooster
         PRODUCT_NAME: AIBooster
         TARGETED_DEVICE_FAMILY: "1"
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: AIBooster
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
