@@ -62,6 +62,7 @@ struct HomeView: View {
             case .news: NewsView()
             case .chat: ChatSessionsView()
             case .english: EnglishView()
+            case .browser: BrowserView()
             }
         }
         .onAppear { appeared = true }

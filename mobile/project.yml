@@ -40,6 +40,10 @@ targets:
         UIBackgroundModes:
           - audio
         NSMicrophoneUsageDescription: "Доступ к микрофону нужен для голосового ввода сообщений в чате."
+        # Let the in-app browser open plain http:// sites. Scoped to web content
+        # only — the app's own API calls stay https-enforced.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsInWebContent: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: aibooster

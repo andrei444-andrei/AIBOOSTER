@@ -58,14 +58,20 @@ mobile/
         ├── Home/                          # home screen: feature tiles + animations
         │   ├── Feature.swift              # tile model + navigation routes
         │   └── HomeView.swift             # header, hero tile, "coming soon" grid
-        └── YouTubePodcasts/               # first feature — live feed + player
-            ├── YouTubePodcastsView.swift  # feed (list / empty / loading / error)
-            ├── PodcastsStore.swift        # feed state, polling, submit
-            ├── EpisodeRow.swift           # feed row
-            ├── EpisodeDetailView.swift    # player + transcript
-            ├── AddPodcastSheet.swift      # submit a YouTube URL
-            ├── AudioPlayer.swift          # AVPlayer wrapper
-            └── PodcastFormatting.swift    # shared formatters
+        ├── YouTubePodcasts/               # translated video podcasts + player
+        │   ├── YouTubePodcastsView.swift  # feed (list / empty / loading / error)
+        │   ├── PodcastsStore.swift        # feed state, polling, submit
+        │   ├── EpisodeRow.swift           # feed row
+        │   ├── EpisodeDetailView.swift    # player + transcript
+        │   ├── AddPodcastSheet.swift      # submit a YouTube URL
+        │   ├── AudioPlayer.swift          # AVPlayer wrapper (background audio)
+        │   └── PodcastFormatting.swift    # shared formatters
+        ├── News/                          # validated feed + inline AI deep-dive
+        ├── Chat/                          # sessions, SSE streaming, voice input
+        ├── English/                       # generated dialogues + bilingual player
+        └── Browser/                       # type a URL → fullscreen WKWebView
+            ├── BrowserView.swift          # address entry, recents, fullscreen cover
+            └── WebView.swift              # WKWebView wrapper (progress, _blank)
 ```
 
 > `Design/Theme.swift` mirrors the web UX Kit tokens (`app/globals.css`) — warm

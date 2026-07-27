@@ -27,6 +27,7 @@ enum Theme {
     static let info    = Color(hex: 0x185FA5)
     static let success = Color(hex: 0x3B6D11)
     static let warning = Color(hex: 0x854F0B)
+    static let browser = Color(hex: 0x6E56CF)
 
     enum Radius {
         static let sm: CGFloat = 6
