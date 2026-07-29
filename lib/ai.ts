@@ -43,8 +43,11 @@ export const MODELS = {
   DEEPSEEK_V3: "deepseek/deepseek-chat-v3.1",
   DEEPSEEK_R1: "deepseek/deepseek-reasoner-v3.1",
   // Image generation — через /v1/images/generations endpoint
+  IMAGEN_4_ULTRA: "google/imagen-4.0-ultra-generate-001",
   IMAGEN_4: "google/imagen-4.0-generate-001",
   IMAGEN_4_FAST: "google/imagen-4.0-fast-generate-001",
+  FLUX_PRO_ULTRA: "flux-pro/v1.1-ultra",
+  FLUX_2_PRO: "blackforestlabs/flux-2-pro",
   FLUX_PRO: "flux-pro/v1.1",
   DALL_E_3: "dall-e-3",
 } as const;

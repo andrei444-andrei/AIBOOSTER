@@ -119,22 +119,40 @@ export const MODEL_OPTIONS: ModelOption[] = [
   },
   // Image generation
   {
+    id: MODELS.IMAGEN_4_ULTRA,
+    label: "Imagen 4 Ultra",
+    vendor: "Google",
+    multimodal: false,
+    tier: "deep",
+    reasoning: false,
+    description: "Флагман Google для генерации картинок. Максимум деталей и текста.",
+  },
+  {
+    id: MODELS.FLUX_2_PRO,
+    label: "Flux 2 Pro",
+    vendor: "BlackForestLabs",
+    multimodal: false,
+    tier: "deep",
+    reasoning: false,
+    description: "Новейший Flux 2. Топ по реализму, лицам и художественности.",
+  },
+  {
+    id: MODELS.FLUX_PRO_ULTRA,
+    label: "Flux Pro 1.1 Ultra",
+    vendor: "BlackForestLabs",
+    multimodal: false,
+    tier: "deep",
+    reasoning: false,
+    description: "Версия Flux 1.1 с большим разрешением и деталями.",
+  },
+  {
     id: MODELS.IMAGEN_4,
     label: "Imagen 4",
     vendor: "Google",
     multimodal: false,
     tier: "balanced",
     reasoning: false,
-    description: "Генерация изображений. Хорошо работает с текстом внутри картинки.",
-  },
-  {
-    id: MODELS.IMAGEN_4_FAST,
-    label: "Imagen 4 Fast",
-    vendor: "Google",
-    multimodal: false,
-    tier: "fast",
-    reasoning: false,
-    description: "Быстрая версия Imagen 4. Меньше времени, чуть проще картинка.",
+    description: "Стандартный Imagen 4. Быстрее, чем Ultra, но менее детальный.",
   },
   {
     id: MODELS.FLUX_PRO,
@@ -143,7 +161,16 @@ export const MODEL_OPTIONS: ModelOption[] = [
     multimodal: false,
     tier: "balanced",
     reasoning: false,
-    description: "Реалистичные сцены, лица, типографика. Эталон 2025.",
+    description: "Эталонный Flux 1.1. Хороший реализм при средней скорости.",
+  },
+  {
+    id: MODELS.IMAGEN_4_FAST,
+    label: "Imagen 4 Fast",
+    vendor: "Google",
+    multimodal: false,
+    tier: "fast",
+    reasoning: false,
+    description: "Быстрая версия Imagen 4. Меньше времени, проще картинка.",
   },
   {
     id: MODELS.DALL_E_3,
@@ -158,8 +185,11 @@ export const MODEL_OPTIONS: ModelOption[] = [
 
 /** Модели, которые работают через /v1/images/generations (а не chat/completions). */
 const IMAGE_MODEL_IDS = new Set<string>([
+  MODELS.IMAGEN_4_ULTRA,
   MODELS.IMAGEN_4,
   MODELS.IMAGEN_4_FAST,
+  MODELS.FLUX_2_PRO,
+  MODELS.FLUX_PRO_ULTRA,
   MODELS.FLUX_PRO,
   MODELS.DALL_E_3,
 ]);
@@ -306,7 +336,7 @@ export const DEFAULT_CATEGORY_ROUTES: CategoryRoute[] = [
   { category: "code",     model: MODELS.CLAUDE_OPUS,    reasoning_effort: null,   max_tokens: 8000 },
   { category: "analyze",  model: MODELS.GEMINI_PRO,     reasoning_effort: null,   max_tokens: 8000 },
   { category: "strategy", model: MODELS.GPT_5,          reasoning_effort: "high", max_tokens: 8000 },
-  { category: "image",    model: MODELS.IMAGEN_4,       reasoning_effort: null,   max_tokens: 0 },
+  { category: "image",    model: MODELS.IMAGEN_4_ULTRA, reasoning_effort: null,   max_tokens: 0 },
 ];
 
 // ─── Markdown-блоки ──────────────────────────────────────────────────
