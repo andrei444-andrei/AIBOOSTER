@@ -1,4 +1,4 @@
-import { checkAdminTokenValue } from "@/lib/auth";
+import { resolveAdminAuth } from "@/lib/auth";
 import { introspect, readTablePage, type LiveTable, type TablePage } from "@/lib/introspect";
 
 export const dynamic = "force-dynamic";
@@ -42,8 +42,9 @@ const code: React.CSSProperties = {
 
 export default async function AdminPage({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams;
-  const token = pickStr(sp.token);
-  const auth = checkAdminTokenValue(token);
+  const queryToken = pickStr(sp.token);
+  const { auth, token } = await resolveAdminAuth(queryToken);
+  const loginError = pickStr(sp.login_error);
 
   if (!auth.ok) {
     return (
@@ -51,18 +52,23 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
         <h1>AIBOOSTER · /admin</h1>
         <div style={card}>
           <p style={{ marginTop: 0 }}>
-            Доступ закрыт: <b>{auth.reason}</b>.
+            Доступ закрыт: <b>{loginError ?? auth.reason}</b>.
           </p>
           {auth.status === 503 ? (
             <p style={{ opacity: 0.7 }}>
               Задайте переменную окружения <span style={code}>ADMIN_TOKEN</span> на сервере.
             </p>
           ) : (
-            <form method="get" style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <form
+              method="post"
+              action="/api/admin/login?next=/admin"
+              style={{ display: "flex", gap: 8, marginTop: 8 }}
+            >
               <input
                 type="password"
                 name="token"
                 placeholder="admin token"
+                autoComplete="current-password"
                 style={{
                   flex: 1,
                   padding: "0 12px",
@@ -95,6 +101,9 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               </button>
             </form>
           )}
+          <p style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+            После ввода токен запоминается в httpOnly cookie на год — больше вводить не придётся.
+          </p>
         </div>
       </div>
     );

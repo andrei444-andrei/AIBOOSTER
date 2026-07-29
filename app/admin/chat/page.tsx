@@ -1,4 +1,4 @@
-import { checkAdminTokenValue } from "@/lib/auth";
+import { resolveAdminAuth } from "@/lib/auth";
 import { getSettings } from "@/lib/chat";
 import { listRoutes } from "@/lib/routing-config";
 import { ChatSettingsForm } from "./ChatSettingsForm";
@@ -29,21 +29,22 @@ const code: React.CSSProperties = {
 
 export default async function AdminChatPage({ searchParams }: { searchParams: Promise<SP> }) {
   const sp = await searchParams;
-  const token = pickStr(sp.token);
-  const auth = checkAdminTokenValue(token);
+  const queryToken = pickStr(sp.token);
+  const { auth, token } = await resolveAdminAuth(queryToken);
+  const loginError = pickStr(sp.login_error);
 
   if (!auth.ok) {
     return (
       <div style={wrap}>
         <h1>AIBOOSTER · /admin/chat</h1>
         <div style={card}>
-          <p>Доступ закрыт: <b>{auth.reason}</b>.</p>
+          <p>Доступ закрыт: <b>{loginError ?? auth.reason}</b>.</p>
           {auth.status === 503 ? (
             <p style={{ opacity: 0.7 }}>
               Задайте переменную окружения <span style={code}>ADMIN_TOKEN</span> на сервере.
             </p>
           ) : (
-            <form method="get" style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <form method="post" action="/api/admin/login?next=/admin/chat" style={{ display: "flex", gap: 8, marginTop: 8 }}>
               <input
                 type="password"
                 name="token"

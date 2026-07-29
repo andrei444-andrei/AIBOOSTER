@@ -45,8 +45,18 @@ export const GmailAdapter: Adapter<GmailCreds, GmailCursor> = {
   kind: "gmail",
   defaultIntervalSec: 120,
 
-  async sync(args: SyncArgs<GmailCreds, GmailCursor>): Promise<SyncResult<GmailCursor>> {
-    const accessToken = await ensureAccessToken(args.creds);
+  async sync(args: SyncArgs<GmailCreds, GmailCursor>): Promise<SyncResult<GmailCursor, GmailCreds>> {
+    const ensured = await ensureAccessToken(args.creds);
+    const accessToken = ensured.accessToken;
+    // Если рефрешили — креды надо записать обратно, иначе на каждом синке
+    // Google будет дёргаться по refresh_token. Не критично, но шумно и медленно.
+    const newCreds: GmailCreds | undefined = ensured.refreshed
+      ? {
+          ...args.creds,
+          access_token: ensured.accessToken,
+          access_token_expires_at: ensured.expiresAt ?? undefined,
+        }
+      : undefined;
     const startHistoryId = args.cursor?.history_id;
 
     // Шаг 1: получаем список id'ов писем для обработки.
@@ -133,6 +143,7 @@ export const GmailAdapter: Adapter<GmailCreds, GmailCursor> = {
 
     return {
       newCursor: finalCursor,
+      newCreds,
       fetched,
       stats: {
         considered: messageIds.length,
@@ -145,17 +156,37 @@ export const GmailAdapter: Adapter<GmailCreds, GmailCursor> = {
 
 // --- HTTP к Gmail/OAuth -----------------------------------------------------
 
-async function ensureAccessToken(creds: GmailCreds): Promise<string> {
+interface EnsuredAccessToken {
+  accessToken: string;
+  // true — мы только что получили токен через refresh_token (надо сохранить
+  // в БД); false — токен уже был в creds и ещё свежий.
+  refreshed: boolean;
+  // ISO-время истечения нового access_token, если только что рефрешили. Иначе
+  // — то, что лежало в creds (или undefined).
+  expiresAt: string | null;
+}
+
+async function ensureAccessToken(creds: GmailCreds): Promise<EnsuredAccessToken> {
   // Если есть валидный access_token — используем как есть.
   if (creds.access_token && creds.access_token_expires_at) {
     const exp = Date.parse(creds.access_token_expires_at);
     if (Number.isFinite(exp) && exp - Date.now() > 60_000) {
-      return creds.access_token;
+      return {
+        accessToken: creds.access_token,
+        refreshed: false,
+        expiresAt: creds.access_token_expires_at,
+      };
     }
   }
   if (creds.access_token && !creds.refresh_token) {
-    // Нет рефреша — отдаём что есть, может ещё жив.
-    return creds.access_token;
+    // Нет рефреша — отдаём что есть, может ещё жив. Если 401 на gmail.api —
+    // упадём дальше и source будет помечен error; пользователь увидит
+    // «переподключите Google» и пройдёт OAuth заново.
+    return {
+      accessToken: creds.access_token,
+      refreshed: false,
+      expiresAt: creds.access_token_expires_at ?? null,
+    };
   }
   if (!creds.refresh_token) {
     throw new Error("gmail creds missing both access_token and refresh_token");
@@ -183,7 +214,10 @@ async function ensureAccessToken(creds: GmailCreds): Promise<string> {
     throw new Error(`google token refresh failed: ${res.status} ${txt.slice(0, 200)}`);
   }
   const j = (await res.json()) as { access_token: string; expires_in?: number };
-  return j.access_token;
+  const expiresAt = j.expires_in
+    ? new Date(Date.now() + j.expires_in * 1000).toISOString()
+    : null;
+  return { accessToken: j.access_token, refreshed: true, expiresAt };
 }
 
 async function fetchHistory(
