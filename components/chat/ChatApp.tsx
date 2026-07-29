@@ -225,85 +225,203 @@ function readAsBase64(file: File): Promise<string> {
   });
 }
 
-// ─── Голосовой ввод (MediaRecorder → /api/transcribe) ────────────────
+// ─── Голосовой ввод ──────────────────────────────────────────────────
+//
+// Стратегия:
+//   1) Web Speech API (browser-native): live-распознавание, interim + final
+//      результаты приходят по мере произнесения. Доступно в Chrome,
+//      Safari 14.1+, Edge. Работает быстро, бесплатно (использует
+//      встроенные движки браузера/Google).
+//   2) Fallback на MediaRecorder → /api/transcribe (Whisper): one-shot,
+//      для браузеров без Web Speech API (Firefox по умолчанию).
+//
+// onFinal — финализированный кусок речи. UI доклеивает к input.
+// interimText — то что распозналось но ещё может уточниться. Отображается
+// серым "призраком" под input — пользователь видит что речь распознаётся
+// в реальном времени.
 
 interface VoiceState {
   recording: boolean;
   busy: boolean;
   error: string | null;
+  /** Текущий interim-результат: то, что распозналось но ещё может уточниться. */
+  interimText: string;
+  /** true, если используется live-режим (Web Speech API). false — Whisper one-shot. */
+  live: boolean;
   start: () => Promise<void>;
   stop: () => void;
   toggle: () => void;
 }
 
-function useVoiceInput(onText: (text: string) => void): VoiceState {
+// Браузерные типы для Web Speech API — TS не включает их в lib.dom по умолчанию.
+interface SpeechRecognitionResultLike {
+  isFinal: boolean;
+  0: { transcript: string };
+}
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: ArrayLike<SpeechRecognitionResultLike>;
+}
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((e: { error?: string; message?: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+}
+interface SpeechRecognitionCtor {
+  new (): SpeechRecognitionLike;
+}
+function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+function useVoiceInput(onFinal: (text: string) => void): VoiceState {
+  // Whisper-флоу
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  // Web Speech флоу
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const finalBufferRef = useRef<string>("");
+
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [interimText, setInterimText] = useState("");
 
-  const stop = useCallback(() => {
-    try {
-      recorderRef.current?.stop();
-    } catch {
-      // Уже стоп — игнорируем.
-    }
-  }, []);
+  // Используем live-режим, если Web Speech API доступен.
+  const hasLive = typeof window !== "undefined" && getSpeechRecognitionCtor() !== null;
 
-  const start = useCallback(async () => {
-    setError(null);
+  // ── Whisper fallback ────────────────────────────────────────────────
+  const startWhisper = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("Микрофон не поддерживается этим браузером");
       return;
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm")
-          ? "audio/webm"
-          : "";
-      const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-      chunksRef.current = [];
-      mr.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      mr.onstop = async () => {
-        setRecording(false);
-        streamRef.current?.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-        const blob = new Blob(chunksRef.current, { type: chunksRef.current[0]?.type || "audio/webm" });
-        if (blob.size === 0) return;
-        setBusy(true);
-        try {
-          const fd = new FormData();
-          fd.append("audio", blob, "voice.webm");
-          fd.append("language", "ru");
-          const r = await fetch("/api/transcribe", { method: "POST", body: fd });
-          const j = await r.json();
-          if (!r.ok) {
-            throw new Error(j?.error?.message ?? `HTTP ${r.status}`);
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    streamRef.current = stream;
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+    const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    chunksRef.current = [];
+    mr.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    mr.onstop = async () => {
+      setRecording(false);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      const blob = new Blob(chunksRef.current, { type: chunksRef.current[0]?.type || "audio/webm" });
+      if (blob.size === 0) return;
+      setBusy(true);
+      try {
+        const fd = new FormData();
+        fd.append("audio", blob, "voice.webm");
+        fd.append("language", "ru");
+        const r = await fetch("/api/transcribe", { method: "POST", body: fd });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j?.error?.message ?? `HTTP ${r.status}`);
+        const text: string = (j.text ?? "").trim();
+        if (text) onFinal(text);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    };
+    mr.start();
+    recorderRef.current = mr;
+  }, [onFinal]);
+
+  // ── Live (Web Speech API) ───────────────────────────────────────────
+  const startLive = useCallback(() => {
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) {
+      setError("Live-распознавание недоступно");
+      return;
+    }
+    const r = new Ctor();
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = "ru-RU";
+    finalBufferRef.current = "";
+    r.onresult = (e) => {
+      let interim = "";
+      // Проходим только по новым результатам с e.resultIndex.
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        const t = res[0].transcript;
+        if (res.isFinal) {
+          // Финализированный кусок — отдаём наверх и копим локально для очистки interim.
+          const piece = t.trim();
+          if (piece) {
+            finalBufferRef.current += (finalBufferRef.current ? " " : "") + piece;
+            onFinal(piece);
           }
-          const text: string = (j.text ?? "").trim();
-          if (text) onText(text);
-        } catch (err) {
-          setError(err instanceof Error ? err.message : String(err));
-        } finally {
-          setBusy(false);
+        } else {
+          interim += t;
         }
-      };
-      mr.start();
-      recorderRef.current = mr;
-      setRecording(true);
+      }
+      setInterimText(interim);
+    };
+    r.onerror = (e) => {
+      const code = e.error ?? "unknown";
+      // 'no-speech' — нормальный таймаут тишины, не показываем как ошибку
+      if (code !== "no-speech" && code !== "aborted") {
+        setError(`Ошибка распознавания: ${code}`);
+      }
+    };
+    r.onend = () => {
+      setRecording(false);
+      setInterimText("");
+      recognitionRef.current = null;
+    };
+    try {
+      r.start();
+      recognitionRef.current = r;
     } catch (err) {
-      // Permission-deny / NotAllowedError и проч.
+      setError(err instanceof Error ? err.message : "Не удалось запустить распознавание");
+    }
+  }, [onFinal]);
+
+  const start = useCallback(async () => {
+    setError(null);
+    setInterimText("");
+    setRecording(true);
+    try {
+      if (hasLive) startLive();
+      else await startWhisper();
+    } catch (err) {
       setError(err instanceof Error ? err.message : "Нет доступа к микрофону");
       setRecording(false);
     }
-  }, [onText]);
+  }, [hasLive, startLive, startWhisper]);
+
+  const stop = useCallback(() => {
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      /* noop */
+    }
+    try {
+      recorderRef.current?.stop();
+    } catch {
+      /* noop */
+    }
+  }, []);
 
   const toggle = useCallback(() => {
     if (recording) stop();
@@ -312,12 +430,13 @@ function useVoiceInput(onText: (text: string) => void): VoiceState {
 
   useEffect(() => {
     return () => {
+      try { recognitionRef.current?.abort(); } catch { /* noop */ }
       try { recorderRef.current?.stop(); } catch { /* noop */ }
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);
 
-  return { recording, busy, error, start, stop, toggle };
+  return { recording, busy, error, interimText, live: hasLive, start, stop, toggle };
 }
 
 // ─── Форматирование ──────────────────────────────────────────────────
@@ -1469,11 +1588,25 @@ function Composer({
           ref={textareaRef}
           className={styles.textarea}
           rows={1}
-          placeholder="Спросите что-нибудь… (Enter — отправить, Shift+Enter — новая строка)"
+          placeholder={
+            voice.recording
+              ? "Слушаю… говорите. Или нажмите ⏹ чтобы остановить."
+              : "Спросите что-нибудь… (Enter — отправить, Shift+Enter — новая строка)"
+          }
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
         />
+        {/* Interim-результат Web Speech API: серый «призрак» того, что распознаётся
+            в реальном времени. Финализованные куски доклеиваются в input. */}
+        {voice.recording && voice.live && voice.interimText && (
+          <div className={styles.voiceInterim} aria-live="polite">
+            {voice.interimText}
+          </div>
+        )}
+        {voice.error && (
+          <div className={styles.voiceError}>{voice.error}</div>
+        )}
         <div className={styles.composerTools}>
           <button
             type="button"
@@ -1498,6 +1631,10 @@ function Composer({
             }}
           />
 
+          <ModeSelector value={selectionValue} onChange={onChangeSelection} disabled={sending} />
+
+          <div className={styles.toolsSpacer} />
+
           <button
             type="button"
             className={`${styles.iconBtn} ${voice.recording ? styles.iconBtnRecording : ""} ${voice.busy ? styles.iconBtnBusy : ""}`}
@@ -1508,9 +1645,13 @@ function Composer({
             aria-pressed={voice.recording}
           >
             {voice.busy ? (
-              // спиннер пока идёт транскрипция
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden className={styles.spinner}>
                 <path d="M12 2 v4 M12 18 v4 M2 12 h4 M18 12 h4 M4.93 4.93 l2.83 2.83 M16.24 16.24 l2.83 2.83 M4.93 19.07 l2.83 -2.83 M16.24 7.76 l2.83 -2.83" strokeLinecap="round" />
+              </svg>
+            ) : voice.recording ? (
+              // во время записи показываем «стоп»-квадрат
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                <rect x="6" y="6" width="12" height="12" rx="2" />
               </svg>
             ) : (
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1522,10 +1663,6 @@ function Composer({
             )}
           </button>
 
-          <ModeSelector value={selectionValue} onChange={onChangeSelection} disabled={sending} />
-
-          <div className={styles.toolsSpacer} />
-
           {sending ? (
             <button type="button" className={`${styles.sendBtn} ${styles.sendBtnStop}`} onClick={onStop}>
               <span className={styles.sendBtnIcon}>■</span>
@@ -1535,7 +1672,12 @@ function Composer({
             <button
               type="button"
               className={styles.sendBtn}
-              onClick={onSend}
+              onClick={() => {
+                // Если идёт запись — остановим её перед отправкой, чтобы
+                // финальный сегмент успел доехать.
+                if (voice.recording) voice.stop();
+                onSend();
+              }}
               disabled={!input.trim() && attachments.length === 0}
             >
               <span>Отправить</span>
