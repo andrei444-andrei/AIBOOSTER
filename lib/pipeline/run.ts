@@ -41,7 +41,17 @@ import { uploadMp3 } from "./storage";
 import { generateVideoMeta } from "./summary";
 
 const MAX_DURATION_SEC = 60 * 60;
-const MAX_SEGMENTS = 1000;
+// Потолок стоимости пайплайна. Считаем ЧАНКИ, а не реплики субтитров:
+// с переходом на chunk-level перевод (~3 мин речи на чанк) единица работы —
+// это чанк, а YouTube-реплика больше ничего не стоит. Раньше здесь стоял
+// лимит на реплики, и видео на час (~1700 реплик по 1-3 секунды) отбивалось,
+// хотя реально давало всего ~20 чанков.
+//
+// Чанк не короче CHUNK_MIN_MS, поэтому 40 чанков ≈ 2 часа таймлайна — вдвое
+// больше MAX_DURATION_SEC. Это осознанный запас: длину видео ограничивает
+// MAX_DURATION_SEC, а этот лимит страхует случай, когда Apify не сообщил
+// длительность и проверить длину было нечем.
+const MAX_CHUNKS = 40;
 
 // Голоса ElevenLabs для разных спикеров диалога. A → дефолт (хост / первый
 // говорящий), B → контрастный голос (гость / собеседник), дальше по списку.
@@ -107,10 +117,14 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
       `видео слишком длинное: ${Math.round(tx.duration / 60)} мин (лимит 60)`,
     );
   }
-  if (tx.segments.length > MAX_SEGMENTS) {
+  // Группируем до записи в БД: чанки — это чистый CPU поверх уже скачанного
+  // транскрипта, зато отбитая работа не оставляет за собой сотни строк.
+  const chunks = chunkSourceSegments(tx.segments);
+  if (chunks.length > MAX_CHUNKS) {
     throw new Error(
-      `слишком много сегментов: ${tx.segments.length} (лимит ${MAX_SEGMENTS}). ` +
-        `Vercel-функция не успеет за 5 минут. Возьми видео покороче (обычно ≤ 40 мин).`,
+      `транскрипт разбился на ${chunks.length} кусков (лимит ${MAX_CHUNKS}) — ` +
+        `Vercel-функция не успеет за 5 минут. Обычно так выходит, если у видео ` +
+        `рваные субтитры; попробуй другое видео или ролик покороче.`,
     );
   }
   await updateJobProgress({
@@ -136,9 +150,8 @@ async function runPipeline(job: JobRow, work: string): Promise<void> {
     })),
   );
 
-  // 2. Группировка исходных сегментов в чанки (~3 мин на естественных паузах).
+  // 2. Чанки (~3 мин на естественных паузах) собраны выше, до гварда.
   await updateJobProgress({ id: job.id, stage: "translate", progress: 32 });
-  const chunks = chunkSourceSegments(tx.segments);
 
   // 3. Перевод каждого чанка цельным абзацем — параллельно, чтобы не ждать
   // 10+ HTTP-запросов последовательно для длинных видео.
@@ -349,6 +362,12 @@ interface SourceChunk {
 
 const CHUNK_MAX_MS = 180_000;
 const BREAK_GAP_MS = 1_000;
+// Пауза рвёт чанк только если он уже набрал две минуты — тогда чанк выходит
+// 2-3 минуты, как и задумано выше. Без этого порога любая заминка говорящего
+// (а их в живой речи десятки за час) резала бы час видео на полсотни огрызков
+// вместо ~20 чанков: перевод терял бы контекст, и каждый огрызок стоил бы
+// отдельного запроса к LLM и TTS.
+const CHUNK_MIN_MS = 120_000;
 
 function chunkSourceSegments(segments: SegmentInput[]): SourceChunk[] {
   const chunks: SourceChunk[] = [];
@@ -368,7 +387,9 @@ function chunkSourceSegments(segments: SegmentInput[]): SourceChunk[] {
     }
     const gap = s.start_ms - current.end_ms;
     const wouldBeDuration = s.end_ms - current.start_ms;
-    if (gap > BREAK_GAP_MS || wouldBeDuration > CHUNK_MAX_MS) {
+    const currentDuration = current.end_ms - current.start_ms;
+    const breakOnPause = gap > BREAK_GAP_MS && currentDuration >= CHUNK_MIN_MS;
+    if (breakOnPause || wouldBeDuration > CHUNK_MAX_MS) {
       chunks.push(current);
       current = {
         start_ms: s.start_ms,
