@@ -48,21 +48,38 @@ export async function fetchTranscript(videoUrl: string): Promise<Transcript> {
       ? (first.data as unknown[])
       : (data as unknown[]);
 
-  const segments: TranscriptSegment[] = [];
-  rawSegments.forEach((raw, idx) => {
+  // Сначала собираем начала и длительности, конец считаем вторым проходом:
+  // когда актор не отдаёт dur, конец реплики — это начало следующей. Плоская
+  // заглушка (start + 2) в таком случае оставляет между репликами дыры, а
+  // дыра длиннее секунды читается дальше по пайплайну как пауза говорящего
+  // и рвёт чанк. На видео с редкими репликами это превращало каждую реплику
+  // в отдельный чанк.
+  const parsed: Array<{ start: number; dur: number; text: string }> = [];
+  rawSegments.forEach((raw) => {
     if (!raw || typeof raw !== "object") return;
     const r = raw as Record<string, unknown>;
     const text = String(r.text ?? r.transcript ?? "").trim();
     const start = toSeconds(r.start ?? r.offset ?? r.startTime);
     const dur = toSeconds(r.dur ?? r.duration ?? r.length);
     if (!text || !Number.isFinite(start)) return;
-    const endSec = Number.isFinite(dur) && dur > 0 ? start + dur : start + 2;
-    segments.push({
+    parsed.push({ start, dur, text });
+  });
+  parsed.sort((a, b) => a.start - b.start);
+
+  const segments: TranscriptSegment[] = parsed.map((p, idx) => {
+    const next = parsed[idx + 1];
+    const endSec =
+      Number.isFinite(p.dur) && p.dur > 0
+        ? p.start + p.dur
+        : next
+          ? Math.max(next.start, p.start + 0.5)
+          : p.start + 2;
+    return {
       idx,
-      start_ms: Math.round(start * 1000),
+      start_ms: Math.round(p.start * 1000),
       end_ms: Math.round(endSec * 1000),
-      text,
-    });
+      text: p.text,
+    };
   });
 
   if (segments.length === 0) {
