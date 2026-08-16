@@ -33,7 +33,7 @@ export async function fetchTranscript(videoUrl: string): Promise<Transcript> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`apify failed ${res.status}: ${text.slice(0, 400)}`);
+    throw new Error(explainApifyFailure(res.status, text));
   }
 
   const data = (await res.json()) as unknown;
@@ -77,6 +77,35 @@ export async function fetchTranscript(videoUrl: string): Promise<Transcript> {
       (first.language as string) || (first.transcriptLanguage as string) || null,
     segments,
   };
+}
+
+// Превращает отказ Apify в сообщение, по которому понятно, что делать.
+// Раньше в карточку задачи прилетал сырой JSON вида
+// `apify failed 403: {"error":{"type":"platform-feature-disabled",...}}` —
+// технически точно и совершенно бесполезно. Сам ответ Apify всё равно
+// уезжает в app_errors, так что для диагностики ничего не теряется.
+function explainApifyFailure(status: number, body: string): string {
+  const type = /"type"\s*:\s*"([^"]+)"/.exec(body)?.[1] ?? "";
+  const message = /"message"\s*:\s*"([^"]+)"/.exec(body)?.[1] ?? "";
+  const tail = ` [apify ${status}${type ? ` ${type}` : ""}]`;
+
+  if (/hard limit|usage limit|monthly usage/i.test(message) || type === "platform-feature-disabled") {
+    return (
+      "у Apify (источник субтитров) закончился месячный лимит. " +
+      "Пополни счёт или подними лимит в консоли Apify и нажми «Попробовать снова» — " +
+      "уже сделанная работа не пропадёт." + tail
+    );
+  }
+  if (status === 401 || status === 403) {
+    return "Apify не принял токен — проверь APIFY_TOKEN." + tail;
+  }
+  if (status === 429) {
+    return "Apify просит подождать — слишком много запросов подряд. Попробуй через пару минут." + tail;
+  }
+  if (status >= 500) {
+    return "Apify сейчас недоступен — это временно, нажми «Попробовать снова» позже." + tail;
+  }
+  return (message || "не удалось получить субтитры с YouTube") + tail;
 }
 
 function toSeconds(v: unknown): number {
