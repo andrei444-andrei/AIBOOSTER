@@ -34,6 +34,12 @@ interface JobDto {
   source: string;
   summary: string | null;
   chapters: Chapter[];
+  // Счётчики фрагментов (чанков ~3 мин речи). null, пока задача не в работе
+  // или уже готова. Длинное видео обрабатывается за несколько тиков крона,
+  // и «12 из 27» объясняет происходящее лучше, чем проценты.
+  chunks_total: number | null;
+  chunks_translated: number | null;
+  chunks_voiced: number | null;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -64,6 +70,28 @@ const STAGE_ORDER: Exclude<Stage, null>[] = ["download", "asr", "translate", "tt
 export default function JobView({ jobId }: { jobId: string }) {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  // Бампаем после ретрая, чтобы перезапустить остановившийся поллинг.
+  const [reloadKey, setReloadKey] = useState(0);
+
+  async function handleRetry() {
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/retry`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRetryError(body.error || `ошибка ${res.status}`);
+        return;
+      }
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      setRetryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   // Поллинг: каждые 2 сек, пока статус queued/running.
   useEffect(() => {
@@ -96,7 +124,7 @@ export default function JobView({ jobId }: { jobId: string }) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [jobId]);
+  }, [jobId, reloadKey]);
 
   if (!data && !fetchError) {
     return (
@@ -166,9 +194,32 @@ export default function JobView({ jobId }: { jobId: string }) {
               <code style={{ fontFamily: "var(--font-mono)" }}>{job.error_id}</code>
             </div>
           )}
-          <Link href="/tools/youtube-translate" style={{ display: "inline-block", marginTop: 14 }}>
-            <Button variant="primary">Попробовать снова</Button>
-          </Link>
+          <div
+            style={{
+              marginTop: 14,
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            {/* Ретрай продолжает с уже готовых фрагментов — заново платить
+                за перевод и озвучку не придётся. */}
+            <Button variant="primary" onClick={handleRetry} loading={retrying}>
+              {retrying ? "Перезапускаем…" : "Попробовать снова"}
+            </Button>
+            <Link
+              href="/tools/youtube-translate"
+              style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}
+            >
+              к библиотеке
+            </Link>
+          </div>
+          {retryError && (
+            <div style={{ marginTop: 10, fontSize: 12, color: "var(--danger)" }}>
+              {retryError}
+            </div>
+          )}
         </Card>
       )}
 
@@ -237,8 +288,25 @@ function Hero({ job }: { job: JobDto }) {
   );
 }
 
+// Длинное видео режется на фрагменты ~3 минуты речи и обрабатывается за
+// несколько тиков крона. Показываем счётчик — иначе на часовом ролике
+// прогрессбар подолгу стоит на месте и выглядит зависшим.
+function chunkProgressNote(job: JobDto): string | null {
+  const total = job.chunks_total;
+  if (!total) return null;
+  if (job.stage === "translate") {
+    return `переведено ${job.chunks_translated ?? 0} из ${total} фрагментов`;
+  }
+  if (job.stage === "tts") {
+    return `озвучено ${job.chunks_voiced ?? 0} из ${total} фрагментов`;
+  }
+  if (job.stage === "mux") return `${total} фрагментов готовы, собираем трек`;
+  return null;
+}
+
 function ProgressCard({ job }: { job: JobDto }) {
   const currentIdx = job.stage ? STAGE_ORDER.indexOf(job.stage) : -1;
+  const chunkNote = chunkProgressNote(job);
   return (
     <Card padded style={{ marginTop: 20 }}>
       <div
@@ -253,6 +321,12 @@ function ProgressCard({ job }: { job: JobDto }) {
           : "Обрабатываем"}
         {" · "}
         <strong style={{ color: "var(--text)" }}>{job.progress}%</strong>
+        {chunkNote && (
+          <>
+            {" · "}
+            {chunkNote}
+          </>
+        )}
       </div>
       <div
         style={{

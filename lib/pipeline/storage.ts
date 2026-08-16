@@ -4,7 +4,7 @@
 //   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
 //   R2_PUBLIC_BASE — публичный домен бакета (без trailing slash).
 
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 
 function required(name: string): string {
   const v = process.env[name];
@@ -54,4 +54,18 @@ export async function uploadMp3(key: string, body: Buffer): Promise<string> {
     );
   }
   return `${publicBase}/${key}`;
+}
+
+// Забирает объект обратно из R2. Нужен на стадии mux: чанки озвучивались
+// в предыдущих тиках крона и лежат в R2, а /tmp у той функции давно стёрт.
+// Читаем через S3 API, а не по публичному URL — чтобы не зависеть от
+// кеша CDN на свежезалитых объектах.
+export async function downloadObject(key: string): Promise<Buffer> {
+  const bucket = required("R2_BUCKET");
+  const res = await client().send(
+    new GetObjectCommand({ Bucket: bucket, Key: key }),
+  );
+  if (!res.Body) throw new Error(`R2 download failed: empty body for ${key}`);
+  const bytes = await res.Body.transformToByteArray();
+  return Buffer.from(bytes);
 }

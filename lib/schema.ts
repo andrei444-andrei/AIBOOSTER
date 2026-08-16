@@ -246,6 +246,42 @@ export const TABLES: TableDef[] = [
       { name: "translated_text", description: "Перевод этой же фразы на целевой язык." },
     ],
   },
+  {
+    name: "video_translation_chunks",
+    description:
+      "Рабочие единицы пайплайна перевода: кусок речи ~3 минуты. Ключевая таблица для резюмируемости — Vercel-функция живёт максимум 800 секунд, длинное видео за один заход не обработать. Каждый чанк проходит перевод и озвучку независимо и сохраняется сюда, поэтому следующий тик крона продолжает с того места, где предыдущий не успел, а падение стоит один чанк, а не весь прогон.",
+    ddl: `CREATE TABLE IF NOT EXISTS video_translation_chunks (
+      job_id TEXT NOT NULL,
+      idx INTEGER NOT NULL,
+      start_ms INTEGER NOT NULL,
+      end_ms INTEGER NOT NULL,
+      source_text TEXT NOT NULL,
+      translated_text TEXT,
+      utterances TEXT,
+      audio_key TEXT,
+      audio_url TEXT,
+      audio_dur_ms INTEGER,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (job_id, idx)
+    )`,
+    columns: [
+      { name: "job_id", description: "FK на video_translation_jobs.id." },
+      { name: "idx", description: "Порядковый номер чанка (0..N). Задаёт порядок склейки итогового mp3." },
+      { name: "start_ms", description: "Начало чанка в ИСХОДНОМ таймлайне видео, миллисекунды." },
+      { name: "end_ms", description: "Конец чанка в исходном таймлайне, миллисекунды." },
+      { name: "source_text", description: "Склеенный текст оригинала за этот кусок (собран из субтитров YouTube на естественных паузах)." },
+      { name: "translated_text", description: "Готовый перевод куска цельным абзацем. NULL — ещё не переведён." },
+      { name: "utterances", description: "JSON-массив реплик [{speaker,text}] — результат перевода с разметкой говорящих. Для монолога один элемент со speaker=null." },
+      { name: "audio_key", description: "Ключ mp3 этого чанка в R2. NULL — ещё не озвучен. Наличие ключа = TTS для чанка оплачен и переделывать не надо." },
+      { name: "audio_url", description: "Публичный URL mp3 чанка." },
+      { name: "audio_dur_ms", description: "Реальная длительность озвученного чанка, миллисекунды. Из неё собирается таймлайн итогового подкаста." },
+      { name: "attempts", description: "Сколько раз чанк падал. На третьей неудаче валим всю job, чтобы не крутить вечный ретрай." },
+      { name: "error_message", description: "Текст последней ошибки по этому чанку." },
+      { name: "updated_at", description: "Время последнего изменения чанка (UTC)." },
+    ],
+  },
 
   // --- Модуль «Адаптеры»: системный pull контекста из внешних источников.
   //
@@ -1147,6 +1183,9 @@ export const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_vtj_cache ON video_translation_jobs (yt_video_id, target_lang, quality, status)`,
   `CREATE INDEX IF NOT EXISTS idx_vtj_queue ON video_translation_jobs (status, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_vts_job ON video_translation_segments (job_id, idx)`,
+  `CREATE INDEX IF NOT EXISTS idx_vtc_job ON video_translation_chunks (job_id, idx)`,
+  // Горячий запрос пайплайна: «дай следующие чанки, которым нужен перевод/озвучка».
+  `CREATE INDEX IF NOT EXISTS idx_vtc_todo ON video_translation_chunks (job_id, translated_text, audio_key)`,
 
   // Английский (генерируемые диалоги): очередь воркера + сегменты транскрипта.
   `CREATE INDEX IF NOT EXISTS idx_edj_queue ON english_dialogue_jobs (status, created_at)`,

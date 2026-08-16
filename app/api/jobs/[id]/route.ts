@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { logServerError } from "@/lib/logger";
 import { getJob, getSegments, updateJobPlayback, type WatchStatus } from "@/lib/jobs";
+import { getChunkStats } from "@/lib/chunks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,6 +28,14 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
         ? await getSegments(id)
         : [];
 
+    // Счётчики фрагментов — чтобы в прогрессе было видно «12 из 27», а не
+    // только проценты. На длинном видео это единственный честный ответ на
+    // вопрос «оно вообще движется?»: работа идёт несколько тиков крона.
+    const chunks =
+      job.status === "running" || job.status === "queued"
+        ? await getChunkStats(id)
+        : null;
+
     return NextResponse.json({
       job: {
         id: job.id,
@@ -48,6 +57,9 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
         source: job.source,
         summary: job.summary,
         chapters: parseChapters(job.chapters),
+        chunks_total: chunks?.total ?? null,
+        chunks_translated: chunks?.translated ?? null,
+        chunks_voiced: chunks?.voiced ?? null,
         created_at: job.created_at,
         updated_at: job.updated_at,
         finished_at: job.finished_at,
