@@ -1,6 +1,13 @@
-// Vercel Cron: каждую минуту забирает по одной queued-job и прогоняет
-// пайплайн (Apify → translate → TTS → mux → R2). Заменяет внешний worker —
-// больше не нужен отдельный контейнер на Railway/Fly.
+// Vercel Cron: каждую минуту разгребает очередь перевода видео (Apify →
+// translate → TTS → mux → R2). Заменяет внешний worker — больше не нужен
+// отдельный контейнер на Railway/Fly.
+//
+// Тик работает ПО БЮДЖЕТУ, а не «одна job за вызов». Пайплайн резюмируемый
+// (см. lib/pipeline/run.ts): job раскладывается на чанки, каждый обработанный
+// кусок сразу в БД. Тик делает столько, сколько влезает в maxDuration, и
+// выходит; недоделанная job остаётся в статусе running с недавним claimed_at,
+// поэтому этот же тик её повторно не возьмёт, а следующий — продолжит с того
+// места, где встали. Так обрабатываются видео любой длины.
 //
 // Аутентификация: Vercel автоматически отправляет Bearer-токен с CRON_SECRET,
 // мы его проверяем. См. https://vercel.com/docs/cron-jobs/manage-cron-jobs
@@ -12,9 +19,16 @@ import { logServerError } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 300; // 5 минут (Pro план)
+// 800 секунд — потолок Pro-плана для Vercel Functions (GA поверх fluid
+// compute). Мы платим за активный CPU, а пайплайн почти всё время ждёт
+// ответа aimlapi/ElevenLabs, так что длинное окно почти ничего не стоит.
+export const maxDuration = 800;
 
 const WORKER_ID = "vercel-cron";
+
+// Оставляем запас от maxDuration: пайплайн должен успеть аккуратно
+// дописать прогресс в БД и вернуть ответ, а не быть убитым на середине.
+const BUDGET_MS = (maxDuration - 40) * 1000;
 
 export async function GET(req: Request) {
   // Auth: если CRON_SECRET задан в env — проверяем Bearer, Vercel cron
@@ -32,19 +46,28 @@ export async function GET(req: Request) {
     }
   }
 
-  let job;
-  try {
-    job = await claimNextJob(WORKER_ID);
-  } catch (err) {
-    const error_id = await logServerError(err, "/api/cron/process-jobs", {
-      phase: "claim",
-    });
-    return NextResponse.json({ error: "claim failed", error_id }, { status: 500 });
+  const deadline = Date.now() + BUDGET_MS;
+  const processed: Array<{ job_id: string; finished: boolean; stage: string | null }> = [];
+
+  while (Date.now() < deadline) {
+    let job;
+    try {
+      job = await claimNextJob(WORKER_ID);
+    } catch (err) {
+      const error_id = await logServerError(err, "/api/cron/process-jobs", {
+        phase: "claim",
+      });
+      return NextResponse.json(
+        { error: "claim failed", error_id, processed },
+        { status: 500 },
+      );
+    }
+    if (!job) break;
+
+    // runJob сам ловит свои ошибки и пишет в app_errors через markJobError.
+    const res = await runJob(job, deadline);
+    processed.push({ job_id: job.id, finished: res.finished, stage: res.stage });
   }
 
-  if (!job) return NextResponse.json({ ok: true, picked: false });
-
-  // runJob сам ловит свои ошибки и пишет в app_errors через markJobError.
-  await runJob(job);
-  return NextResponse.json({ ok: true, picked: true, job_id: job.id });
+  return NextResponse.json({ ok: true, picked: processed.length > 0, processed });
 }

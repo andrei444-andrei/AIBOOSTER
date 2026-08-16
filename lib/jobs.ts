@@ -244,6 +244,12 @@ export async function getSegments(jobId: string): Promise<SegmentRow[]> {
   return res.rows as unknown as SegmentRow[];
 }
 
+// Сколько job может молчать, прежде чем мы считаем её брошенной и отдаём
+// другому тику. Живой пайплайн стучится в claimed_at после каждого чанка
+// (см. touchJobClaim), поэтому окно короткое: если функцию убили по таймауту
+// или она упала, работа возобновится через пару минут, а не через полчаса.
+const STALE_CLAIM_MS = 3 * 60 * 1000;
+
 // Атомарно забирает одну queued-job воркеру.
 // Возвращает null, если очередь пустая.
 export async function claimNextJob(workerId: string): Promise<JobRow | null> {
@@ -254,9 +260,8 @@ export async function claimNextJob(workerId: string): Promise<JobRow | null> {
   // libSQL/SQLite не поддерживает SELECT ... FOR UPDATE. Используем
   // UPDATE ... WHERE status='queued' AND id = (SELECT ... LIMIT 1)
   // в одном запросе — это атомарно для одного соединения.
-  // Дополнительно учитываем "зависшие": claimed_at старше 30 минут —
-  // считаем job брошенной и подбираем повторно.
-  const staleCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  // Дополнительно подбираем "зависшие": claimed_at давно не обновлялся.
+  const staleCutoff = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
 
   const pickRes = await db.execute({
     sql: `SELECT id FROM video_translation_jobs
@@ -269,10 +274,13 @@ export async function claimNextJob(workerId: string): Promise<JobRow | null> {
   const pick = pickRes.rows[0]?.id as string | undefined;
   if (!pick) return null;
 
+  // stage НЕ сбрасываем: подобранная running-job продолжает с той стадии,
+  // на которой её оборвало (перевод/озвучка уже лежат в чанках). 'download'
+  // ставим только новым job'ам, у которых стадии ещё нет.
   const upd = await db.execute({
     sql: `UPDATE video_translation_jobs
           SET status = 'running',
-              stage = 'download',
+              stage = COALESCE(stage, 'download'),
               claimed_at = ?,
               claimed_by = ?,
               updated_at = ?,
@@ -286,6 +294,45 @@ export async function claimNextJob(workerId: string): Promise<JobRow | null> {
     return claimNextJob(workerId);
   }
   return getJob(pick);
+}
+
+// Heartbeat: «я ещё жив, не отбирайте job». Зовётся пайплайном после каждого
+// обработанного чанка. Ошибку глотаем — пропущенный удар сердца не повод
+// ронять работу, максимум job подберёт другой тик и продолжит с чанков.
+export async function touchJobClaim(id: string): Promise<void> {
+  try {
+    const db = getDb();
+    const now = new Date().toISOString();
+    await db.execute({
+      sql: `UPDATE video_translation_jobs SET claimed_at = ?, updated_at = ? WHERE id = ?`,
+      args: [now, now, id],
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+// Возвращает упавшую (или зависшую) job в очередь. Прогресс по чанкам
+// сохраняется — переведённые и озвученные куски переделывать не нужно,
+// пайплайн доберёт только недостающие.
+export async function requeueJob(id: string): Promise<JobRow | null> {
+  await ensureSchema();
+  const db = getDb();
+  const now = new Date().toISOString();
+  const upd = await db.execute({
+    sql: `UPDATE video_translation_jobs
+          SET status = 'queued',
+              error_message = NULL,
+              error_id = NULL,
+              claimed_at = NULL,
+              claimed_by = NULL,
+              finished_at = NULL,
+              updated_at = ?
+          WHERE id = ? AND status IN ('error', 'cancelled', 'running')`,
+    args: [now, id],
+  });
+  if (upd.rowsAffected === 0) return null;
+  return getJob(id);
 }
 
 export async function updateJobProgress(args: {
