@@ -1,0 +1,863 @@
+/* ─── Внешний layout: 2 колонки — история чатов + основной чат.
+       Вкладывается внутрь AppShell .main (тот, что после глобального Sidebar). */
+
+.chatLayout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+}
+.chatSidebar {
+  border-right: var(--hairline-w) solid var(--border);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .chatLayout {
+    grid-template-columns: 1fr;
+  }
+  /* Sidebar превращается в drawer-меню. Закрытое состояние — слева за
+     экраном. Открытое — sliding in поверх контента. */
+  .chatSidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(86vw, 320px);
+    z-index: 80;
+    transform: translateX(-100%);
+    transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    box-shadow: 16px 0 48px rgba(0, 0, 0, 0.18);
+  }
+  .chatSidebarOpen {
+    transform: translateX(0);
+  }
+  .chatsBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    background: rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    animation: chatsBackdropFade 200ms ease-out;
+  }
+  @keyframes chatsBackdropFade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}
+
+/* Гамбургер на мобилке — открывает drawer с историей чатов. */
+.chatsHamburger {
+  display: none;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 0;
+  margin-right: 8px;
+}
+.chatsHamburger:hover {
+  background: var(--surface-hover, var(--surface));
+}
+.chatsHamburger:active {
+  background: var(--border);
+}
+@media (max-width: 720px) {
+  .chatsHamburger {
+    display: inline-flex;
+  }
+}
+
+/* ─── Внутри боковой панели чата ─────────────────────────────────── */
+
+.sessionsPanel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  padding: 12px;
+  gap: 8px;
+}
+
+.newBtn {
+  width: 100%;
+  height: 36px;
+  background: var(--surface);
+  color: var(--text);
+  border: var(--hairline-w) solid var(--border-strong);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 120ms var(--ease), border-color 120ms var(--ease);
+  flex-shrink: 0;
+}
+.newBtn:hover {
+  background: var(--bg-subtle);
+  border-color: var(--text);
+}
+
+.sessionsSection {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: 8px 8px 4px;
+}
+
+.sessions {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+
+.empty {
+  padding: 14px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.sessionItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  margin-bottom: 1px;
+  font-size: var(--text-sm);
+  position: relative;
+  transition: background 120ms var(--ease);
+  color: var(--text-secondary);
+}
+.sessionItem:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.sessionItem.active {
+  background: var(--bg-subtle);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.sessionTitle {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.delBtn {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 20px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  line-height: 1;
+  transition: opacity 120ms var(--ease), color 120ms var(--ease);
+}
+.sessionItem:hover .delBtn {
+  opacity: 1;
+}
+.delBtn:hover {
+  background: var(--bg-muted);
+  color: var(--danger);
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* ─── Шапка ──────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 32px;
+  border-bottom: var(--hairline-w) solid var(--border);
+  min-height: 56px;
+}
+
+.headerTitle {
+  flex: 1;
+  font-size: var(--text-md);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+/* ─── Селектор режима (Auto + Thinking/Pro/Judge/Image) ─────────── */
+
+.modeBar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-subtle);
+  border: var(--hairline-w) solid var(--border);
+  border-radius: 999px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.modeBar::-webkit-scrollbar {
+  display: none;
+}
+
+.modeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 160ms var(--ease);
+}
+
+.modeChip:hover:not(:disabled):not([data-active="true"]) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.modeChip[data-active="true"] {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.modeChip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modeIcon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.modeLabel {
+  font-size: var(--text-sm);
+}
+
+/* ─── Сообщения ─────────────────────────────────────────────────── */
+
+.scroller {
+  flex: 1;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.messages {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 40px 24px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+/* В пустом чате — welcome по центру вертикально. */
+.messagesEmpty {
+  min-height: 100%;
+  justify-content: center;
+}
+/* Пока ждём ответ — добавляем большой нижний padding, чтобы только что
+   отправленное user-сообщение могло «уехать» в верхнюю четверть scrollerа.
+   Когда ответ пришёл — padding снова обычный, нельзя проскроллить в пустоту. */
+.messagesWaiting {
+  padding-bottom: 70vh;
+}
+
+.welcome {
+  padding: 96px 12px;
+  text-align: center;
+  color: var(--text-secondary);
+  animation: fadeIn 400ms var(--ease-out);
+}
+.welcome h2 {
+  font-size: var(--text-2xl);
+  letter-spacing: -0.025em;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── User-сообщение: пузырь справа ─────────────────────────── */
+
+.msgUser {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  animation: msgIn 250ms var(--ease-out) both;
+}
+.userBubble {
+  /* fit-content: пузырь сжимается под текст и не схлопывается
+     до посимвольной ширины */
+  width: fit-content;
+  max-width: min(80%, 560px);
+  background: var(--bg-subtle);
+  border: var(--hairline-w) solid var(--border);
+  border-radius: 18px 18px 4px 18px;
+  padding: 12px 16px;
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  letter-spacing: -0.005em;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ─── Assistant-сообщение: статья по всей ширине, без аватара ─ */
+
+.msgAssistant {
+  animation: msgIn 280ms var(--ease-out) both;
+}
+.assistantBody {
+  font-size: var(--text-md);
+  line-height: 1.75;
+  color: var(--text);
+}
+
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.msgUser .attachments {
+  justify-content: flex-end;
+}
+
+.attachImage {
+  max-width: 240px;
+  max-height: 170px;
+  border-radius: var(--radius);
+  border: var(--hairline-w) solid var(--border);
+  object-fit: cover;
+}
+
+/* Картинки в assistant-сообщении (image-generation) — компактно. */
+.assistantImages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+  animation: fadeIn 300ms var(--ease-out);
+}
+.assistantImages .attachImage {
+  max-width: min(100%, 420px);
+  max-height: 420px;
+  width: auto;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+
+/* Веб-картинки от Perplexity (research-категория) — мелкая горизонтальная
+   сетка миниатюр, кликабельные → открывают источник в новой вкладке. */
+.assistantWebImages {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 14px 0 4px;
+  animation: fadeIn 300ms var(--ease-out);
+}
+.webImageLink {
+  display: block;
+  text-decoration: none;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: var(--hairline-w) solid var(--border);
+  background: var(--bg-subtle);
+  transition: transform 120ms var(--ease), border-color 120ms var(--ease);
+}
+.webImageLink:hover {
+  transform: translateY(-1px);
+  border-color: var(--text);
+  text-decoration: none;
+}
+.assistantWebImages .attachImage {
+  display: block;
+  width: 100%;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 0;
+  border: 0;
+  max-width: none;
+  max-height: none;
+}
+
+.attachFile {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: var(--hairline-w) solid var(--border);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  max-width: 320px;
+}
+.attachName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Индикатор «думаю» ─────────────────────────────────────────── */
+
+.thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+  letter-spacing: -0.005em;
+  padding: 4px 0;
+  animation: fadeIn 200ms var(--ease-out);
+}
+.thinkingDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: thinkingPulse 1.4s ease-in-out infinite;
+}
+@keyframes thinkingPulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+.thinkingText {
+  white-space: nowrap;
+}
+.thinkingEllipsis {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.thinkingEllipsis span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: ellipsisBlink 1.4s infinite var(--ease);
+}
+.thinkingEllipsis span:nth-child(2) { animation-delay: 0.2s; }
+.thinkingEllipsis span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes ellipsisBlink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+
+.streamCursor {
+  display: inline-block;
+  color: var(--text-muted);
+  animation: blink 1s steps(1) infinite;
+  margin-left: 1px;
+}
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+.msgError {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+}
+
+.msgRegen {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  background: transparent;
+  border: var(--hairline-w) solid var(--border-strong);
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 120ms var(--ease), color 120ms var(--ease);
+}
+.msgRegen:hover {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+
+/* ─── Бейдж под ответом ─────────────────────────────────────────── */
+
+.msgMeta {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  align-items: center;
+  animation: fadeIn 200ms var(--ease-out);
+}
+.metaChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--surface);
+  border: var(--hairline-w) solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+  transition: background 120ms var(--ease), border-color 120ms var(--ease);
+}
+.metaChip:hover {
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
+}
+.metaChipAuto {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.metaDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+/* ─── Error banner ───────────────────────────────────────────── */
+
+.errorBanner {
+  max-width: 800px;
+  margin: 0 auto 8px;
+  padding: 10px 14px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: var(--hairline-w) solid var(--danger);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.errorClose {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+/* ─── Composer ────────────────────────────────────────────────── */
+
+.composerOuter {
+  padding: 0 24px 20px;
+  background: var(--bg);
+}
+
+.composer {
+  position: relative;
+  max-width: 800px;
+  margin: 0 auto;
+  background: var(--surface);
+  border: var(--hairline-w) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 14px 14px 10px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease);
+}
+.composer:focus-within {
+  border-color: var(--text);
+  box-shadow: 0 0 0 3px rgba(31, 31, 30, 0.04), var(--shadow-sm);
+}
+.dragOver {
+  border-color: var(--text);
+  background: var(--bg-subtle);
+}
+
+.composerAttachments {
+  display: flex;
+  gap: 8px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  margin-bottom: 10px;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+.composerAttachments::-webkit-scrollbar {
+  height: 4px;
+}
+
+.composerChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 8px;
+  background: var(--bg-subtle);
+  border: var(--hairline-w) solid var(--border);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  max-width: 220px;
+  flex-shrink: 0;
+  animation: fadeIn 180ms var(--ease-out);
+}
+.composerChipImg {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.composerChipIcon {
+  font-size: 16px;
+}
+.composerChipName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composerChipX {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--text-muted);
+  padding: 0 4px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 120ms var(--ease), background 120ms var(--ease);
+}
+.composerChipX:hover {
+  background: var(--bg-muted);
+  color: var(--danger);
+}
+
+.textarea {
+  display: block;
+  width: 100%;
+  resize: none;
+  padding: 6px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  outline: none;
+  min-height: 42px;
+  max-height: 280px;
+}
+.textarea::placeholder {
+  color: var(--text-placeholder);
+}
+
+.composerTools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.iconBtn {
+  background: transparent;
+  border: var(--hairline-w) solid var(--border-strong);
+  border-radius: var(--radius);
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  font-size: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: background 120ms var(--ease), color 120ms var(--ease), border-color 120ms var(--ease);
+}
+.iconBtn:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  color: var(--text);
+  border-color: var(--text);
+}
+.iconBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Микрофон в режиме записи — красная пульсация. */
+.iconBtnRecording {
+  background: #dc2626;
+  color: #fff;
+  border-color: #dc2626;
+  animation: micPulse 1.4s ease-in-out infinite;
+}
+.iconBtnRecording:hover:not(:disabled) {
+  background: #b91c1c;
+  color: #fff;
+  border-color: #b91c1c;
+}
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.45); }
+  50% { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0); }
+}
+
+/* Расшифровка в процессе — лёгкая подсветка + крутящийся спиннер. */
+.iconBtnBusy {
+  color: var(--text);
+}
+.spinner {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.toolsSpacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.sendBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 16px;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: transform 100ms var(--ease), background 150ms var(--ease), opacity 150ms var(--ease);
+}
+.sendBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.sendBtn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.sendBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.sendBtnStop {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+.sendBtnStop:hover:not(:disabled) {
+  background: #8c2424;
+}
+.sendBtnIcon {
+  font-size: 9px;
+  line-height: 1;
+}
+
+/* Drop-overlay поверх композера при drag&drop */
+.dropOverlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(31, 31, 30, 0.85);
+  color: var(--bg);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: fadeIn 120ms var(--ease-out);
+  z-index: 5;
+}
+.dropOverlayInner {
+  text-align: center;
+  font-size: var(--text-base);
+  font-weight: 500;
+}
+.dropOverlayIcon {
+  font-size: 28px;
+  margin-bottom: 8px;
+  animation: bounce 0.8s ease-in-out infinite alternate;
+}
+@keyframes bounce {
+  to { transform: translateY(6px); }
+}
+
+/* ─── Mobile ─────────────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  .messages {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .composerOuter {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  /* На мобильных селектор может скроллиться горизонтально — не теснит композер. */
+  .modeBar {
+    max-width: 100%;
+  }
+  .modeChip {
+    padding: 6px 10px;
+  }
+}

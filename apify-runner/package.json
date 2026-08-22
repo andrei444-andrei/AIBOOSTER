@@ -1,0 +1,17 @@
+{
+  "name": "aibooster-runner",
+  "version": "0.1.0",
+  "description": "Universal runner actor for AIBOOSTER AI Scraper module — accepts AI-generated JS code and executes it with a curated helper SDK.",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js"
+  },
+  "dependencies": {
+    "apify": "^3.2.6",
+    "cheerio": "^1.0.0",
+    "got-scraping": "^4.1.0",
+    "playwright": "^1.49.0"
+  },
+  "private": true
+}

@@ -21,12 +21,81 @@ export function getDb(): Client {
   return _client;
 }
 
-// Самопровижининг схемы: идемпотентно создаём все таблицы и индексы.
+// Самопровижининг схемы: идемпотентно создаём все таблицы и индексы,
+// затем добавляем недостающие колонки (мягкая миграция в стиле «таблица
+// уже могла существовать с прошлой версии — дополним её»).
 // Запускается один раз на процесс (промис кэшируется). Провал не должен
 // валить приложение у вызывающего — оборачивай вызов в try/catch там, где
 // это критично, но сам ensureSchema здесь не глотает ошибку, чтобы её было
 // видно в логах при старте.
 let _schemaReady: Promise<void> | null = null;
+
+// Список добавлений колонок (мягкая миграция). SQLite позволяет
+// ALTER TABLE ADD COLUMN с дефолтом, поэтому это безопасно.
+interface ColumnAddition {
+  table: string;
+  column: string;
+  ddl: string; // полное выражение после ADD COLUMN, включая имя и тип
+}
+
+const COLUMN_MIGRATIONS: ColumnAddition[] = [
+  // mode оставлен для обратной совместимости — был частью v1 (Normal/Pro),
+  // сейчас не используется, но в существующих БД остаётся.
+  { table: "chat_sessions", column: "mode", ddl: "mode TEXT NOT NULL DEFAULT 'normal'" },
+  { table: "chat_sessions", column: "model_override", ddl: "model_override TEXT" },
+  { table: "chat_sessions", column: "category_override", ddl: "category_override TEXT" },
+  { table: "chat_sessions", column: "mode", ddl: "mode TEXT" },
+  { table: "chat_messages", column: "duration_ms", ddl: "duration_ms INTEGER" },
+  { table: "chat_messages", column: "route_meta", ddl: "route_meta TEXT" },
+  // Подкаст-плеер для YouTube-переводов.
+  { table: "video_translation_jobs", column: "watch_status", ddl: "watch_status TEXT NOT NULL DEFAULT 'to_watch'" },
+  { table: "video_translation_jobs", column: "last_position_sec", ddl: "last_position_sec REAL NOT NULL DEFAULT 0" },
+  { table: "video_translation_jobs", column: "watched_at", ddl: "watched_at TEXT" },
+  { table: "video_translation_jobs", column: "source", ddl: "source TEXT NOT NULL DEFAULT 'manual'" },
+  // Summary + автоматические главы по смыслу — генерируются LLM после
+  // перевода. summary = 2-3 предложения о чём видео. chapters = JSON
+  // массива [{start_sec, title}] для навигации по аудио.
+  { table: "video_translation_jobs", column: "summary", ddl: "summary TEXT" },
+  { table: "video_translation_jobs", column: "chapters", ddl: "chapters TEXT" },
+  // News enrichments v1.5: первоисточник, картинки, расширенный синтез.
+  { table: "news_enrichments", column: "original_source_url", ddl: "original_source_url TEXT" },
+  { table: "news_enrichments", column: "images_json", ddl: "images_json TEXT" },
+  // v1.8: maintenance-агент трекает попытки retry на enrichment, чтобы
+  // не зацикливаться на одном и том же battered item'е.
+  { table: "news_enrichments", column: "retry_count", ddl: "retry_count INTEGER NOT NULL DEFAULT 0" },
+  // v1.8: archived — флаг чтобы скрывать items из ленты (failed по
+  // нескольким попыткам, агент пометил как «безнадёжный»).
+  { table: "news_items", column: "archived", ddl: "archived INTEGER NOT NULL DEFAULT 0" },
+  // v2.0: дедупликация. title_embedding — JSON-array из ~1536 float'ов
+  // от text-embedding-3-small. cluster_id — UUID кластера дубликатов
+  // (один и тот же сюжет из разных источников группируется по cosine).
+  { table: "news_items", column: "title_embedding", ddl: "title_embedding TEXT" },
+  { table: "news_items", column: "cluster_id", ddl: "cluster_id TEXT" },
+  // Английский (диалоги): темп озвучки, запекаемый при генерации (ffmpeg atempo).
+  { table: "english_dialogue_jobs", column: "speed", ddl: "speed REAL NOT NULL DEFAULT 1.0" },
+  // Английский (живой диалог): структура миссии — цель, роль, чеклист бет,
+  // прогресс, лимит ходов, причина завершения. Старые сессии деградируют мягко.
+  { table: "live_dialogue_sessions", column: "goal", ddl: "goal TEXT" },
+  { table: "live_dialogue_sessions", column: "goal_ru", ddl: "goal_ru TEXT" },
+  { table: "live_dialogue_sessions", column: "role_desc", ddl: "role_desc TEXT" },
+  { table: "live_dialogue_sessions", column: "beats_json", ddl: "beats_json TEXT" },
+  { table: "live_dialogue_sessions", column: "beats_done", ddl: "beats_done INTEGER NOT NULL DEFAULT 0" },
+  { table: "live_dialogue_sessions", column: "target_turns", ddl: "target_turns INTEGER NOT NULL DEFAULT 10" },
+  { table: "live_dialogue_sessions", column: "ended_reason", ddl: "ended_reason TEXT" },
+];
+
+async function hasColumn(table: string, column: string): Promise<boolean> {
+  const db = getDb();
+  const res = await db.execute(`PRAGMA table_info(${table})`);
+  for (const row of res.rows as unknown as Array<{ name: string }>) {
+    if (row.name === column) return true;
+  }
+  return false;
+}
+
+/** Фиксированный UID владельца — продукт single-user.
+ *  Должен совпадать с константой OWNER_UID в components/chat/ChatApp.tsx. */
+const OWNER_UID = "owner-andrei-2026";
 
 export function ensureSchema(): Promise<void> {
   if (_schemaReady) return _schemaReady;
@@ -39,6 +108,25 @@ export function ensureSchema(): Promise<void> {
     for (const idx of INDEXES) {
       await db.execute(idx);
     }
+    // Мягкая миграция: добавляем колонки, которых нет в существующих таблицах.
+    for (const m of COLUMN_MIGRATIONS) {
+      const exists = await hasColumn(m.table, m.column);
+      if (!exists) {
+        await db.execute(`ALTER TABLE ${m.table} ADD COLUMN ${m.ddl}`);
+      }
+    }
+    // Single-owner-миграция: все исторические chat-сессии собираем под
+    // одним owner-UID. Раньше каждый браузер получал случайный uid и
+    // история «терялась» при смене устройства. Идемпотентно: если уже
+    // всё под OWNER_UID, UPDATE затрагивает 0 строк.
+    await db
+      .execute({
+        sql: `UPDATE chat_sessions SET uid = ? WHERE uid != ?`,
+        args: [OWNER_UID, OWNER_UID],
+      })
+      .catch(() => {
+        // Не критично — таблица могла не существовать на старте.
+      });
   })();
 
   // Если провижининг упал — сбрасываем кэш, чтобы следующая попытка повторила.

@@ -1,0 +1,1183 @@
+// CRUD-операции над таблицами news_*: news_sources, news_items, news_feedback,
+// interest_profile. Имена таблиц/колонок — в lib/schema.ts.
+//
+// Этот модуль не делает сетевых вызовов и не знает про aimlapi/Apify — только
+// чистая работа с БД. Pipeline-логика (фетч, валидация) лежит в
+// lib/news-pipeline.ts; она использует функции отсюда.
+
+import { randomUUID } from "node:crypto";
+import { getDb, ensureSchema } from "./db";
+import type { InterestProfile, InterestTopic } from "./news-prompt";
+
+export type SourceKind = "telegram" | "rss" | "web";
+
+export interface NewsSourceRow {
+  id: string;
+  kind: SourceKind;
+  url: string;
+  name: string;
+  fetch_interval_minutes: number;
+  last_fetched_at: string | null;
+  locked_until: string | null;
+  apify_run_id: string | null;
+  apify_run_status: string | null;
+  apify_run_started_at: string | null;
+  active: number;
+  created_at: string;
+}
+
+export type NewsItemStatus = "pending" | "validated" | "failed";
+export type NewsItemVerdict = "show" | "borderline" | "skip";
+
+export interface NewsItemRow {
+  id: string;
+  source_id: string;
+  external_id: string;
+  url: string | null;
+  title: string | null;
+  body: string | null;
+  published_at: string | null;
+  raw_meta: string | null;
+  status: NewsItemStatus;
+  validation_input: string | null;
+  validation_output_json: string | null;
+  validation_error: string | null;
+  model_used: string | null;
+  summary: string | null;
+  value_explanation: string | null;
+  matched_topics_json: string | null;
+  relevance: number | null;
+  verdict: NewsItemVerdict | null;
+  reasoning: string | null;
+  validated_at: string | null;
+  created_at: string;
+  cluster_id?: string | null;
+}
+
+export interface NewsFeedbackRow {
+  id: string;
+  item_id: string;
+  signal: "like" | "dislike" | "hide";
+  reason_chip: string | null;
+  custom_text: string | null;
+  created_at: string;
+}
+
+export interface InterestProfileRow {
+  id: string;
+  worldview_context: string;
+  topics_json: string;
+  updated_at: string;
+}
+
+// ---------- defaults / seeding ----------
+
+const PROFILE_ID = "me";
+
+export const DEFAULT_WORLDVIEW =
+  "Я строю AIBOOSTER — платформу AI-инструментов, ускоряющих рутинные задачи. " +
+  "Ищу действенные инсайты, конкретные приёмы и инструменты, которые можно " +
+  "применить в продукте или операционке. Не нужны общие новости, инфоповоды, " +
+  "хайп без сути.";
+
+export const DEFAULT_TOPICS: InterestTopic[] = [
+  {
+    name: "AI-агенты и инструменты",
+    description:
+      "Новые агентные системы, фреймворки, протоколы (MCP), кейсы реального использования агентов в продакшене",
+    what_bores_me: "теоретические рассуждения про AGI, общий хайп без технических деталей",
+    priority: "high",
+    status: "active",
+  },
+  {
+    name: "Монетизация SaaS и приложений",
+    description:
+      "Конкретные кейсы pricing-стратегий, paywall-экспериментов, конверсии бесплатных пользователей в платных, разборы с цифрами",
+    what_bores_me: "общие статьи 'как заработать на приложении', success-stories без метрик",
+    priority: "high",
+    status: "active",
+  },
+  {
+    name: "Web-подписки (Stripe, Paddle, Lemon)",
+    description:
+      "Технические и продуктовые приёмы вокруг подписок: dunning, churn, plans/limits, A/B тесты пейволлов",
+    what_bores_me: "промо-статьи самих платформ",
+    priority: "medium",
+    status: "active",
+  },
+  {
+    name: "Инвестиционные стратегии",
+    description:
+      "Долгосрочные стратегии для IT-предпринимателя: диверсификация, налоги для нерезидентов, конкретные инструменты",
+    what_bores_me: "крипто-спекуляции, дневной трейдинг, прогнозы цен",
+    priority: "medium",
+    status: "active",
+  },
+  {
+    name: "Claude / OpenAI / API",
+    description:
+      "Обновления моделей, новые возможности API (caching, structured outputs, computer use), best practices для prompt-engineering",
+    what_bores_me: "общие обзоры моделей без технической глубины",
+    priority: "high",
+    status: "active",
+  },
+];
+
+export const DEFAULT_SOURCES: Array<{
+  kind: SourceKind;
+  url: string;
+  name: string;
+}> = [
+  // RSS первым: на холодном старте он отрабатывает в один tick (быстрый
+  // fetch + валидация), пользователь видит ленту в первые 10 минут.
+  // Telegram требует двух tick'ов из-за async-Apify, поэтому ставим его второй.
+  {
+    kind: "rss",
+    url: "https://news.ycombinator.com/rss",
+    name: "Hacker News",
+  },
+  {
+    kind: "telegram",
+    url: "https://t.me/seeallochnaya",
+    name: "Сиолошная",
+  },
+];
+
+// Дополнительный сидинг: Reddit + arXiv. В отличие от DEFAULT_SOURCES (которые
+// заливаются только при пустой таблице), эти добавляются всегда при tick'е,
+// если соответствующего URL ещё нет. Идемпотентно. Дёшево: только RSS.
+//
+// Reddit /r/X.rss — открытый, не требует ключей, отдаёт топ-постов саба.
+// arXiv /rss/X — свежие препринты по теме.
+export const EXTRA_RSS_SOURCES: Array<{
+  url: string;
+  name: string;
+}> = [
+  { url: "https://www.reddit.com/r/MachineLearning/.rss", name: "r/MachineLearning" },
+  { url: "https://www.reddit.com/r/LocalLLaMA/.rss", name: "r/LocalLLaMA" },
+  { url: "https://www.reddit.com/r/SaaS/.rss", name: "r/SaaS" },
+  { url: "https://www.reddit.com/r/startups/.rss", name: "r/startups" },
+  { url: "http://export.arxiv.org/rss/cs.AI", name: "arXiv cs.AI" },
+  { url: "http://export.arxiv.org/rss/cs.LG", name: "arXiv cs.LG" },
+];
+
+/** Идемпотентно сидим EXTRA_RSS_SOURCES — только те, чьего URL ещё нет. */
+export async function seedExtraSourcesIfMissing(): Promise<number> {
+  await ensureSchema();
+  const db = getDb();
+  const existing = await db.execute(`SELECT url FROM news_sources`);
+  const have = new Set(
+    (existing.rows as unknown as Array<{ url: string }>).map((r) => r.url),
+  );
+  let added = 0;
+  for (const s of EXTRA_RSS_SOURCES) {
+    if (have.has(s.url)) continue;
+    try {
+      await createSource({ kind: "rss", url: s.url, name: s.name });
+      added++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/UNIQUE|constraint/i.test(msg)) throw err;
+    }
+  }
+  return added;
+}
+
+// ---------- profile ----------
+
+export async function getActiveProfile(): Promise<InterestProfile> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute({
+    sql: `SELECT worldview_context, topics_json FROM interest_profile WHERE id = ?`,
+    args: [PROFILE_ID],
+  });
+  const row = res.rows[0];
+  if (!row) {
+    return { worldview_context: "", topics: [] };
+  }
+  return {
+    worldview_context: String(row.worldview_context ?? ""),
+    topics: parseTopics(String(row.topics_json ?? "[]")),
+  };
+}
+
+export async function upsertProfile(profile: InterestProfile): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `INSERT INTO interest_profile (id, worldview_context, topics_json, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            worldview_context = excluded.worldview_context,
+            topics_json = excluded.topics_json,
+            updated_at = excluded.updated_at`,
+    args: [
+      PROFILE_ID,
+      profile.worldview_context ?? "",
+      JSON.stringify(profile.topics ?? []),
+      now,
+    ],
+  });
+}
+
+function parseTopics(s: string): InterestTopic[] {
+  try {
+    const v = JSON.parse(s);
+    if (!Array.isArray(v)) return [];
+    return v.filter((x): x is InterestTopic => x && typeof x === "object" && typeof (x as InterestTopic).name === "string");
+  } catch {
+    return [];
+  }
+}
+
+// Сидим дефолты, только если профиля ещё нет. Возвращаем true если что-то
+// вставили (для диагностики read-only токена в pipeline).
+export async function seedProfileIfEmpty(): Promise<boolean> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute({
+    sql: `SELECT id FROM interest_profile WHERE id = ?`,
+    args: [PROFILE_ID],
+  });
+  if (res.rows.length > 0) return false;
+  await upsertProfile({
+    worldview_context: DEFAULT_WORLDVIEW,
+    topics: DEFAULT_TOPICS,
+  });
+  return true;
+}
+
+// ---------- sources ----------
+
+export async function listSources(): Promise<NewsSourceRow[]> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute(`SELECT * FROM news_sources ORDER BY created_at DESC`);
+  return res.rows as unknown as NewsSourceRow[];
+}
+
+export async function getSource(id: string): Promise<NewsSourceRow | null> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute({
+    sql: `SELECT * FROM news_sources WHERE id = ?`,
+    args: [id],
+  });
+  return (res.rows[0] as unknown as NewsSourceRow) ?? null;
+}
+
+export async function createSource(input: {
+  kind: SourceKind;
+  url: string;
+  name: string;
+  fetch_interval_minutes?: number;
+}): Promise<NewsSourceRow> {
+  await ensureSchema();
+  const db = getDb();
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `INSERT INTO news_sources
+            (id, kind, url, name, fetch_interval_minutes, active, created_at)
+          VALUES (?, ?, ?, ?, ?, 1, ?)`,
+    args: [
+      id,
+      input.kind,
+      input.url,
+      input.name,
+      input.fetch_interval_minutes ?? 30,
+      now,
+    ],
+  });
+  const row = await getSource(id);
+  if (!row) throw new Error("source not found after insert");
+  return row;
+}
+
+export async function deleteSource(id: string): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `DELETE FROM news_sources WHERE id = ?`,
+    args: [id],
+  });
+}
+
+export async function setSourceActive(id: string, active: boolean): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE news_sources SET active = ? WHERE id = ?`,
+    args: [active ? 1 : 0, id],
+  });
+}
+
+export async function updateSourceUrl(id: string, newUrl: string, newKind?: SourceKind): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  if (newKind) {
+    await db.execute({
+      sql: `UPDATE news_sources
+            SET url = ?, kind = ?, apify_run_id = NULL, apify_run_status = NULL, apify_run_started_at = NULL
+            WHERE id = ?`,
+      args: [newUrl, newKind, id],
+    });
+  } else {
+    await db.execute({
+      sql: `UPDATE news_sources SET url = ? WHERE id = ?`,
+      args: [newUrl, id],
+    });
+  }
+}
+
+export async function seedSourcesIfEmpty(): Promise<number> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute(`SELECT COUNT(*) AS n FROM news_sources`);
+  const count = Number(res.rows[0]?.n ?? 0);
+  if (count > 0) return 0;
+  let inserted = 0;
+  for (const s of DEFAULT_SOURCES) {
+    try {
+      await createSource(s);
+      inserted++;
+    } catch (err) {
+      // Race с параллельным cron-tick'ом: второй tick видит count=0, начинает
+      // сидить, первый уже вставил. Молча игнорируем дубликат — это норма.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/UNIQUE|constraint/i.test(msg)) throw err;
+    }
+  }
+  return inserted;
+}
+
+// Атомарно забирает следующий due-источник под лок. Возвращает null, если
+// нечего брать. Лок ставится на lockMinutes — после этого считаем брошенным.
+// Логика due: last_fetched_at NULL или старше fetch_interval_minutes минут.
+//
+// Под контеншеном повторяет попытку до MAX_ATTEMPTS раз — без рекурсии, чтобы
+// при сотнях source-ов под нагрузкой не упереться в стек.
+const CLAIM_MAX_ATTEMPTS = 8;
+export async function claimDueSource(
+  _workerId: string,
+  lockMinutes = 5,
+): Promise<NewsSourceRow | null> {
+  await ensureSchema();
+  const db = getDb();
+
+  for (let attempt = 0; attempt < CLAIM_MAX_ATTEMPTS; attempt++) {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const lockUntilIso = new Date(now.getTime() + lockMinutes * 60_000).toISOString();
+
+    const pick = await db.execute({
+      sql: `SELECT id FROM news_sources
+            WHERE active = 1
+              AND (locked_until IS NULL OR locked_until < ?)
+              AND (
+                last_fetched_at IS NULL
+                OR datetime(last_fetched_at, '+' || fetch_interval_minutes || ' minute') < ?
+              )
+            ORDER BY COALESCE(last_fetched_at, '1970-01-01') ASC, created_at ASC
+            LIMIT 1`,
+      args: [nowIso, nowIso],
+    });
+    const id = pick.rows[0]?.id as string | undefined;
+    if (!id) return null;
+
+    const upd = await db.execute({
+      sql: `UPDATE news_sources
+            SET locked_until = ?
+            WHERE id = ?
+              AND (locked_until IS NULL OR locked_until < ?)`,
+      args: [lockUntilIso, id, nowIso],
+    });
+    if (upd.rowsAffected > 0) {
+      return getSource(id);
+    }
+    // Кто-то опередил — пробуем ещё раз, возможно теперь другой source.
+  }
+  return null;
+}
+
+export async function releaseSource(id: string): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE news_sources SET locked_until = NULL WHERE id = ?`,
+    args: [id],
+  });
+}
+
+export async function setSourceFetched(
+  id: string,
+  fetchedAt = new Date().toISOString(),
+): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE news_sources
+          SET last_fetched_at = ?, locked_until = NULL
+          WHERE id = ?`,
+    args: [fetchedAt, id],
+  });
+}
+
+// Ставим runId впервые → проставляем started_at. Снимаем runId (null) →
+// чистим started_at. Не делаем reset started_at, если runId уже стоит и
+// зовётся повторно с тем же runId (защита от поедания stale-run таймера).
+export async function setApifyRun(
+  id: string,
+  runId: string | null,
+  status: string | null,
+): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  if (runId === null) {
+    await db.execute({
+      sql: `UPDATE news_sources
+            SET apify_run_id = NULL, apify_run_status = ?, apify_run_started_at = NULL
+            WHERE id = ?`,
+      args: [status, id],
+    });
+    return;
+  }
+  // Ставим started_at только если runId меняется (или впервые ставится).
+  const nowIso = new Date().toISOString();
+  await db.execute({
+    sql: `UPDATE news_sources
+          SET apify_run_id = ?,
+              apify_run_status = ?,
+              apify_run_started_at = CASE
+                WHEN apify_run_id IS NULL OR apify_run_id <> ? THEN ?
+                ELSE apify_run_started_at
+              END
+          WHERE id = ?`,
+    args: [runId, status, runId, nowIso, id],
+  });
+}
+
+export async function updateApifyStatus(id: string, status: string | null): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE news_sources SET apify_run_status = ? WHERE id = ?`,
+    args: [status, id],
+  });
+}
+
+// ---------- items ----------
+
+export interface InsertItemInput {
+  source_id: string;
+  external_id: string;
+  url: string | null;
+  title: string | null;
+  body: string;
+  published_at: string | null;
+  raw_meta: Record<string, unknown>;
+}
+
+// Возвращает id вставленного item'а или null, если был дубликат (UNIQUE на
+// source_id+external_id). Для дедупликации это нормальный путь.
+export async function insertRawItem(input: InsertItemInput): Promise<string | null> {
+  await ensureSchema();
+  const db = getDb();
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  try {
+    const res = await db.execute({
+      sql: `INSERT INTO news_items
+              (id, source_id, external_id, url, title, body, published_at, raw_meta, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      args: [
+        id,
+        input.source_id,
+        input.external_id,
+        input.url,
+        input.title,
+        input.body,
+        input.published_at,
+        JSON.stringify(input.raw_meta ?? {}),
+        now,
+      ],
+    });
+    return res.rowsAffected > 0 ? id : null;
+  } catch (err) {
+    // UNIQUE conflict — дубликат, это ожидаемо.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/UNIQUE/i.test(msg) || /constraint/i.test(msg)) return null;
+    throw err;
+  }
+}
+
+export async function getPendingItems(limit: number): Promise<NewsItemRow[]> {
+  await ensureSchema();
+  const db = getDb();
+  const safeLimit = Math.min(Math.max(Number.isFinite(limit) ? limit : 10, 1), 200);
+  const res = await db.execute({
+    sql: `SELECT * FROM news_items WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?`,
+    args: [safeLimit],
+  });
+  return res.rows as unknown as NewsItemRow[];
+}
+
+export interface ValidationUpdate {
+  status: NewsItemStatus;
+  validation_input: string;
+  validation_output_json: string | null;
+  validation_error: string | null;
+  model_used: string;
+  summary: string | null;
+  value_explanation: string | null;
+  matched_topics: string[] | null;
+  relevance: number | null;
+  verdict: NewsItemVerdict | null;
+  reasoning: string | null;
+}
+
+export async function applyValidation(
+  itemId: string,
+  upd: ValidationUpdate,
+): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `UPDATE news_items
+          SET status = ?,
+              validation_input = ?,
+              validation_output_json = ?,
+              validation_error = ?,
+              model_used = ?,
+              summary = ?,
+              value_explanation = ?,
+              matched_topics_json = ?,
+              relevance = ?,
+              verdict = ?,
+              reasoning = ?,
+              validated_at = ?
+          WHERE id = ?`,
+    args: [
+      upd.status,
+      upd.validation_input,
+      upd.validation_output_json,
+      upd.validation_error,
+      upd.model_used,
+      upd.summary,
+      upd.value_explanation,
+      upd.matched_topics ? JSON.stringify(upd.matched_topics) : null,
+      upd.relevance,
+      upd.verdict,
+      upd.reasoning,
+      now,
+      itemId,
+    ],
+  });
+}
+
+export interface ItemWithSource extends NewsItemRow {
+  source_name: string;
+  source_kind: SourceKind;
+  source_url: string;
+}
+
+export async function listItems(opts: {
+  verdict?: NewsItemVerdict | "all";
+  limit?: number;
+  /** Включать ли archived items (по умолчанию — нет, скрываем из основной ленты). */
+  includeArchived?: boolean;
+  /** Включать ли items с failed enrichment (по умолчанию — нет в основной ленте). */
+  includeFailedEnrichment?: boolean;
+  /** Исключать ли items, по которым уже есть feedback (like/dislike/hide).
+   *  Это работает как «прочитано»: после реакции карточка уходит из ленты. */
+  excludeRead?: boolean;
+}): Promise<ItemWithSource[]> {
+  await ensureSchema();
+  const db = getDb();
+  const rawLimit = Number.isFinite(opts.limit) ? (opts.limit as number) : 50;
+  const limit = Math.min(Math.max(rawLimit, 1), 500);
+  const where: string[] = [`i.status = 'validated'`];
+  const args: (string | number)[] = [];
+  if (opts.verdict && opts.verdict !== "all") {
+    where.push(`i.verdict = ?`);
+    args.push(opts.verdict);
+  }
+  if (!opts.includeArchived) {
+    where.push(`COALESCE(i.archived, 0) = 0`);
+  }
+  if (!opts.includeFailedEnrichment) {
+    where.push(`NOT EXISTS (SELECT 1 FROM news_enrichments e WHERE e.item_id = i.id AND e.status = 'failed')`);
+  }
+  if (opts.excludeRead) {
+    where.push(`NOT EXISTS (SELECT 1 FROM news_feedback f WHERE f.item_id = i.id)`);
+  }
+  args.push(limit);
+  const res = await db.execute({
+    sql: `SELECT i.*, s.name AS source_name, s.kind AS source_kind, s.url AS source_url
+          FROM news_items i
+          JOIN news_sources s ON s.id = i.source_id
+          WHERE ${where.join(" AND ")}
+          ORDER BY i.validated_at DESC, i.created_at DESC
+          LIMIT ?`,
+    args,
+  });
+  return res.rows as unknown as ItemWithSource[];
+}
+
+/** Items, по которым ЕСТЬ feedback — для вкладки «прочитанное».
+ *  Сортируем по времени последнего фидбэка (свежие сверху). */
+export async function listReadItems(limit = 100): Promise<
+  Array<ItemWithSource & { feedback_signal: "like" | "dislike" | "hide"; feedback_at: string }>
+> {
+  await ensureSchema();
+  const db = getDb();
+  const lim = Math.min(Math.max(limit, 1), 500);
+  const res = await db.execute({
+    sql: `SELECT i.*, s.name AS source_name, s.kind AS source_kind, s.url AS source_url,
+                 (SELECT signal FROM news_feedback f WHERE f.item_id = i.id
+                   ORDER BY f.created_at DESC LIMIT 1) AS feedback_signal,
+                 (SELECT MAX(created_at) FROM news_feedback f WHERE f.item_id = i.id) AS feedback_at
+          FROM news_items i
+          JOIN news_sources s ON s.id = i.source_id
+          WHERE i.status = 'validated'
+            AND COALESCE(i.archived, 0) = 0
+            AND EXISTS (SELECT 1 FROM news_feedback f WHERE f.item_id = i.id)
+          ORDER BY feedback_at DESC
+          LIMIT ?`,
+    args: [lim],
+  });
+  return res.rows as unknown as Array<
+    ItemWithSource & { feedback_signal: "like" | "dislike" | "hide"; feedback_at: string }
+  >;
+}
+
+/** Items, скрытые из ленты: archived ИЛИ с failed enrichment. Для /news/agent-log. */
+export async function listFailedOrArchivedItems(limit = 50): Promise<ItemWithSource[]> {
+  await ensureSchema();
+  const db = getDb();
+  const safe = Math.min(Math.max(limit, 1), 200);
+  const res = await db.execute({
+    sql: `SELECT i.*, s.name AS source_name, s.kind AS source_kind, s.url AS source_url
+          FROM news_items i
+          JOIN news_sources s ON s.id = i.source_id
+          WHERE i.status = 'validated' AND i.verdict = 'show'
+            AND (COALESCE(i.archived, 0) = 1
+                 OR EXISTS (SELECT 1 FROM news_enrichments e WHERE e.item_id = i.id AND e.status = 'failed'))
+          ORDER BY i.validated_at DESC, i.created_at DESC
+          LIMIT ?`,
+    args: [safe],
+  });
+  return res.rows as unknown as ItemWithSource[];
+}
+
+export async function setItemArchived(itemId: string, archived: boolean): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE news_items SET archived = ? WHERE id = ?`,
+    args: [archived ? 1 : 0, itemId],
+  });
+}
+
+export async function listDecisions(limit: number): Promise<ItemWithSource[]> {
+  await ensureSchema();
+  const db = getDb();
+  const lim = Math.min(Math.max(limit, 1), 200);
+  const res = await db.execute({
+    sql: `SELECT i.*, s.name AS source_name, s.kind AS source_kind, s.url AS source_url
+          FROM news_items i
+          JOIN news_sources s ON s.id = i.source_id
+          WHERE i.status IN ('validated', 'failed')
+          ORDER BY COALESCE(i.validated_at, i.created_at) DESC
+          LIMIT ?`,
+    args: [lim],
+  });
+  return res.rows as unknown as ItemWithSource[];
+}
+
+export async function getItem(id: string): Promise<ItemWithSource | null> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute({
+    sql: `SELECT i.*, s.name AS source_name, s.kind AS source_kind, s.url AS source_url
+          FROM news_items i
+          JOIN news_sources s ON s.id = i.source_id
+          WHERE i.id = ?`,
+    args: [id],
+  });
+  return (res.rows[0] as unknown as ItemWithSource) ?? null;
+}
+
+// Поднимает скрытый пост обратно в ленту. Также форсит status='validated':
+// listItems фильтрует по status='validated', поэтому без этого продвинутый
+// item остался бы невидимым (баг ревью H1).
+export async function promoteItem(id: string): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  await db.execute({
+    sql: `UPDATE news_items
+          SET verdict = 'show', status = 'validated'
+          WHERE id = ?`,
+    args: [id],
+  });
+}
+
+// ---------- feedback ----------
+
+export async function recordFeedback(input: {
+  item_id: string;
+  signal: "like" | "dislike" | "hide";
+  reason_chip?: string | null;
+  custom_text?: string | null;
+}): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const id = randomUUID();
+  await db.execute({
+    sql: `INSERT INTO news_feedback (id, item_id, signal, reason_chip, custom_text)
+          VALUES (?, ?, ?, ?, ?)`,
+    args: [
+      id,
+      input.item_id,
+      input.signal,
+      input.reason_chip ?? null,
+      input.custom_text ?? null,
+    ],
+  });
+}
+
+// ---------- user reports (жалобы на конкретные карточки) ----------
+
+export type ReportStatus = "open" | "reviewing" | "resolved" | "wontfix";
+
+export interface NewsUserReportRow {
+  id: string;
+  item_id: string;
+  enrichment_id: string | null;
+  text: string;
+  status: ReportStatus;
+  resolution: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export async function createUserReport(input: {
+  item_id: string;
+  enrichment_id?: string | null;
+  text: string;
+}): Promise<NewsUserReportRow> {
+  await ensureSchema();
+  const db = getDb();
+  const id = randomUUID();
+  const cleanText = input.text.trim().slice(0, 5000);
+  if (!cleanText) throw new Error("report text is empty");
+  await db.execute({
+    sql: `INSERT INTO news_user_reports (id, item_id, enrichment_id, text, status)
+          VALUES (?, ?, ?, ?, 'open')`,
+    args: [id, input.item_id, input.enrichment_id ?? null, cleanText],
+  });
+  const row = await db.execute({
+    sql: `SELECT * FROM news_user_reports WHERE id = ?`,
+    args: [id],
+  });
+  return row.rows[0] as unknown as NewsUserReportRow;
+}
+
+export interface NewsUserReportWithItem extends NewsUserReportRow {
+  item_title: string | null;
+  item_url: string | null;
+  source_name: string;
+  article_body: string | null;
+  synthesis_output_json: string | null;
+}
+
+export async function listUserReports(opts: {
+  status?: ReportStatus | "all";
+  limit?: number;
+}): Promise<NewsUserReportWithItem[]> {
+  await ensureSchema();
+  const db = getDb();
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  const where: string[] = [];
+  const args: (string | number)[] = [];
+  if (opts.status && opts.status !== "all") {
+    where.push(`r.status = ?`);
+    args.push(opts.status);
+  }
+  args.push(limit);
+  const sql = `
+    SELECT r.*,
+           i.title AS item_title,
+           i.url AS item_url,
+           s.name AS source_name,
+           e.synthesized_summary AS article_body,
+           e.synthesis_output_json AS synthesis_output_json
+    FROM news_user_reports r
+    LEFT JOIN news_items i ON i.id = r.item_id
+    LEFT JOIN news_sources s ON s.id = i.source_id
+    LEFT JOIN news_enrichments e ON e.item_id = r.item_id
+    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY r.created_at DESC
+    LIMIT ?
+  `;
+  const res = await db.execute({ sql, args });
+  return res.rows as unknown as NewsUserReportWithItem[];
+}
+
+export async function updateUserReportStatus(
+  id: string,
+  status: ReportStatus,
+  resolution?: string | null,
+): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const isClosed = status === "resolved" || status === "wontfix";
+  await db.execute({
+    sql: `UPDATE news_user_reports
+          SET status = ?,
+              resolution = ?,
+              resolved_at = CASE WHEN ? THEN datetime('now') ELSE NULL END
+          WHERE id = ?`,
+    args: [status, resolution ?? null, isClosed ? 1 : 0, id],
+  });
+}
+
+export async function getReportsCountByItem(itemIds: string[]): Promise<Map<string, number>> {
+  if (itemIds.length === 0) return new Map();
+  await ensureSchema();
+  const db = getDb();
+  const placeholders = itemIds.map(() => "?").join(",");
+  const res = await db.execute({
+    sql: `SELECT item_id, COUNT(*) AS n FROM news_user_reports
+          WHERE item_id IN (${placeholders}) AND status IN ('open', 'reviewing')
+          GROUP BY item_id`,
+    args: itemIds,
+  });
+  const map = new Map<string, number>();
+  for (const row of res.rows as unknown as Array<{ item_id: string; n: number }>) {
+    map.set(row.item_id, Number(row.n));
+  }
+  return map;
+}
+
+// ---------- enrichment ----------
+
+export type EnrichmentStatus = "pending" | "running" | "done" | "failed";
+
+export interface NewsEnrichmentRow {
+  id: string;
+  item_id: string;
+  status: EnrichmentStatus;
+  locked_until: string | null;
+  search_query: string | null;
+  search_results_json: string | null;
+  related_sources_json: string | null;
+  original_source_url: string | null;
+  images_json: string | null;
+  synthesis_input: string | null;
+  synthesis_output_json: string | null;
+  synthesis_error: string | null;
+  model_used: string | null;
+  synthesized_summary: string | null;
+  key_facts_json: string | null;
+  sources_used_json: string | null;
+  cost_cents: number | null;
+  latency_ms: number | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+// Ставит enrichment-задачу для item'а. Если уже есть:
+// - status='done' → no-op, не пересоздаём (success всегда финален).
+// - status='failed' или stale 'running' (lock истёк >5 мин назад) → resetим
+//   в 'pending', чтобы воркер взял заново.
+// - status='pending' / actively 'running' → no-op (уже в работе).
+export async function enqueueEnrichment(itemId: string, searchQuery: string): Promise<boolean> {
+  await ensureSchema();
+  const db = getDb();
+  const existing = await db.execute({
+    sql: `SELECT id, status, locked_until FROM news_enrichments WHERE item_id = ?`,
+    args: [itemId],
+  });
+  if (existing.rows.length > 0) {
+    const row = existing.rows[0] as unknown as { id: string; status: string; locked_until: string | null };
+    if (row.status === "done") return false;
+    if (row.status === "failed") {
+      await db.execute({
+        sql: `UPDATE news_enrichments
+              SET status = 'pending', locked_until = NULL, synthesis_error = NULL, search_query = ?
+              WHERE id = ?`,
+        args: [searchQuery.slice(0, 1000), row.id],
+      });
+      return true;
+    }
+    // running: проверяем, не зависший ли
+    if (row.status === "running") {
+      const stale =
+        !row.locked_until ||
+        Date.parse(row.locked_until) < Date.now();
+      if (stale) {
+        await db.execute({
+          sql: `UPDATE news_enrichments
+                SET status = 'pending', locked_until = NULL, search_query = ?
+                WHERE id = ?`,
+          args: [searchQuery.slice(0, 1000), row.id],
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+  const id = randomUUID();
+  await db.execute({
+    sql: `INSERT INTO news_enrichments (id, item_id, status, search_query)
+          VALUES (?, ?, 'pending', ?)`,
+    args: [id, itemId, searchQuery.slice(0, 1000)],
+  });
+  return true;
+}
+
+// Атомарно забирает один pending enrichment под лок. Также подбирает
+// stale-running (Vercel function timed out, статус остался running, но
+// lock истёк) — иначе они навсегда застрянут.
+export async function claimPendingEnrichment(
+  lockMinutes = 5,
+): Promise<NewsEnrichmentRow | null> {
+  await ensureSchema();
+  const db = getDb();
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const lockUntilIso = new Date(now.getTime() + lockMinutes * 60_000).toISOString();
+    const pick = await db.execute({
+      sql: `SELECT id FROM news_enrichments
+            WHERE (status = 'pending' OR (status = 'running' AND (locked_until IS NULL OR locked_until < ?)))
+            ORDER BY created_at ASC
+            LIMIT 1`,
+      args: [nowIso],
+    });
+    const id = pick.rows[0]?.id as string | undefined;
+    if (!id) return null;
+    const upd = await db.execute({
+      sql: `UPDATE news_enrichments
+            SET status = 'running', locked_until = ?
+            WHERE id = ?
+              AND (status = 'pending' OR (status = 'running' AND (locked_until IS NULL OR locked_until < ?)))`,
+      args: [lockUntilIso, id, nowIso],
+    });
+    if (upd.rowsAffected > 0) {
+      const row = await db.execute({
+        sql: `SELECT * FROM news_enrichments WHERE id = ?`,
+        args: [id],
+      });
+      return (row.rows[0] as unknown as NewsEnrichmentRow) ?? null;
+    }
+  }
+  return null;
+}
+
+export interface EnrichmentResult {
+  status: EnrichmentStatus;
+  search_results_json: string | null;
+  related_sources_json: string | null;
+  original_source_url: string | null;
+  images_json: string | null;
+  synthesis_input: string | null;
+  synthesis_output_json: string | null;
+  synthesis_error: string | null;
+  model_used: string | null;
+  synthesized_summary: string | null;
+  key_facts: string[] | null;
+  sources_used: unknown | null;
+  cost_cents: number | null;
+  latency_ms: number | null;
+}
+
+export async function completeEnrichment(id: string, r: EnrichmentResult): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const now = new Date().toISOString();
+  await db.execute({
+    sql: `UPDATE news_enrichments
+          SET status = ?,
+              locked_until = NULL,
+              search_results_json = ?,
+              related_sources_json = ?,
+              original_source_url = ?,
+              images_json = ?,
+              synthesis_input = ?,
+              synthesis_output_json = ?,
+              synthesis_error = ?,
+              model_used = ?,
+              synthesized_summary = ?,
+              key_facts_json = ?,
+              sources_used_json = ?,
+              cost_cents = ?,
+              latency_ms = ?,
+              completed_at = ?
+          WHERE id = ?`,
+    args: [
+      r.status,
+      r.search_results_json,
+      r.related_sources_json,
+      r.original_source_url,
+      r.images_json,
+      r.synthesis_input,
+      r.synthesis_output_json,
+      r.synthesis_error,
+      r.model_used,
+      r.synthesized_summary,
+      r.key_facts ? JSON.stringify(r.key_facts) : null,
+      r.sources_used ? JSON.stringify(r.sources_used) : null,
+      r.cost_cents,
+      r.latency_ms,
+      now,
+      id,
+    ],
+  });
+}
+
+// Принудительный сброс enrichment'а в 'pending' для force-resync — даже
+// если уже status='done'. Используется при апгрейде pipeline и желании
+// пересобрать существующие карточки.
+export async function resetEnrichmentToPending(itemId: string, searchQuery: string): Promise<void> {
+  await ensureSchema();
+  const db = getDb();
+  const existing = await db.execute({
+    sql: `SELECT id FROM news_enrichments WHERE item_id = ?`,
+    args: [itemId],
+  });
+  if (existing.rows.length > 0) {
+    const id = (existing.rows[0] as unknown as { id: string }).id;
+    await db.execute({
+      sql: `UPDATE news_enrichments
+            SET status = 'pending',
+                locked_until = NULL,
+                synthesis_error = NULL,
+                completed_at = NULL,
+                search_query = ?
+            WHERE id = ?`,
+      args: [searchQuery.slice(0, 1000), id],
+    });
+  } else {
+    const id = randomUUID();
+    await db.execute({
+      sql: `INSERT INTO news_enrichments (id, item_id, status, search_query)
+            VALUES (?, ?, 'pending', ?)`,
+      args: [id, itemId, searchQuery.slice(0, 1000)],
+    });
+  }
+}
+
+export async function getEnrichmentByItem(itemId: string): Promise<NewsEnrichmentRow | null> {
+  await ensureSchema();
+  const db = getDb();
+  const res = await db.execute({
+    sql: `SELECT * FROM news_enrichments WHERE item_id = ? ORDER BY created_at DESC LIMIT 1`,
+    args: [itemId],
+  });
+  return (res.rows[0] as unknown as NewsEnrichmentRow) ?? null;
+}
+
+// Возвращает map item_id → enrichment ЛЮБОГО статуса. UI смотрит на status
+// и показывает article inline / прогресс / кнопку.
+export async function listEnrichmentsForItems(itemIds: string[]): Promise<Map<string, NewsEnrichmentRow>> {
+  if (itemIds.length === 0) return new Map();
+  await ensureSchema();
+  const db = getDb();
+  const placeholders = itemIds.map(() => "?").join(",");
+  const res = await db.execute({
+    sql: `SELECT * FROM news_enrichments
+          WHERE item_id IN (${placeholders})`,
+    args: itemIds,
+  });
+  const map = new Map<string, NewsEnrichmentRow>();
+  for (const row of res.rows as unknown as NewsEnrichmentRow[]) {
+    map.set(row.item_id, row);
+  }
+  return map;
+}
+
+// Bulk-enqueue: для всех itemIds без записи в news_enrichments создаём
+// pending. Идемпотентно, no-op если запись уже есть (UNIQUE на item_id).
+// Возвращает кол-во реально вставленных.
+export async function bulkEnqueueEnrichmentsForItems(
+  items: Array<{ id: string; title: string | null; body: string | null }>,
+): Promise<number> {
+  if (items.length === 0) return 0;
+  await ensureSchema();
+  const db = getDb();
+  const existing = await db.execute({
+    sql: `SELECT item_id FROM news_enrichments
+          WHERE item_id IN (${items.map(() => "?").join(",")})`,
+    args: items.map((i) => i.id),
+  });
+  const have = new Set((existing.rows as unknown as Array<{ item_id: string }>).map((r) => r.item_id));
+  let inserted = 0;
+  for (const it of items) {
+    if (have.has(it.id)) continue;
+    const query = (it.title || it.body?.slice(0, 200) || "").trim();
+    if (!query) continue;
+    try {
+      await db.execute({
+        sql: `INSERT INTO news_enrichments (id, item_id, status, search_query)
+              VALUES (?, ?, 'pending', ?)`,
+        args: [randomUUID(), it.id, query.slice(0, 1000)],
+      });
+      inserted++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/UNIQUE|constraint/i.test(msg)) throw err;
+    }
+  }
+  return inserted;
+}
+
+// ---------- stats для отладочной панели ----------
+
+export interface NewsStats {
+  total_items: number;
+  pending: number;
+  validated_show: number;
+  validated_borderline: number;
+  validated_skip: number;
+  failed: number;
+  feedback_likes: number;
+  feedback_dislikes: number;
+}
+
+export async function getStats(): Promise<NewsStats> {
+  await ensureSchema();
+  const db = getDb();
+  const items = await db.execute(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
+      SUM(CASE WHEN status='validated' AND verdict='show' THEN 1 ELSE 0 END) AS show_v,
+      SUM(CASE WHEN status='validated' AND verdict='borderline' THEN 1 ELSE 0 END) AS borderline,
+      SUM(CASE WHEN status='validated' AND verdict='skip' THEN 1 ELSE 0 END) AS skip_v,
+      SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed
+    FROM news_items
+  `);
+  const r = items.rows[0] ?? {};
+  const fb = await db.execute(`
+    SELECT
+      SUM(CASE WHEN signal='like' THEN 1 ELSE 0 END) AS likes,
+      SUM(CASE WHEN signal='dislike' THEN 1 ELSE 0 END) AS dislikes
+    FROM news_feedback
+  `);
+  const f = fb.rows[0] ?? {};
+  return {
+    total_items: Number(r.total ?? 0),
+    pending: Number(r.pending ?? 0),
+    validated_show: Number(r.show_v ?? 0),
+    validated_borderline: Number(r.borderline ?? 0),
+    validated_skip: Number(r.skip_v ?? 0),
+    failed: Number(r.failed ?? 0),
+    feedback_likes: Number(f.likes ?? 0),
+    feedback_dislikes: Number(f.dislikes ?? 0),
+  };
+}
